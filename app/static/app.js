@@ -187,6 +187,7 @@ async function createPlan() {
         duration_seconds: Number($("#durationInput").value || 0) * 60,
       }),
     });
+    state.selectedSceneIds.clear();
     state.planWarnings = result.warnings || [];
     toast(`${result.scenes.length} scenes created · ${result.generation_count} planned image options`);
     await refreshProjects();
