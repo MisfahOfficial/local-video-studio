@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Video Studio</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">LV</div>
+      <div><strong>Local Video Studio</strong><span>Bulk visual production</span></div>
+    </div>
+    <div class="top-actions">
+      <span class="health" id="healthBadge">Checking system…</span>
+      <button class="button ghost" id="settingsButton" type="button">Settings</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <div><span class="eyebrow">Workspace</span><h2>Projects</h2></div>
+        <button class="icon-button" id="newProjectButton" type="button" aria-label="Create project">+</button>
+      </div>
+      <div id="projectList" class="project-list"></div>
+      <p class="sidebar-note">Everything is stored on this computer. API calls are used only for enabled AI providers.</p>
+    </aside>
+
+    <main class="main">
+      <section class="empty-state" id="emptyState">
+        <div class="empty-icon">▶</div>
+        <h1>Build a complete video from your script and voice-over</h1>
+        <p>Create a project, plan the scenes, generate images, adjust the timeline and export locally.</p>
+        <button class="button primary" id="emptyCreateButton" type="button">Create first project</button>
+      </section>
+
+      <section id="workspace" hidden>
+        <div class="project-heading">
+          <div>
+            <span class="eyebrow" id="projectThemeLabel">Project</span>
+            <h1 id="projectTitle">Untitled project</h1>
+          </div>
+          <div class="project-metrics">
+            <div><span>Scenes</span><strong id="sceneCount">0</strong></div>
+            <div><span>Estimated</span><strong id="estimatedCost">$0.00</strong></div>
+            <div><span>Spent</span><strong id="actualCost">$0.00</strong></div>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Project workflow">
+          <button class="tab active" data-tab="script" type="button">1. Script & VO</button>
+          <button class="tab" data-tab="scenes" type="button">2. Visual plan</button>
+          <button class="tab" data-tab="timeline" type="button">3. Timeline</button>
+          <button class="tab" data-tab="export" type="button">4. Export</button>
+        </nav>
+
+        <section class="tab-panel active" data-panel="script">
+          <div class="section-heading">
+            <div><span class="eyebrow">Input</span><h2>Script and finished voice-over</h2></div>
+          </div>
+          <div class="form-grid">
+            <label>Channel theme<select id="themeSelect"></select></label>
+            <label>Visual planning<select id="plannerSelect"><option value="local">Local Free</option><option value="gemini">Gemini Smart</option></select></label>
+            <label>Target images<input id="imageCountInput" type="number" min="1" max="3000" value="715"></label>
+            <label>Average scene seconds<input id="sceneSecondsInput" type="number" min="2" max="60" step="0.5" value="12.5"></label>
+            <label>Duration in minutes<input id="durationInput" type="number" min="0" step="0.1" value="149"></label>
+            <label>Voice-over<input id="voiceoverInput" type="file" accept="audio/*,video/*"></label>
+          </div>
+          <div class="upload-line"><span id="voiceoverStatus">No voice-over uploaded</span><progress id="uploadProgress" max="100" value="0" hidden></progress></div>
+          <label class="script-field">Complete script<textarea id="scriptInput" rows="18" placeholder="Paste the complete narration script here…"></textarea></label>
+          <div class="action-row">
+            <button class="button primary" id="createPlanButton" type="button">Create visual plan</button>
+            <span class="hint">You can review every prompt before any paid image is generated.</span>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="scenes">
+          <div class="section-heading wrap">
+            <div><span class="eyebrow">Auto visual director</span><h2>Review scenes and image options</h2></div>
+            <div class="action-row compact">
+              <button class="button ghost" id="pauseGenerationButton" type="button">Pause</button>
+              <button class="button ghost" id="resumeGenerationButton" type="button">Resume</button>
+              <button class="button primary" id="generateAllButton" type="button">Generate missing images</button>
+            </div>
+          </div>
+          <div class="queue-status" id="generationStatus">No generation jobs yet.</div>
+          <div class="scene-toolbar">
+            <label>Filter<select id="emotionFilter"><option value="">All emotions</option></select></label>
+            <label>Page<select id="scenePageSelect"></select></label>
+            <span id="sceneRange" class="hint"></span>
+          </div>
+          <div id="sceneList" class="scene-list"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="timeline">
+          <div class="section-heading">
+            <div><span class="eyebrow">Local editor</span><h2>Timeline actions</h2></div>
+          </div>
+          <p class="section-copy">Motion and transition instructions are saved on each scene. Future effects and video clips use the same action system.</p>
+          <div class="timeline-legend"><span>Image/clip</span><span>Narration timing</span><span>Motion</span><span>Transition</span></div>
+          <div id="timelineList" class="timeline-list"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="export">
+          <div class="section-heading">
+            <div><span class="eyebrow">FFmpeg render</span><h2>Export the finished video locally</h2></div>
+          </div>
+          <div class="export-layout">
+            <div class="panel">
+              <div class="form-grid two">
+                <label>Width<input id="exportWidth" type="number" value="1920"></label>
+                <label>Height<input id="exportHeight" type="number" value="1080"></label>
+                <label>Frame rate<select id="exportFps"><option>24</option><option selected>30</option><option>60</option></select></label>
+                <label class="check"><input id="burnCaptions" type="checkbox" checked><span>Burn captions into video</span></label>
+              </div>
+              <button class="button primary full" id="renderButton" type="button">Render final MP4</button>
+            </div>
+            <div class="render-status panel">
+              <span class="eyebrow">Render status</span>
+              <h3 id="renderState">Not started</h3>
+              <progress id="renderProgress" max="100" value="0"></progress>
+              <p id="renderMessage">Generate and select an asset for every scene before rendering.</p>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="newProjectDialog">
+    <form method="dialog" id="newProjectForm">
+      <div class="dialog-head"><div><span class="eyebrow">New production</span><h2>Create project</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <label>Project name<input id="projectNameInput" required placeholder="e.g. 40 Forgotten Snow Day Soups"></label>
+      <label>Channel theme<select id="newProjectTheme"></select></label>
+      <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>Cancel</button><button class="button primary" id="confirmCreateProject" value="default">Create project</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog">
+    <form method="dialog" id="settingsForm">
+      <div class="dialog-head"><div><span class="eyebrow">Local configuration</span><h2>Providers and limits</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <div class="settings-grid">
+        <label>Runware API key<input id="runwareKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key"></label>
+        <label>Together backup key<input id="togetherKey" type="password" autocomplete="off" placeholder="Optional fallback"></label>
+        <label>Gemini planning key<input id="geminiKey" type="password" autocomplete="off" placeholder="Optional smart planning"></label>
+        <label>Runware default model<input id="runwareModel"></label>
+        <label>Runware precise model<input id="preciseModel"></label>
+        <label>Runware premium model<input id="premiumModel"></label>
+        <label>Generation concurrency<input id="concurrencyInput" type="number" min="1" max="12"></label>
+        <label>Estimated cost per image ($)<input id="unitCostInput" type="number" min="0" step="0.0001"></label>
+        <label>Maximum project spend ($)<input id="budgetInput" type="number" min="0.1" step="0.1"></label>
+      </div>
+      <p class="settings-note" id="keyStatus"></p>
+      <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>Cancel</button><button class="button primary" id="saveSettingsButton" value="default">Save settings</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
