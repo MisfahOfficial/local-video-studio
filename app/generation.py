@@ -79,6 +79,13 @@ class GenerationManager:
         finally:
             with self._lock:
                 self._threads.pop(project_id, None)
+            # A retry or new batch can be queued just as a worker is finishing.
+            # Restart once so those jobs are never left waiting for another click.
+            status = self.db.generation_status(project_id)
+            project = self.db.get_project(project_id)
+            within_budget = bool(project and float(project["actual_cost"]) < settings.max_project_cost)
+            if not pause.is_set() and status["pending"] and within_budget:
+                self.start(project_id)
 
     def _process_job(self, job: dict[str, object], registry: ProviderRegistry, settings: StudioSettings) -> None:
         scene_id = str(job["scene_id"])

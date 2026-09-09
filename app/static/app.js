@@ -1,6 +1,7 @@
 const state = {
   themes: [], motions: [], settings: {}, projects: [], current: null,
   scenes: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
+  selectedSceneIds: new Set(), planWarnings: [],
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -50,8 +51,10 @@ async function boot() {
     state.projects = projectData.projects;
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
+    $("#appVersion").textContent = `v${health.version || "0.2.0"}`;
     fillThemeOptions();
     fillEmotionFilter();
+    $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
     renderProjects();
     fillSettings();
     if (state.projects.length) await openProject(state.projects[0].id);
@@ -85,10 +88,15 @@ async function refreshProjects() {
 }
 
 async function openProject(projectId, keepTab = false) {
+  const projectChanged = state.current?.id !== projectId;
   const payload = await api(`/api/projects/${projectId}`);
   state.current = payload.project;
   state.scenes = payload.scenes;
   state.assets = payload.assets;
+  state.planWarnings = payload.warnings || [];
+  if (projectChanged) {
+    state.selectedSceneIds.clear();
+  }
   state.scenePage = 1;
   $("#emptyState").hidden = true;
   $("#workspace").hidden = false;
@@ -98,11 +106,12 @@ async function openProject(projectId, keepTab = false) {
   $("#themeSelect").value = state.current.theme_id;
   $("#scriptInput").value = state.current.script || "";
   $("#durationInput").value = state.current.duration_seconds ? (state.current.duration_seconds / 60).toFixed(2) : 149;
-  $("#imageCountInput").value = state.current.target_scene_count || 715;
+  $("#imageCountInput").value = state.current.requested_scene_count || state.current.target_scene_count || 715;
   $("#voiceoverStatus").textContent = state.current.voiceover_path ? `Voice-over ready · ${clock(state.current.duration_seconds)}` : "No voice-over uploaded";
   updateMetrics();
   renderProjects();
   renderScenes();
+  renderPlanWarnings();
   renderTimeline();
   if (!keepTab) activateTab(state.scenes.length ? "scenes" : "script");
   await refreshGenerationStatus();
@@ -178,9 +187,12 @@ async function createPlan() {
         duration_seconds: Number($("#durationInput").value || 0) * 60,
       }),
     });
+    state.selectedSceneIds.clear();
+    state.planWarnings = result.warnings || [];
     toast(`${result.scenes.length} scenes created · ${result.generation_count} planned image options`);
     await refreshProjects();
     await openProject(state.current.id);
+    renderPlanWarnings();
     activateTab("scenes");
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; button.textContent = "Create visual plan"; }
@@ -188,9 +200,32 @@ async function createPlan() {
 
 function assetsForScene(sceneId) { return state.assets.filter(asset => asset.scene_id === sceneId); }
 
-function renderScenes() {
+function filteredScenes() {
   const filter = $("#emotionFilter").value;
-  const filtered = filter ? state.scenes.filter(scene => scene.emotion === filter) : state.scenes;
+  return filter ? state.scenes.filter(scene => scene.emotion === filter) : state.scenes;
+}
+
+function visibleScenes() {
+  const filtered = filteredScenes();
+  const start = (state.scenePage - 1) * state.pageSize;
+  return filtered.slice(start, start + state.pageSize);
+}
+
+function renderPlanWarnings() {
+  const panel = $("#planWarnings");
+  panel.hidden = !state.planWarnings.length;
+  panel.innerHTML = state.planWarnings.length ? `<strong>Please check the plan</strong><ul>${state.planWarnings.map(item => `<li>${escapeHtml(item.message)}</li>`).join("")}</ul>` : "";
+}
+
+function updateSelectionCount() {
+  const count = state.selectedSceneIds.size;
+  $("#selectedCount").textContent = `${count} scene${count === 1 ? "" : "s"} selected`;
+  $("#generateSelectedButton").disabled = count === 0;
+  $("#applySelectedButton").disabled = count === 0;
+}
+
+function renderScenes() {
+  const filtered = filteredScenes();
   const pages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
   state.scenePage = Math.min(state.scenePage, pages);
   $("#scenePageSelect").innerHTML = Array.from({ length: pages }, (_, index) => `<option value="${index + 1}">${index + 1} / ${pages}</option>`).join("");
@@ -199,6 +234,7 @@ function renderScenes() {
   const visible = filtered.slice(start, start + state.pageSize);
   $("#sceneRange").textContent = filtered.length ? `Showing ${start + 1}–${Math.min(start + state.pageSize, filtered.length)} of ${filtered.length}` : "No matching scenes";
   $("#sceneList").innerHTML = visible.map(sceneCard).join("");
+  updateSelectionCount();
 }
 
 function sceneCard(scene) {
@@ -211,7 +247,7 @@ function sceneCard(scene) {
     </div>`).join("") : `<div class="asset-empty">No image generated yet</div>`;
   const motion = (scene.timeline_actions || []).find(action => action.type === "motion")?.params?.preset || "slow_push";
   return `<article class="scene-card" data-scene-id="${scene.id}">
-    <header class="scene-card-head"><div class="meta"><strong>Scene ${scene.position}</strong><span class="badge">${escapeHtml(scene.emotion)}</span><span class="badge">${escapeHtml(scene.narrative_role)}</span><span class="time">${clock(scene.start_seconds)} → ${clock(scene.end_seconds)}</span></div><span class="badge">${scene.candidate_count} option${scene.candidate_count === 1 ? "" : "s"}</span></header>
+    <header class="scene-card-head"><div class="meta"><input class="scene-selector" type="checkbox" data-action="select-scene" aria-label="Select scene ${scene.position}" ${state.selectedSceneIds.has(scene.id) ? "checked" : ""}><strong>Scene ${scene.position}</strong><span class="badge">${escapeHtml(scene.emotion)}</span><span class="badge">${escapeHtml(scene.narrative_role)}</span><span class="time">${clock(scene.start_seconds)} → ${clock(scene.end_seconds)}</span></div><span class="badge">${scene.candidate_count} option${scene.candidate_count === 1 ? "" : "s"}</span></header>
     <div class="scene-body">
       <div><p class="scene-narration">${escapeHtml(scene.narration)}</p><label class="scene-prompt">Image prompt<textarea data-field="prompt">${escapeHtml(scene.prompt)}</textarea></label>
         <div class="scene-controls">
@@ -252,6 +288,42 @@ async function generateScenes(sceneIds = null, force = false) {
   } catch (error) { toast(error.message, true); }
 }
 
+function bulkChanges() {
+  const values = {
+    provider: $("#bulkProvider").value,
+    model_role: $("#bulkModel").value,
+    candidate_count: $("#bulkCandidates").value ? Number($("#bulkCandidates").value) : "",
+    motion: $("#bulkMotion").value,
+    transition: $("#bulkTransition").value,
+    prompt_find: $("#bulkPromptFind").value,
+    prompt_replace: $("#bulkPromptReplace").value,
+  };
+  return Object.fromEntries(Object.entries(values).filter(([key, value]) => value !== "" || key === "prompt_replace" && values.prompt_find));
+}
+
+async function applyBulk(scope) {
+  if (!state.current) return;
+  const changes = bulkChanges();
+  if (!Object.keys(changes).length) throw new Error("Choose at least one bulk change");
+  const sceneIds = scope === "selected" ? [...state.selectedSceneIds] : null;
+  if (scope === "selected" && !sceneIds.length) throw new Error("Select at least one scene");
+  const result = await api(`/api/projects/${state.current.id}/scenes/bulk`, {
+    method: "POST",
+    body: JSON.stringify({ scene_ids: sceneIds, changes, save_as_default: scope === "all" }),
+  });
+  const payload = await api(`/api/projects/${state.current.id}`);
+  state.current = payload.project; state.scenes = payload.scenes; state.assets = payload.assets;
+  updateMetrics(); renderScenes(); renderTimeline();
+  toast(`Updated ${result.updated} scene${result.updated === 1 ? "" : "s"}`);
+}
+
+async function retryFailed() {
+  if (!state.current) return;
+  const result = await api(`/api/projects/${state.current.id}/retry-failed`, { method: "POST", body: "{}" });
+  toast(result.queued ? `Retrying ${result.queued} failed image job${result.queued === 1 ? "" : "s"}` : "No failed jobs to retry");
+  if (result.queued) startGenerationPolling();
+}
+
 async function selectAsset(sceneId, assetId) {
   const updated = await api(`/api/scenes/${sceneId}/select-asset`, { method: "POST", body: JSON.stringify({ asset_id: assetId }) });
   state.scenes = state.scenes.map(scene => scene.id === sceneId ? updated : scene);
@@ -263,6 +335,10 @@ async function refreshGenerationStatus() {
   const result = await api(`/api/projects/${state.current.id}/generation-status`);
   const counts = result.counts || {};
   $("#generationStatus").textContent = `Pending ${counts.pending || 0} · Running ${counts.running || 0} · Complete ${counts.complete || 0} · Failed ${counts.failed || 0}${result.running ? " · Queue active" : ""}`;
+  const failures = result.failures || [];
+  $("#retryFailedButton").hidden = failures.length === 0;
+  $("#failurePanel").hidden = failures.length === 0;
+  $("#failureList").innerHTML = failures.map(failure => `<div class="failure-item"><strong>Scene ${failure.position}, option ${Number(failure.candidate_index) + 1}</strong> · ${escapeHtml(failure.provider)} · attempt ${failure.attempts}<br>${escapeHtml(failure.error || "Unknown provider error")}</div>`).join("");
   if (!result.running && !(counts.pending > 0)) {
     clearInterval(state.generationTimer); state.generationTimer = null;
   }
@@ -322,6 +398,9 @@ async function refreshRenderStatus() {
   $("#renderState").textContent = render.status[0].toUpperCase() + render.status.slice(1);
   $("#renderProgress").value = Math.round(Number(render.progress || 0) * 100);
   $("#renderMessage").textContent = render.error || render.output_path || `${Math.round(Number(render.progress || 0) * 100)}% complete`;
+  const videoLink = $("#openVideoLink");
+  videoLink.hidden = !(render.status === "complete" && render.media_url);
+  if (!videoLink.hidden) videoLink.href = render.media_url;
   if (["complete", "failed"].includes(render.status)) { clearInterval(state.renderTimer); state.renderTimer = null; }
 }
 
@@ -368,6 +447,12 @@ $("#createPlanButton").addEventListener("click", createPlan);
 $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; renderScenes(); });
 $("#scenePageSelect").addEventListener("change", event => { state.scenePage = Number(event.target.value); renderScenes(); });
 $("#generateAllButton").addEventListener("click", () => generateScenes());
+$("#retryFailedButton").addEventListener("click", () => retryFailed().catch(error => toast(error.message, true)));
+$("#selectVisibleButton").addEventListener("click", () => { visibleScenes().forEach(scene => state.selectedSceneIds.add(scene.id)); renderScenes(); });
+$("#clearSelectionButton").addEventListener("click", () => { state.selectedSceneIds.clear(); renderScenes(); });
+$("#applySelectedButton").addEventListener("click", () => applyBulk("selected").catch(error => toast(error.message, true)));
+$("#applyAllButton").addEventListener("click", () => applyBulk("all").catch(error => toast(error.message, true)));
+$("#generateSelectedButton").addEventListener("click", () => generateScenes([...state.selectedSceneIds], true));
 $("#pauseGenerationButton").addEventListener("click", async () => { await api(`/api/projects/${state.current.id}/pause`, { method: "POST", body: "{}" }); toast("Queue paused after active requests finish"); });
 $("#resumeGenerationButton").addEventListener("click", async () => { await api(`/api/projects/${state.current.id}/resume`, { method: "POST", body: "{}" }); toast("Queue resumed"); startGenerationPolling(); });
 $("#sceneList").addEventListener("click", async event => {
@@ -379,7 +464,20 @@ $("#sceneList").addEventListener("click", async event => {
     if (action.dataset.action === "select-asset") await selectAsset(action.dataset.sceneId, action.dataset.assetId);
   } catch (error) { toast(error.message, true); }
 });
+$("#sceneList").addEventListener("change", event => {
+  const selector = event.target.closest("[data-action='select-scene']");
+  if (!selector) return;
+  const sceneId = selector.closest(".scene-card").dataset.sceneId;
+  if (selector.checked) state.selectedSceneIds.add(sceneId); else state.selectedSceneIds.delete(sceneId);
+  updateSelectionCount();
+});
 $("#timelineList").addEventListener("change", event => { const row = event.target.closest(".timeline-row"); if (row) saveTimelineRow(row).catch(error => toast(error.message, true)); });
 $("#renderButton").addEventListener("click", startRender);
+$("#openOutputButton").addEventListener("click", async () => {
+  try {
+    const result = await api(`/api/projects/${state.current.id}/open-folder`, { method: "POST", body: JSON.stringify({ kind: "renders" }) });
+    toast(`Opened ${result.path}`);
+  } catch (error) { toast(error.message, true); }
+});
 
 boot();

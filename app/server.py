@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import os
 import re
 import shutil
-import threading
+import subprocess
+import sys
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config import SettingsStore
 from .database import Database
 from .generation import GenerationManager
 from .gemini_analyzer import GeminiSceneEnhancer
 from .paths import AppPaths
-from .scene_planner import RuleBasedScenePlanner, estimate_generation_count
+from .scene_planner import RuleBasedScenePlanner, estimate_generation_count, validate_plan_inputs
 from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
@@ -44,7 +45,13 @@ class StudioApplication:
             raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
         scenes = self.db.list_scenes(project_id)
         assets = self.asset_payloads(project_id)
-        return {"project": project, "scenes": scenes, "assets": assets}
+        warnings = validate_plan_inputs(
+            str(project.get("script") or ""),
+            duration_seconds=float(project.get("duration_seconds") or 0),
+            target_scene_count=int(project.get("requested_scene_count") or project.get("target_scene_count") or 0),
+            actual_scene_count=len(scenes) if scenes else None,
+        ) if project.get("script") else []
+        return {"project": project, "scenes": scenes, "assets": assets, "warnings": warnings}
 
     def asset_payloads(self, project_id: str) -> list[dict[str, Any]]:
         assets = self.db.list_assets(project_id)
@@ -60,6 +67,38 @@ class StudioApplication:
             payloads.append({**asset, "media_url": media_url})
         return payloads
 
+    def render_payload(self, project_id: str) -> dict[str, Any] | None:
+        render = self.db.latest_render_job(project_id)
+        if not render:
+            return None
+        output_path = render.get("output_path")
+        if output_path:
+            project_dir = self.paths.project_dir(project_id).resolve()
+            try:
+                relative = Path(str(output_path)).resolve().relative_to(project_dir)
+                render["media_url"] = f"/media/{project_id}/{urllib.parse.quote(relative.as_posix())}"
+            except ValueError:
+                render["media_url"] = ""
+        return render
+
+    def open_project_folder(self, project_id: str, kind: str) -> Path:
+        if not self.db.get_project(project_id):
+            raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+        project_dir = self.paths.project_dir(project_id).resolve()
+        target = project_dir / "renders" if kind == "renders" else project_dir
+        target.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "darwin":
+            command = ["open", str(target)]
+        elif sys.platform == "win32":
+            command = ["explorer", str(target)]
+        else:
+            command = ["xdg-open", str(target)]
+        executable = command[0]
+        if sys.platform != "win32" and not shutil.which(executable):
+            raise ApiError(f"Cannot open the folder automatically because {executable} is unavailable")
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return target
+
     def plan_project(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
         project = self.db.get_project(project_id)
         if not project:
@@ -68,9 +107,18 @@ class StudioApplication:
         if not script:
             raise ApiError("Paste a script before creating the visual plan")
         theme_id = str(body.get("theme_id") or project.get("theme_id") or "us_nostalgia")
-        duration = float(body.get("duration_seconds") or project.get("duration_seconds") or 0)
-        image_count = int(body.get("image_count") or 0) or None
-        seconds_per_scene = float(body.get("seconds_per_scene") or 12.5)
+        try:
+            duration = float(body.get("duration_seconds") or project.get("duration_seconds") or 0)
+            image_count = int(body.get("image_count") or 0) or None
+            seconds_per_scene = float(body.get("seconds_per_scene") or 12.5)
+        except (TypeError, ValueError) as error:
+            raise ApiError("Duration, target images, and scene seconds must be valid numbers") from error
+        if duration < 0:
+            raise ApiError("Duration cannot be negative")
+        if image_count is not None and not 1 <= image_count <= 3000:
+            raise ApiError("Target images must be between 1 and 3000")
+        if not 2 <= seconds_per_scene <= 60:
+            raise ApiError("Average scene seconds must be between 2 and 60")
         settings = self.settings.load()
         drafts = self.planner.plan(
             script,
@@ -85,22 +133,35 @@ class StudioApplication:
             )
 
         generation_count = estimate_generation_count(drafts)
+        warnings = validate_plan_inputs(
+            script,
+            duration_seconds=duration or drafts[-1].end_seconds,
+            target_scene_count=image_count,
+            actual_scene_count=len(drafts),
+            voiceover_duration=float(project.get("duration_seconds") or 0) if project.get("voiceover_path") else None,
+        )
         estimated_cost = generation_count * float(body.get("estimated_unit_cost") or settings.estimated_unit_cost)
         self.db.update_project(
             project_id,
             script=script,
             theme_id=theme_id,
             duration_seconds=duration or drafts[-1].end_seconds,
+            requested_scene_count=image_count or len(drafts),
             target_scene_count=len(drafts),
             estimated_cost=estimated_cost,
         )
         scenes = self.db.replace_scenes(project_id, drafts)
-        return {"scenes": scenes, "generation_count": generation_count, "estimated_cost": estimated_cost}
+        return {
+            "scenes": scenes,
+            "generation_count": generation_count,
+            "estimated_cost": estimated_cost,
+            "warnings": warnings,
+        }
 
 
 def build_handler(application: StudioApplication):
     class StudioRequestHandler(BaseHTTPRequestHandler):
-        server_version = "LocalVideoStudio/0.1"
+        server_version = f"LocalVideoStudio/{__version__}"
 
         def log_message(self, format_string: str, *args: object) -> None:
             print(f"[{self.log_date_time_string()}] {format_string % args}")
@@ -132,7 +193,12 @@ def build_handler(application: StudioApplication):
         def _get(self) -> None:
             path = urllib.parse.urlparse(self.path).path
             if path == "/api/health":
-                self._json({"status": "ok", "ffmpeg": bool(shutil.which(application.settings.load().ffmpeg_path))})
+                self._json({
+                    "status": "ok",
+                    "version": __version__,
+                    "schema_version": application.db.schema_version(),
+                    "ffmpeg": bool(shutil.which(application.settings.load().ffmpeg_path)),
+                })
                 return
             if path == "/api/themes":
                 self._json({"themes": list_themes(), "motions": build_default_motion_registry().names()})
@@ -159,17 +225,17 @@ def build_handler(application: StudioApplication):
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/generation-status", path)
             if match:
                 project_id = match.group(1)
-                with application.db.connection() as db:
-                    rows = db.execute(
-                        "SELECT status, COUNT(*) AS count FROM generation_jobs WHERE project_id = ? GROUP BY status",
-                        (project_id,),
-                    ).fetchall()
-                counts = {row["status"]: row["count"] for row in rows}
-                self._json({"counts": counts, "running": application.generation.is_running(project_id)})
+                status = application.db.generation_status(project_id)
+                self._json({
+                    "counts": {key: status[key] for key in ("pending", "running", "complete", "failed")},
+                    "failures": status["failures"],
+                    "progress": status["progress"],
+                    "running": application.generation.is_running(project_id),
+                })
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/render-status", path)
             if match:
-                self._json({"render": application.db.latest_render_job(match.group(1))})
+                self._json({"render": application.render_payload(match.group(1))})
                 return
             match = re.fullmatch(r"/media/([a-zA-Z0-9_-]+)/(.+)", path)
             if match:
@@ -236,9 +302,64 @@ def build_handler(application: StudioApplication):
             if match:
                 project_id = match.group(1)
                 body = self._read_json()
-                queued = application.db.queue_generation(project_id, body.get("scene_ids"), bool(body.get("force", False)))
+                scene_ids = self._scene_ids(body.get("scene_ids"))
+                queued = application.db.queue_generation(project_id, scene_ids, bool(body.get("force", False)))
                 application.generation.start(project_id)
                 self._json({"queued": queued})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/retry-failed", path)
+            if match:
+                project_id = match.group(1)
+                body = self._read_json()
+                queued = application.db.retry_failed_generation(project_id, self._scene_ids(body.get("scene_ids")))
+                if queued:
+                    application.generation.start(project_id)
+                self._json({"queued": queued})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/scenes/bulk", path)
+            if match:
+                project_id = match.group(1)
+                body = self._read_json()
+                scene_ids = self._scene_ids(body.get("scene_ids"))
+                changes = body.get("changes")
+                if not isinstance(changes, dict):
+                    raise ApiError("Bulk changes are required")
+                motion = changes.get("motion")
+                if motion is not None and motion not in build_default_motion_registry().names():
+                    raise ApiError("Unknown motion preset")
+                transition = changes.get("transition")
+                if transition is not None and transition not in {"fade", "cut"}:
+                    raise ApiError("Unknown transition preset")
+                try:
+                    scenes = application.db.bulk_update_scenes(project_id, scene_ids, changes)
+                except (KeyError, ValueError) as error:
+                    raise ApiError(str(error)) from error
+                if body.get("save_as_default") and scene_ids is None:
+                    defaults: dict[str, Any] = {}
+                    for source, target in (
+                        ("provider", "default_provider"),
+                        ("model_role", "default_model_role"),
+                        ("candidate_count", "default_candidate_count"),
+                        ("motion", "default_motion"),
+                        ("transition", "default_transition"),
+                    ):
+                        if source in changes:
+                            defaults[target] = changes[source]
+                    if defaults:
+                        application.db.update_project(project_id, **defaults)
+                all_scenes = application.db.list_scenes(project_id)
+                estimated_cost = sum(max(1, int(scene["candidate_count"])) for scene in all_scenes) * application.settings.load().estimated_unit_cost
+                application.db.update_project(project_id, estimated_cost=estimated_cost)
+                self._json({"updated": len(scenes), "scenes": scenes, "estimated_cost": estimated_cost})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/open-folder", path)
+            if match:
+                body = self._read_json()
+                kind = str(body.get("kind") or "renders")
+                if kind not in {"renders", "project"}:
+                    raise ApiError("Folder kind must be renders or project")
+                target = application.open_project_folder(match.group(1), kind)
+                self._json({"opened": True, "path": str(target)})
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/(pause|resume)", path)
             if match:
@@ -281,6 +402,14 @@ def build_handler(application: StudioApplication):
             if not isinstance(data, dict):
                 raise ApiError("Request body must be a JSON object")
             return data
+
+        @staticmethod
+        def _scene_ids(value: Any) -> list[str] | None:
+            if value is None:
+                return None
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise ApiError("scene_ids must be a list of scene identifiers")
+            return value
 
         def _content_length(self, maximum: int) -> int:
             try:

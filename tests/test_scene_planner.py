@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.scene_planner import RuleBasedScenePlanner, estimate_generation_count
+from app.scene_planner import RuleBasedScenePlanner, estimate_generation_count, validate_plan_inputs
 
 
 class ScenePlannerTests(unittest.TestCase):
@@ -40,7 +40,16 @@ class ScenePlannerTests(unittest.TestCase):
         self.assertIn("Palette:", drafts[0].prompt)
         self.assertEqual(drafts[0].timeline_actions[0].type, "motion")
 
+    def test_short_script_and_unrealistic_target_are_explained(self) -> None:
+        warnings = validate_plan_inputs(
+            "This is only a short hook for testing.",
+            duration_seconds=149 * 60,
+            target_scene_count=715,
+            actual_scene_count=2,
+        )
+        codes = {warning["code"] for warning in warnings}
+        self.assertTrue({"short_script", "duration_too_long", "too_many_images", "target_not_reached"} <= codes)
+
 
 if __name__ == "__main__":
     unittest.main()
-
