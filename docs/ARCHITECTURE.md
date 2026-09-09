@@ -48,6 +48,8 @@ Local application server
 
 ```text
 application-data/
+├── backups/
+│   └── studio-pre-v2-<timestamp>.sqlite3
 ├── settings.json
 ├── studio.sqlite3
 └── projects/<project-id>/
@@ -67,9 +69,9 @@ its `media_kind`.
 
 - Standard-library Python keeps the core dependency-free.
 - SQLite provides resumability without operating a separate server.
+- Ordered schema migrations and a pre-upgrade SQLite backup protect existing projects.
 - Provider keys stay in local settings or environment variables.
 - Provider cost returned by the API is recorded per asset.
 - One candidate and the cheapest configured route are the defaults.
 - Cached scene clips make the rendering pipeline inspectable and pave the way
   for selective re-rendering in a later version.
-

@@ -10,7 +10,7 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark">LV</div>
-      <div><strong>Local Video Studio</strong><span>Bulk visual production</span></div>
+      <div><strong>Local Video Studio</strong><span>Bulk visual production · <span id="appVersion">v…</span></span></div>
     </div>
     <div class="top-actions">
       <span class="health" id="healthBadge">Checking system…</span>
@@ -82,10 +82,39 @@
             <div class="action-row compact">
               <button class="button ghost" id="pauseGenerationButton" type="button">Pause</button>
               <button class="button ghost" id="resumeGenerationButton" type="button">Resume</button>
+              <button class="button ghost" id="retryFailedButton" type="button" hidden>Retry failed</button>
               <button class="button primary" id="generateAllButton" type="button">Generate missing images</button>
             </div>
           </div>
+          <div class="warning-panel" id="planWarnings" hidden></div>
           <div class="queue-status" id="generationStatus">No generation jobs yet.</div>
+          <details class="failure-panel" id="failurePanel" hidden>
+            <summary>Generation errors</summary>
+            <div id="failureList"></div>
+          </details>
+          <div class="bulk-panel panel">
+            <div class="bulk-heading">
+              <div><span class="eyebrow">Bulk controls</span><strong id="selectedCount">0 scenes selected</strong></div>
+              <div class="action-row compact">
+                <button class="button ghost small" id="selectVisibleButton" type="button">Select visible</button>
+                <button class="button ghost small" id="clearSelectionButton" type="button">Clear</button>
+              </div>
+            </div>
+            <div class="bulk-grid">
+              <label>Provider<select id="bulkProvider"><option value="">Keep current</option><option value="runware">Runware</option><option value="together">Together</option><option value="mock">Offline test</option></select></label>
+              <label>Model route<select id="bulkModel"><option value="">Keep current</option><option value="photoreal">Photoreal default</option><option value="precise">Precise</option><option value="premium">Premium</option></select></label>
+              <label>Options<select id="bulkCandidates"><option value="">Keep current</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+              <label>Motion<select id="bulkMotion"><option value="">Keep current</option></select></label>
+              <label>Transition<select id="bulkTransition"><option value="">Keep current</option><option value="fade">Fade</option><option value="cut">Cut</option></select></label>
+              <label>Find in prompts<input id="bulkPromptFind" placeholder="Optional text"></label>
+              <label>Replace with<input id="bulkPromptReplace" placeholder="Replacement text"></label>
+            </div>
+            <div class="action-row bulk-actions">
+              <button class="button ghost" id="applySelectedButton" type="button">Apply to selected</button>
+              <button class="button ghost" id="applyAllButton" type="button">Apply to all scenes</button>
+              <button class="button primary" id="generateSelectedButton" type="button">Regenerate selected</button>
+            </div>
+          </div>
           <div class="scene-toolbar">
             <label>Filter<select id="emotionFilter"><option value="">All emotions</option></select></label>
             <label>Page<select id="scenePageSelect"></select></label>
@@ -116,12 +145,14 @@
                 <label class="check"><input id="burnCaptions" type="checkbox" checked><span>Burn captions into video</span></label>
               </div>
               <button class="button primary full" id="renderButton" type="button">Render final MP4</button>
+              <button class="button ghost full" id="openOutputButton" type="button">Open output folder</button>
             </div>
             <div class="render-status panel">
               <span class="eyebrow">Render status</span>
               <h3 id="renderState">Not started</h3>
               <progress id="renderProgress" max="100" value="0"></progress>
               <p id="renderMessage">Generate and select an asset for every scene before rendering.</p>
+              <a class="button primary output-link" id="openVideoLink" href="#" target="_blank" rel="noopener" hidden>Open rendered video</a>
             </div>
           </div>
         </section>

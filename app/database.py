@@ -16,10 +16,35 @@ def utc_now() -> str:
 
 
 class Database:
+    LATEST_SCHEMA_VERSION = 2
+
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._requires_v2_upgrade():
+            self._backup_before_upgrade()
         self.migrate()
+
+    def _requires_v2_upgrade(self) -> bool:
+        if not self.path.is_file() or self.path.stat().st_size == 0:
+            return False
+        try:
+            with sqlite3.connect(self.path) as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                if "projects" not in tables:
+                    return False
+                columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
+                return "default_provider" not in columns
+        except sqlite3.DatabaseError:
+            return False
+
+    def _backup_before_upgrade(self) -> None:
+        backup_dir = self.path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        backup_path = backup_dir / f"studio-pre-v2-{timestamp}.sqlite3"
+        with sqlite3.connect(self.path) as source, sqlite3.connect(backup_path) as destination:
+            source.backup(destination)
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
@@ -132,6 +157,31 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_generation_jobs_project ON generation_jobs(project_id, status);
                 """
             )
+            db.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)",
+                (utc_now(),),
+            )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
+            v2_columns = {
+                "requested_scene_count": "INTEGER NOT NULL DEFAULT 0",
+                "default_provider": "TEXT NOT NULL DEFAULT 'runware'",
+                "default_model_role": "TEXT NOT NULL DEFAULT 'photoreal'",
+                "default_candidate_count": "INTEGER NOT NULL DEFAULT 1",
+                "default_motion": "TEXT NOT NULL DEFAULT 'slow_push'",
+                "default_transition": "TEXT NOT NULL DEFAULT 'fade'",
+            }
+            for name, declaration in v2_columns.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE projects ADD COLUMN {name} {declaration}")
+            db.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)",
+                (utc_now(),),
+            )
+
+    def schema_version(self) -> int:
+        with self.connection() as db:
+            row = db.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()
+        return int(row[0]) if row else 0
 
     @staticmethod
     def _dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -169,7 +219,8 @@ class Database:
     def update_project(self, project_id: str, **changes: Any) -> dict[str, Any]:
         allowed = {
             "name", "theme_id", "script", "voiceover_path", "duration_seconds", "target_scene_count",
-            "status", "estimated_cost", "actual_cost"
+            "requested_scene_count", "status", "estimated_cost", "actual_cost", "default_provider", "default_model_role",
+            "default_candidate_count", "default_motion", "default_transition"
         }
         values = {key: value for key, value in changes.items() if key in allowed}
         if values:
@@ -187,6 +238,9 @@ class Database:
 
     def replace_scenes(self, project_id: str, drafts: list[SceneDraft]) -> list[dict[str, Any]]:
         now = utc_now()
+        project = self.get_project(project_id)
+        if not project:
+            raise KeyError("Project not found")
         with self.connection() as db:
             db.execute("DELETE FROM scenes WHERE project_id = ?", (project_id,))
             for draft in drafts:
@@ -203,8 +257,12 @@ class Database:
                         str(uuid.uuid4()), project_id, data["position"], data["start_seconds"], data["end_seconds"],
                         data["narration"], data["visual_subject"], data["emotion"], data["narrative_role"],
                         data["importance"], data["prompt"], data["negative_prompt"], data["media_kind"],
-                        data["provider"], data["model_role"], data["candidate_count"],
-                        json.dumps(data["timeline_actions"]), now, now,
+                        project["default_provider"], project["default_model_role"],
+                        int(project["default_candidate_count"]),
+                        json.dumps([
+                            {"type": "motion", "params": {"preset": project["default_motion"], "strength": 0.55}},
+                            {"type": "transition", "params": {"preset": project["default_transition"], "duration": 0.32}},
+                        ]), now, now,
                     ),
                 )
             db.execute(
@@ -243,6 +301,63 @@ class Database:
         if not scene:
             raise KeyError("Scene not found")
         return scene
+
+    def bulk_update_scenes(self, project_id: str, scene_ids: list[str] | None,
+                           changes: dict[str, Any]) -> list[dict[str, Any]]:
+        scenes = self.list_scenes(project_id)
+        selected = set(scene_ids) if scene_ids is not None else None
+        chosen = [scene for scene in scenes if selected is None or scene["id"] in selected]
+        if scene_ids is not None and len(chosen) != len(selected):
+            raise KeyError("One or more selected scenes do not belong to this project")
+
+        provider = changes.get("provider")
+        model_role = changes.get("model_role")
+        candidate_count = changes.get("candidate_count")
+        motion = changes.get("motion")
+        transition = changes.get("transition")
+        prompt_find = str(changes.get("prompt_find") or "")
+        prompt_replace = str(changes.get("prompt_replace") or "")
+        if provider is not None and provider not in {"runware", "together", "mock"}:
+            raise ValueError("Unknown image provider")
+        if model_role is not None and model_role not in {"photoreal", "precise", "premium"}:
+            raise ValueError("Unknown model route")
+        if candidate_count is not None and int(candidate_count) not in {1, 2, 3}:
+            raise ValueError("Image options must be 1, 2, or 3")
+        if not any(value is not None for value in (provider, model_role, candidate_count, motion, transition)) and not prompt_find:
+            raise ValueError("Choose at least one bulk change")
+
+        with self.connection() as db:
+            for scene in chosen:
+                patch: dict[str, Any] = {}
+                if provider is not None:
+                    patch["provider"] = provider
+                if model_role is not None:
+                    patch["model_role"] = model_role
+                if candidate_count is not None:
+                    patch["candidate_count"] = int(candidate_count)
+                if prompt_find:
+                    patch["prompt"] = str(scene["prompt"]).replace(prompt_find, prompt_replace)
+                if motion is not None or transition is not None:
+                    actions = scene.get("timeline_actions") or []
+                    current_motion = next((item for item in actions if item.get("type") == "motion"), None)
+                    current_transition = next((item for item in actions if item.get("type") == "transition"), None)
+                    patch["timeline_actions"] = [
+                        {"type": "motion", "params": {
+                            "preset": motion or (current_motion or {}).get("params", {}).get("preset", "slow_push"),
+                            "strength": (current_motion or {}).get("params", {}).get("strength", 0.55),
+                        }},
+                        {"type": "transition", "params": {
+                            "preset": transition or (current_transition or {}).get("params", {}).get("preset", "fade"),
+                            "duration": (current_transition or {}).get("params", {}).get("duration", 0.32),
+                        }},
+                    ]
+                if "timeline_actions" in patch:
+                    patch["timeline_actions"] = json.dumps(patch["timeline_actions"])
+                patch["updated_at"] = utc_now()
+                assignments = ", ".join(f"{key} = ?" for key in patch)
+                db.execute(f"UPDATE scenes SET {assignments} WHERE id = ?", (*patch.values(), scene["id"]))
+        updated_scenes = self.list_scenes(project_id)
+        return [scene for scene in updated_scenes if selected is None or scene["id"] in selected]
 
     def list_assets(self, project_id: str, scene_id: str | None = None) -> list[dict[str, Any]]:
         query = "SELECT * FROM assets WHERE project_id = ?"
@@ -349,6 +464,19 @@ class Database:
                 "SELECT status, COUNT(*) AS count FROM generation_jobs WHERE project_id = ? GROUP BY status",
                 (project_id,),
             ).fetchall()
+            failures = db.execute(
+                """
+                SELECT generation_jobs.id, generation_jobs.scene_id, generation_jobs.candidate_index,
+                       generation_jobs.provider, generation_jobs.attempts, generation_jobs.error,
+                       generation_jobs.updated_at, scenes.position
+                FROM generation_jobs
+                JOIN scenes ON scenes.id = generation_jobs.scene_id
+                WHERE generation_jobs.project_id = ? AND generation_jobs.status = 'failed'
+                ORDER BY generation_jobs.updated_at DESC
+                LIMIT 50
+                """,
+                (project_id,),
+            ).fetchall()
         counts = {row["status"]: row["count"] for row in rows}
         total = sum(counts.values())
         complete = counts.get("complete", 0)
@@ -359,7 +487,28 @@ class Database:
             "complete": complete,
             "failed": counts.get("failed", 0),
             "progress": (complete / total * 100) if total else 0,
+            "failures": [self._dict(row) or {} for row in failures],
         }
+
+    def retry_failed_generation(self, project_id: str, scene_ids: list[str] | None = None) -> int:
+        selected = set(scene_ids) if scene_ids is not None else None
+        with self.connection() as db:
+            rows = db.execute(
+                "SELECT id, scene_id FROM generation_jobs WHERE project_id = ? AND status = 'failed'",
+                (project_id,),
+            ).fetchall()
+            chosen = [row for row in rows if selected is None or row["scene_id"] in selected]
+            now = utc_now()
+            for row in chosen:
+                db.execute(
+                    "UPDATE generation_jobs SET status = 'pending', error = NULL, updated_at = ? WHERE id = ?",
+                    (now, row["id"]),
+                )
+                db.execute(
+                    "UPDATE scenes SET generation_status = 'queued', updated_at = ? WHERE id = ?",
+                    (now, row["scene_id"]),
+                )
+        return len(chosen)
 
     def create_render_job(self, project_id: str, settings: dict[str, Any]) -> dict[str, Any]:
         job_id = str(uuid.uuid4())
@@ -392,4 +541,3 @@ class Database:
                 "SELECT * FROM render_jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1", (project_id,)
             ).fetchone()
         return self._dict(row)
-

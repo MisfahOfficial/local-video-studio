@@ -246,3 +246,73 @@ class RuleBasedScenePlanner:
 
 def estimate_generation_count(drafts: Iterable[SceneDraft]) -> int:
     return sum(max(1, draft.candidate_count) for draft in drafts)
+
+
+def validate_plan_inputs(script: str, *, duration_seconds: float, target_scene_count: int | None,
+                         actual_scene_count: int | None = None,
+                         voiceover_duration: float | None = None) -> list[dict[str, str]]:
+    """Return useful warnings without blocking a deliberate production plan."""
+    words = len(re.findall(r"\b[\w'-]+\b", script))
+    target = int(target_scene_count or 0)
+    warnings: list[dict[str, str]] = []
+    expected_duration = words / 2.35 if words else 0.0
+
+    if words < 30:
+        warnings.append({
+            "code": "short_script",
+            "level": "warning",
+            "message": f"This script has only {words} words. Use a small image target for this test.",
+        })
+    if duration_seconds > 0 and expected_duration > 0:
+        ratio = duration_seconds / expected_duration
+        if ratio > 2.5:
+            warnings.append({
+                "code": "duration_too_long",
+                "level": "warning",
+                "message": (
+                    f"The entered duration is {duration_seconds / 60:.1f} minutes, but this script reads "
+                    f"in about {expected_duration / 60:.1f} minutes. Check that you pasted the complete script."
+                ),
+            })
+        elif ratio < 0.45:
+            warnings.append({
+                "code": "duration_too_short",
+                "level": "warning",
+                "message": "The entered duration looks too short for the script. Check the voice-over or duration.",
+            })
+    if target > 0 and words > 0 and target > max(2, words // 3):
+        warnings.append({
+            "code": "too_many_images",
+            "level": "warning",
+            "message": (
+                f"{target} images is too many for {words} words. The local planner will create only useful, "
+                "non-empty scenes; paste the full script or lower the target."
+            ),
+        })
+    if target > 0 and duration_seconds > 0:
+        average = duration_seconds / target
+        if average < 2:
+            warnings.append({
+                "code": "scenes_too_fast",
+                "level": "warning",
+                "message": f"That target gives only {average:.1f} seconds per image, which may feel too fast.",
+            })
+        elif average > 60:
+            warnings.append({
+                "code": "scenes_too_slow",
+                "level": "warning",
+                "message": f"That target gives {average:.1f} seconds per image, which may feel too slow.",
+            })
+    if voiceover_duration and duration_seconds and abs(voiceover_duration - duration_seconds) > max(3, voiceover_duration * 0.03):
+        warnings.append({
+            "code": "voiceover_mismatch",
+            "level": "warning",
+            "message": "The entered duration differs from the uploaded voice-over. The voice-over timing is safer.",
+        })
+    if target and actual_scene_count is not None and actual_scene_count != target:
+        warnings.append({
+            "code": "target_not_reached",
+            "level": "warning",
+            "message": f"Requested {target} images, but the available script produced {actual_scene_count} useful scenes.",
+        })
+    return warnings

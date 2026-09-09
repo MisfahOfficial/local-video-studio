@@ -6,6 +6,7 @@ import threading
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 from app.paths import AppPaths
 from app.server import create_server
@@ -30,6 +31,8 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
+                self.assertEqual(health["version"], "0.2.0")
+                self.assertEqual(health["schema_version"], 2)
                 project = self._request(
                     f"{base}/api/projects",
                     method="POST",
@@ -47,6 +50,21 @@ class ServerTests(unittest.TestCase):
                 )
                 self.assertEqual(len(plan["scenes"]), 2)
                 self.assertEqual(plan["generation_count"], 2)
+                self.assertIn("warnings", plan)
+                bulk = self._request(
+                    f"{base}/api/projects/{project['id']}/scenes/bulk",
+                    method="POST",
+                    payload={"scene_ids": None, "changes": {"provider": "mock", "motion": "pan_right"}, "save_as_default": True},
+                )
+                self.assertEqual(bulk["updated"], 2)
+                self.assertTrue(all(scene["provider"] == "mock" for scene in bulk["scenes"]))
+                with patch("app.server.subprocess.Popen") as popen:
+                    opened = self._request(
+                        f"{base}/api/projects/{project['id']}/open-folder",
+                        method="POST", payload={"kind": "renders"},
+                    )
+                    self.assertTrue(opened["opened"])
+                    popen.assert_called_once()
                 page = urllib.request.urlopen(f"{base}/", timeout=3).read().decode("utf-8")
                 self.assertIn("Local Video Studio", page)
             finally:
@@ -69,4 +87,3 @@ class ServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
