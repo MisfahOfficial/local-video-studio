@@ -1,7 +1,8 @@
 const state = {
   themes: [], motions: [], settings: {}, projects: [], current: null,
   scenes: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
-  selectedSceneIds: new Set(), planWarnings: [],
+  selectedSceneIds: new Set(), planWarnings: [], activeTimelineSceneId: null,
+  previewTime: 0, manualPreviewFrame: null, manualPreviewStartedAt: 0, draggedSceneId: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -51,10 +52,11 @@ async function boot() {
     state.projects = projectData.projects;
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.2.0"}`;
+    $("#appVersion").textContent = `v${health.version || "0.3.0"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
+    $("#timelineMotion").innerHTML = state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join("");
     renderProjects();
     fillSettings();
     if (state.projects.length) await openProject(state.projects[0].id);
@@ -96,6 +98,12 @@ async function openProject(projectId, keepTab = false) {
   state.planWarnings = payload.warnings || [];
   if (projectChanged) {
     state.selectedSceneIds.clear();
+    pausePreview();
+    state.activeTimelineSceneId = null;
+    state.previewTime = 0;
+  }
+  if (!state.scenes.some(scene => scene.id === state.activeTimelineSceneId)) {
+    state.activeTimelineSceneId = state.scenes[0]?.id || null;
   }
   state.scenePage = 1;
   $("#emptyState").hidden = true;
@@ -112,6 +120,8 @@ async function openProject(projectId, keepTab = false) {
   renderProjects();
   renderScenes();
   renderPlanWarnings();
+  fillCaptionStyle();
+  configurePreviewAudio();
   renderTimeline();
   if (!keepTab) activateTab(state.scenes.length ? "scenes" : "script");
   await refreshGenerationStatus();
@@ -355,25 +365,281 @@ function startGenerationPolling() {
   state.generationTimer = setInterval(() => refreshGenerationStatus().catch(error => toast(error.message, true)), 2200);
 }
 
-function renderTimeline() {
-  const selectedAssets = Object.fromEntries(state.assets.map(asset => [asset.id, asset]));
-  $("#timelineList").innerHTML = state.scenes.map(scene => {
-    const asset = selectedAssets[scene.selected_asset_id];
-    const motion = (scene.timeline_actions || []).find(action => action.type === "motion")?.params?.preset || "slow_push";
-    const transition = (scene.timeline_actions || []).find(action => action.type === "transition")?.params?.preset || "fade";
-    return `<div class="timeline-row" data-scene-id="${scene.id}"><div class="timeline-scene">${asset ? `<img class="timeline-thumb" src="${escapeHtml(asset.media_url)}" alt="">` : `<div class="timeline-thumb"></div>`}<div class="timeline-title"><strong>Scene ${scene.position}</strong><span>${escapeHtml(scene.narration)}</span></div></div><span class="time">${clock(scene.start_seconds)} → ${clock(scene.end_seconds)}</span><select data-timeline="motion" aria-label="Motion for scene ${scene.position}">${state.motions.map(item => `<option value="${item}" ${item === motion ? "selected" : ""}>${item.replaceAll("_", " ")}</option>`).join("")}</select><select data-timeline="transition" aria-label="Transition for scene ${scene.position}"><option value="fade" ${transition === "fade" ? "selected" : ""}>fade</option><option value="cut" ${transition === "cut" ? "selected" : ""}>cut</option></select></div>`;
-  }).join("") || `<div class="queue-status">Create the visual plan first.</div>`;
+function selectedAssetForScene(scene) {
+  return state.assets.find(asset => asset.id === scene?.selected_asset_id) || null;
 }
 
-async function saveTimelineRow(row) {
-  const sceneId = row.dataset.sceneId;
-  const actions = [
-    { type: "motion", params: { preset: $("[data-timeline='motion']", row).value, strength: 0.55 } },
-    { type: "transition", params: { preset: $("[data-timeline='transition']", row).value, duration: 0.32 } },
-  ];
-  const updated = await api(`/api/scenes/${sceneId}`, { method: "PATCH", body: JSON.stringify({ timeline_actions: actions }) });
-  state.scenes = state.scenes.map(scene => scene.id === sceneId ? updated : scene);
-  toast(`Timeline action saved for scene ${updated.position}`);
+function timelineDuration() {
+  const sceneEnd = state.scenes.length ? Number(state.scenes[state.scenes.length - 1].end_seconds || 0) : 0;
+  return Math.max(sceneEnd, Number(state.current?.duration_seconds || 0), 0.1);
+}
+
+function captionStyleFromInputs() {
+  return {
+    font: $("#captionFont").value,
+    size: Number($("#captionSize").value),
+    position: $("#captionPosition").value,
+    text_color: $("#captionTextColor").value.toUpperCase(),
+    background_color: $("#captionBackgroundColor").value.toUpperCase(),
+    background_opacity: Number($("#captionBackgroundOpacity").value),
+  };
+}
+
+function fillCaptionStyle() {
+  const style = state.current?.caption_style || {};
+  $("#captionFont").value = style.font || "Arial";
+  $("#captionSize").value = style.size || 54;
+  $("#captionPosition").value = style.position || "bottom";
+  $("#captionTextColor").value = style.text_color || "#FFFFFF";
+  $("#captionBackgroundColor").value = style.background_color || "#000000";
+  $("#captionBackgroundOpacity").value = style.background_opacity ?? 0.72;
+  updateCaptionPreviewStyle();
+}
+
+function updateCaptionPreviewStyle() {
+  const caption = $("#previewCaption");
+  const style = captionStyleFromInputs();
+  caption.style.fontFamily = style.font;
+  caption.style.fontSize = `${Math.max(12, style.size * 0.42)}px`;
+  caption.style.color = style.text_color;
+  const color = style.background_color.match(/[A-Fa-f0-9]{2}/g)?.map(value => parseInt(value, 16)) || [0, 0, 0];
+  caption.style.backgroundColor = `rgba(${color[0]},${color[1]},${color[2]},${style.background_opacity})`;
+  caption.classList.remove("position-top", "position-middle", "position-bottom");
+  caption.classList.add(`position-${style.position}`);
+}
+
+function configurePreviewAudio() {
+  const audio = $("#previewAudio");
+  const source = state.current?.voiceover_media_url || "";
+  if (source && audio.getAttribute("src") !== source) {
+    audio.src = source;
+    audio.load();
+  } else if (!source && audio.getAttribute("src")) {
+    audio.removeAttribute("src");
+    audio.load();
+  }
+  const duration = timelineDuration();
+  $("#previewScrubber").max = duration;
+  $("#previewTotalTime").textContent = clock(duration);
+}
+
+function activeSceneAt(time) {
+  return state.scenes.find(scene => time >= Number(scene.start_seconds) && time < Number(scene.end_seconds))
+    || (time >= timelineDuration() - 0.05 ? state.scenes[state.scenes.length - 1] : null);
+}
+
+function actionFor(scene, type, defaults) {
+  return (scene?.timeline_actions || []).find(action => action.type === type)?.params || defaults;
+}
+
+function fillTimelineInspector(scene) {
+  const controls = ["#timelineDuration", "#timelineCaption", "#timelineMotion", "#timelineTransition", "#timelineTransitionDuration", "#replaceMediaButton", "#saveTimelineButton"];
+  controls.forEach(selector => { $(selector).disabled = !scene; });
+  $("#timelineSceneTitle").textContent = scene ? `Scene ${scene.position} · ${clock(scene.start_seconds)}–${clock(scene.end_seconds)}` : "Select a scene";
+  if (!scene) {
+    $("#timelineDuration").value = "";
+    $("#timelineCaption").value = "";
+    return;
+  }
+  const motion = actionFor(scene, "motion", { preset: "slow_push" });
+  const transition = actionFor(scene, "transition", { preset: "fade", duration: 0.32 });
+  $("#timelineDuration").value = (Number(scene.end_seconds) - Number(scene.start_seconds)).toFixed(2);
+  $("#timelineCaption").value = scene.caption_text ?? scene.narration ?? "";
+  $("#timelineMotion").value = motion.preset || "slow_push";
+  $("#timelineTransition").value = transition.preset || "fade";
+  $("#timelineTransitionDuration").value = transition.preset === "cut" ? 0 : Number(transition.duration ?? 0.32);
+  $("#timelineTransitionDuration").disabled = transition.preset === "cut";
+}
+
+function applyPreviewMotion(scene, progress) {
+  const media = $("#previewImage").hidden ? $("#previewVideo") : $("#previewImage");
+  const preset = actionFor(scene, "motion", { preset: "slow_push" }).preset;
+  let transform = "scale(1)";
+  if (preset === "slow_push") transform = `scale(${1 + 0.08 * progress})`;
+  if (preset === "detail_push") transform = `scale(${1 + 0.12 * progress})`;
+  if (preset === "slow_pull") transform = `scale(${1.08 - 0.08 * progress})`;
+  if (preset === "pan_left") transform = `scale(1.08) translateX(${4 - 8 * progress}%)`;
+  if (preset === "pan_right") transform = `scale(1.08) translateX(${-4 + 8 * progress}%)`;
+  media.style.transform = transform;
+  const transition = actionFor(scene, "transition", { preset: "fade", duration: 0.32 });
+  const duration = Math.max(0.1, Number(scene.end_seconds) - Number(scene.start_seconds));
+  const elapsed = Math.max(0, state.previewTime - Number(scene.start_seconds));
+  const fade = transition.preset === "fade" ? Math.min(Number(transition.duration || 0.32), duration / 2) : 0;
+  media.style.opacity = fade ? Math.min(1, elapsed / fade, (duration - elapsed) / fade) : 1;
+}
+
+function updatePreviewAt(time, selectScene = true) {
+  const duration = timelineDuration();
+  state.previewTime = Math.max(0, Math.min(Number(time || 0), duration));
+  $("#previewScrubber").value = state.previewTime;
+  $("#previewCurrentTime").textContent = clock(state.previewTime);
+  const scene = activeSceneAt(state.previewTime);
+  if (scene && selectScene && state.activeTimelineSceneId !== scene.id) {
+    state.activeTimelineSceneId = scene.id;
+    $$(".timeline-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
+    fillTimelineInspector(scene);
+  }
+  const active = scene || state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  const asset = selectedAssetForScene(active);
+  const image = $("#previewImage");
+  const video = $("#previewVideo");
+  const empty = $("#previewEmpty");
+  image.hidden = true;
+  video.hidden = true;
+  empty.hidden = Boolean(asset);
+  if (asset?.media_kind === "video") {
+    video.hidden = false;
+    if (video.getAttribute("src") !== asset.media_url) { video.src = asset.media_url; video.load(); }
+    const localTime = Math.max(0, state.previewTime - Number(active.start_seconds));
+    if (video.readyState >= 1 && Math.abs(video.currentTime - localTime) > 0.35) video.currentTime = localTime;
+  } else if (asset) {
+    image.hidden = false;
+    if (image.getAttribute("src") !== asset.media_url) image.src = asset.media_url;
+  }
+  $("#previewSceneBadge").textContent = active ? `Scene ${active.position}` : "No scene";
+  const caption = $("#previewCaption");
+  caption.textContent = active ? (active.caption_text ?? active.narration ?? "") : "";
+  caption.hidden = !caption.textContent;
+  updateCaptionPreviewStyle();
+  if (active && asset) {
+    const sceneDuration = Math.max(0.1, Number(active.end_seconds) - Number(active.start_seconds));
+    const progress = Math.max(0, Math.min(1, (state.previewTime - Number(active.start_seconds)) / sceneDuration));
+    applyPreviewMotion(active, progress);
+  }
+}
+
+function renderTimeline() {
+  if (!state.scenes.some(scene => scene.id === state.activeTimelineSceneId)) {
+    state.activeTimelineSceneId = state.scenes[0]?.id || null;
+  }
+  const zoom = Number($("#timelineZoom").value || 10);
+  $("#timelineList").innerHTML = state.scenes.map(scene => {
+    const asset = selectedAssetForScene(scene);
+    const duration = Math.max(0.5, Number(scene.end_seconds) - Number(scene.start_seconds));
+    const width = Math.max(112, Math.min(430, duration * zoom));
+    const media = asset?.media_kind === "video"
+      ? `<div class="timeline-clip-placeholder">VIDEO</div>`
+      : asset ? `<img src="${escapeHtml(asset.media_url)}" alt="">` : `<div class="timeline-clip-placeholder">No media</div>`;
+    return `<div class="timeline-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" style="width:${width}px" draggable="true" tabindex="0" role="button" data-scene-id="${scene.id}">
+      <div class="timeline-clip-media">${media}<span class="timeline-clip-number">${scene.position}</span></div>
+      <strong class="timeline-clip-title">${escapeHtml(scene.caption_text || scene.narration)}</strong>
+      <div class="timeline-clip-info"><span>${clock(scene.start_seconds)}</span><span>${duration.toFixed(1)}s</span></div>
+    </div>`;
+  }).join("") || `<div class="queue-status">Create the visual plan first.</div>`;
+  $("#timelineSummary").textContent = state.scenes.length ? `${state.scenes.length} scenes · ${clock(timelineDuration())}` : "No scenes yet";
+  $("#previewScrubber").max = timelineDuration();
+  $("#previewTotalTime").textContent = clock(timelineDuration());
+  fillTimelineInspector(state.scenes.find(scene => scene.id === state.activeTimelineSceneId));
+  updatePreviewAt(state.previewTime, false);
+}
+
+function selectTimelineScene(sceneId, seek = true) {
+  const scene = state.scenes.find(item => item.id === sceneId);
+  if (!scene) return;
+  state.activeTimelineSceneId = scene.id;
+  if (seek) {
+    const audio = $("#previewAudio");
+    state.previewTime = Number(scene.start_seconds);
+    if (audio.getAttribute("src")) audio.currentTime = state.previewTime;
+  }
+  $$(".timeline-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
+  fillTimelineInspector(scene);
+  updatePreviewAt(state.previewTime, false);
+}
+
+async function saveTimelineScene() {
+  const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  if (!scene) throw new Error("Select a scene first");
+  const transitionPreset = $("#timelineTransition").value;
+  const body = {
+    duration_seconds: Number($("#timelineDuration").value),
+    caption_text: $("#timelineCaption").value.trim(),
+    timeline_actions: [
+      { type: "motion", params: { preset: $("#timelineMotion").value, strength: 0.55 } },
+      { type: "transition", params: { preset: transitionPreset, duration: transitionPreset === "cut" ? 0 : Number($("#timelineTransitionDuration").value) } },
+    ],
+  };
+  await api(`/api/scenes/${scene.id}`, { method: "PATCH", body: JSON.stringify(body) });
+  await openProject(state.current.id, true);
+  activateTab("timeline");
+  toast(`Scene ${scene.position} timeline saved`);
+}
+
+async function uploadReplacementMedia(file) {
+  const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  if (!scene || !file) return;
+  const button = $("#replaceMediaButton");
+  button.disabled = true;
+  button.textContent = "Uploading…";
+  try {
+    await api(`/api/scenes/${scene.id}/asset`, { method: "POST", body: file, headers: { "X-Filename": file.name } });
+    await openProject(state.current.id, true);
+    activateTab("timeline");
+    toast(`Replacement selected for scene ${scene.position}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Upload replacement";
+    $("#replacementMediaInput").value = "";
+  }
+}
+
+async function saveCaptionStyle() {
+  const result = await api(`/api/projects/${state.current.id}/caption-style`, {
+    method: "POST", body: JSON.stringify(captionStyleFromInputs()),
+  });
+  state.current.caption_style = result.caption_style;
+  updateCaptionPreviewStyle();
+  toast("Caption style saved for this project");
+}
+
+function pausePreview() {
+  cancelAnimationFrame(state.manualPreviewFrame);
+  state.manualPreviewFrame = null;
+  const audio = $("#previewAudio");
+  if (!audio.paused) audio.pause();
+  $("#previewPlayButton").textContent = "Play";
+}
+
+function startManualPreview() {
+  state.manualPreviewStartedAt = performance.now() - state.previewTime * 1000;
+  $("#previewPlayButton").textContent = "Pause";
+  const tick = now => {
+    const current = (now - state.manualPreviewStartedAt) / 1000;
+    if (current >= timelineDuration()) { pausePreview(); updatePreviewAt(0); return; }
+    updatePreviewAt(current);
+    state.manualPreviewFrame = requestAnimationFrame(tick);
+  };
+  state.manualPreviewFrame = requestAnimationFrame(tick);
+}
+
+async function togglePreview() {
+  const audio = $("#previewAudio");
+  if (audio.getAttribute("src")) {
+    if (audio.paused) {
+      if (state.previewTime >= timelineDuration() - 0.05) audio.currentTime = 0;
+      await audio.play();
+      $("#previewPlayButton").textContent = "Pause";
+    } else {
+      audio.pause();
+      $("#previewPlayButton").textContent = "Play";
+    }
+    return;
+  }
+  if (state.manualPreviewFrame) pausePreview(); else startManualPreview();
+}
+
+async function reorderTimeline(sourceId, targetId, insertAfter) {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  const ordered = state.scenes.map(scene => scene.id).filter(id => id !== sourceId);
+  let targetIndex = ordered.indexOf(targetId);
+  if (insertAfter) targetIndex += 1;
+  ordered.splice(targetIndex, 0, sourceId);
+  await api(`/api/projects/${state.current.id}/scenes/reorder`, {
+    method: "POST", body: JSON.stringify({ scene_ids: ordered }),
+  });
+  await openProject(state.current.id, true);
+  activateTab("timeline");
+  toast("Timeline order updated");
 }
 
 async function startRender() {
@@ -382,6 +648,7 @@ async function startRender() {
     await api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
       width: Number($("#exportWidth").value), height: Number($("#exportHeight").value),
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
+      caption_style: captionStyleFromInputs(),
     }) });
     toast("Local render started");
     clearInterval(state.renderTimer);
@@ -471,7 +738,57 @@ $("#sceneList").addEventListener("change", event => {
   if (selector.checked) state.selectedSceneIds.add(sceneId); else state.selectedSceneIds.delete(sceneId);
   updateSelectionCount();
 });
-$("#timelineList").addEventListener("change", event => { const row = event.target.closest(".timeline-row"); if (row) saveTimelineRow(row).catch(error => toast(error.message, true)); });
+$("#timelineList").addEventListener("click", event => {
+  const clip = event.target.closest(".timeline-clip");
+  if (clip) selectTimelineScene(clip.dataset.sceneId);
+});
+$("#timelineList").addEventListener("keydown", event => {
+  const clip = event.target.closest(".timeline-clip");
+  if (clip && ["Enter", " "].includes(event.key)) { event.preventDefault(); selectTimelineScene(clip.dataset.sceneId); }
+});
+$("#timelineList").addEventListener("dragstart", event => {
+  const clip = event.target.closest(".timeline-clip");
+  if (!clip) return;
+  state.draggedSceneId = clip.dataset.sceneId;
+  clip.classList.add("dragging");
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", state.draggedSceneId);
+});
+$("#timelineList").addEventListener("dragend", event => {
+  event.target.closest(".timeline-clip")?.classList.remove("dragging");
+  state.draggedSceneId = null;
+});
+$("#timelineList").addEventListener("dragover", event => {
+  if (event.target.closest(".timeline-clip")) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }
+});
+$("#timelineList").addEventListener("drop", event => {
+  const target = event.target.closest(".timeline-clip");
+  if (!target) return;
+  event.preventDefault();
+  const sourceId = state.draggedSceneId || event.dataTransfer.getData("text/plain");
+  const insertAfter = event.clientX > target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2;
+  reorderTimeline(sourceId, target.dataset.sceneId, insertAfter).catch(error => toast(error.message, true));
+});
+$("#timelineZoom").addEventListener("input", renderTimeline);
+$("#saveTimelineButton").addEventListener("click", () => saveTimelineScene().catch(error => toast(error.message, true)));
+$("#replaceMediaButton").addEventListener("click", () => $("#replacementMediaInput").click());
+$("#replacementMediaInput").addEventListener("change", event => uploadReplacementMedia(event.target.files[0]).catch(error => toast(error.message, true)));
+$("#timelineTransition").addEventListener("change", event => { $("#timelineTransitionDuration").disabled = event.target.value === "cut"; updatePreviewAt(state.previewTime, false); });
+$("#timelineCaption").addEventListener("input", event => { $("#previewCaption").textContent = event.target.value; $("#previewCaption").hidden = !event.target.value; });
+$("#timelineMotion").addEventListener("change", () => updatePreviewAt(state.previewTime, false));
+$("#previewPlayButton").addEventListener("click", () => togglePreview().catch(error => toast(error.message, true)));
+$("#previewScrubber").addEventListener("input", event => {
+  const value = Number(event.target.value);
+  const audio = $("#previewAudio");
+  if (audio.getAttribute("src")) audio.currentTime = value;
+  updatePreviewAt(value);
+});
+$("#previewAudio").addEventListener("timeupdate", event => updatePreviewAt(event.target.currentTime));
+$("#previewAudio").addEventListener("play", () => { $("#previewPlayButton").textContent = "Pause"; });
+$("#previewAudio").addEventListener("pause", () => { $("#previewPlayButton").textContent = "Play"; });
+$("#previewAudio").addEventListener("ended", () => { $("#previewPlayButton").textContent = "Play"; updatePreviewAt(0); });
+$("#saveCaptionStyleButton").addEventListener("click", () => saveCaptionStyle().catch(error => toast(error.message, true)));
+$$('#captionFont,#captionSize,#captionPosition,#captionTextColor,#captionBackgroundColor,#captionBackgroundOpacity').forEach(input => input.addEventListener("input", updateCaptionPreviewStyle));
 $("#renderButton").addEventListener("click", startRender);
 $("#openOutputButton").addEventListener("click", async () => {
   try {

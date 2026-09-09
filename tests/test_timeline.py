@@ -8,7 +8,7 @@ from pathlib import Path
 from app.domain import GenerationRequest
 from app.providers.mock import MockImageProvider
 from app.timeline.actions import build_default_motion_registry
-from app.timeline.renderer import FFmpegRenderer, write_scene_srt
+from app.timeline.renderer import FFmpegRenderer, build_subtitle_style, write_scene_srt
 
 
 class TimelineTests(unittest.TestCase):
@@ -23,12 +23,24 @@ class TimelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "captions.srt"
             write_scene_srt(
-                [{"start_seconds": 0.0, "end_seconds": 2.345, "narration": "A first caption."}],
+                [{"start_seconds": 0.0, "end_seconds": 2.345, "narration": "Narration.", "caption_text": "A first caption."}],
                 destination,
             )
             text = destination.read_text(encoding="utf-8")
             self.assertIn("00:00:00,000 --> 00:00:02,345", text)
             self.assertIn("A first caption.", text)
+            self.assertNotIn("Narration.", text)
+
+    def test_caption_style_builds_safe_ass_options(self) -> None:
+        style = build_subtitle_style({
+            "font": "Georgia", "size": 48, "position": "top",
+            "text_color": "#F0E0D0", "background_color": "#102030",
+            "background_opacity": 0.5,
+        })
+        self.assertIn("FontName=Georgia", style)
+        self.assertIn("FontSize=48", style)
+        self.assertIn("Alignment=8", style)
+        self.assertIn("PrimaryColour=&H00D0E0F0", style)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for filter validation")
     def test_all_motion_presets_execute_in_ffmpeg(self) -> None:

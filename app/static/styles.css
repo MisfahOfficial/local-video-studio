@@ -126,16 +126,44 @@ input[type="file"] { padding: 8px; }
 .asset .asset-label { position: absolute; left: 6px; bottom: 6px; padding: 3px 6px; border-radius: 5px; background: rgba(0,0,0,.68); color: white; font-size: 10px; pointer-events: none; }
 .asset-empty { min-height: 120px; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); text-align: center; padding: 18px; }
 
-.timeline-legend, .timeline-row { display: grid; grid-template-columns: minmax(220px, 1.4fr) 140px 170px 170px; gap: 12px; align-items: center; }
-.timeline-legend { color: var(--muted); font-size: 11px; padding: 0 12px 8px; }
-.timeline-list { display: grid; gap: 7px; }
-.timeline-row { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
-.timeline-scene { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.timeline-thumb { width: 80px; aspect-ratio: 16/9; object-fit: cover; background: var(--surface-3); border-radius: 6px; }
-.timeline-title { min-width: 0; }
-.timeline-title strong, .timeline-title span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.timeline-title span { color: var(--muted); font-size: 11px; margin-top: 3px; }
-.timeline-row select { margin-top: 0; }
+.editor-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(310px, .75fr); gap: 16px; align-items: start; }
+.preview-panel { padding: 12px; }
+.preview-stage { position: relative; overflow: hidden; aspect-ratio: 16/9; display: grid; place-items: center; border-radius: 10px; background: #040507; border: 1px solid var(--border); }
+.preview-stage img, .preview-stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: center; }
+.preview-empty { max-width: 330px; padding: 20px; color: var(--muted); text-align: center; line-height: 1.5; }
+.preview-caption { position: absolute; z-index: 3; left: 7%; right: 7%; width: fit-content; max-width: 86%; margin: auto; padding: .16em .38em; color: #fff; background: rgba(0,0,0,.72); border-radius: .18em; font-weight: 800; line-height: 1.25; text-align: center; text-wrap: balance; white-space: pre-wrap; }
+.preview-caption.position-top { top: 8%; }
+.preview-caption.position-middle { top: 50%; transform: translateY(-50%); }
+.preview-caption.position-bottom { bottom: 8%; }
+.preview-scene-badge { position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border-radius: 6px; background: rgba(0,0,0,.68); color: white; font-size: 11px; }
+.preview-controls { display: grid; grid-template-columns: auto auto minmax(120px, 1fr) auto; align-items: center; gap: 10px; margin-top: 11px; }
+.preview-controls input { margin: 0; padding: 0; accent-color: var(--accent); }
+.timeline-inspector { display: grid; gap: 13px; }
+.timeline-inspector h3 { margin-top: 2px; }
+.timeline-inspector textarea { min-height: 104px; }
+.inspector-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.inspector-grid label:last-child { grid-column: 1 / -1; }
+.inspector-actions { justify-content: flex-end; flex-wrap: wrap; }
+.caption-style-panel { margin-top: 16px; }
+.caption-style-grid { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 10px; margin-top: 14px; }
+.caption-style-grid input[type="color"] { min-height: 41px; padding: 5px; }
+.caption-style-grid input[type="range"] { padding: 8px 0; accent-color: var(--accent); }
+.timeline-filmstrip { margin-top: 16px; padding: 14px; }
+.timeline-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.timeline-toolbar label { display: grid; grid-template-columns: auto 150px; align-items: center; gap: 10px; }
+.timeline-toolbar input { margin: 0; padding: 0; accent-color: var(--accent); }
+.timeline-scroll { overflow-x: auto; padding-bottom: 8px; scrollbar-color: var(--accent) var(--surface-3); }
+.timeline-track { display: flex; gap: 8px; min-width: max-content; align-items: stretch; }
+.timeline-clip { position: relative; flex: 0 0 auto; min-width: 112px; max-width: 430px; padding: 7px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); color: var(--text); text-align: left; cursor: grab; }
+.timeline-clip:hover { border-color: #526174; }
+.timeline-clip.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: rgba(167,243,111,.07); }
+.timeline-clip.dragging { opacity: .42; }
+.timeline-clip-media { position: relative; aspect-ratio: 16/9; overflow: hidden; border-radius: 6px; background: var(--surface-3); }
+.timeline-clip-media img, .timeline-clip-media video { width: 100%; height: 100%; display: block; object-fit: cover; }
+.timeline-clip-placeholder { width: 100%; height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
+.timeline-clip-number { position: absolute; top: 5px; left: 5px; padding: 3px 5px; border-radius: 4px; background: rgba(0,0,0,.72); color: #fff; font-size: 10px; }
+.timeline-clip-info { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; color: var(--muted); font-size: 10px; }
+.timeline-clip-title { display: block; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 
 .export-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .panel { padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
@@ -162,9 +190,8 @@ dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
   .bulk-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .bulk-grid label:nth-last-child(-n+2) { grid-column: auto; }
   .scene-body { grid-template-columns: 1fr; }
-  .timeline-legend { display: none; }
-  .timeline-row { grid-template-columns: 1fr 1fr; }
-  .timeline-scene { grid-column: 1 / -1; }
+  .editor-layout { grid-template-columns: 1fr; }
+  .caption-style-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
 }
 
 @media (max-width: 700px) {
@@ -182,7 +209,9 @@ dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
   .bulk-grid { grid-template-columns: 1fr; }
   .bulk-heading { align-items: flex-start; flex-direction: column; }
   .scene-controls { grid-template-columns: 1fr; }
-  .timeline-row { grid-template-columns: 1fr; }
-  .timeline-scene { grid-column: auto; }
+  .caption-style-grid { grid-template-columns: 1fr 1fr; }
+  .preview-controls { grid-template-columns: auto 1fr auto; }
+  .preview-controls .button { grid-column: 1 / -1; }
+  .timeline-toolbar { align-items: flex-start; flex-direction: column; }
   .action-row { align-items: flex-start; flex-wrap: wrap; }
 }

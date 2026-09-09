@@ -19,7 +19,16 @@
 - macOS double-click start/update helpers
 - Visible app/schema versions and automatic pre-upgrade database backup
 
-## Version 0.3 — precision sync
+## Version 0.3 — visual timeline editor (included now)
+
+- Synchronized voice-over and selected-media preview
+- Horizontal thumbnail filmstrip with zoom and drag-to-reorder
+- Per-scene duration, caption text, motion, and transition inspector
+- Imported replacement images and video clips
+- Reusable caption font, size, position, colors, and opacity
+- Styled FFmpeg caption export and long-audio range streaming
+
+## Version 0.4 — precision sync
 
 - Background Faster-Whisper transcription job
 - Word-level script-to-audio alignment and shorter caption phrases
@@ -27,14 +36,14 @@
 - Drag-to-adjust scene boundaries with duration validation
 - Re-render only changed scene clips
 
-## Version 0.4 — mixed media
+## Version 0.5 — generated mixed media
 
 - One or more image-to-video/text-to-video provider adapters
 - Per-scene media choice: still, generated clip, or imported clip
 - Video job polling, cancellation, retries, and provider cost estimates
 - B-roll library and automatic still/video budget allocation
 
-## Version 0.5 — richer editing
+## Version 0.6 — richer editing
 
 - Transition registry with real overlaps and crossfades
 - Animated captions and reusable caption themes

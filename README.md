@@ -1,4 +1,4 @@
-# Local Video Studio v0.2
+# Local Video Studio v0.3
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -20,8 +20,12 @@ Extra candidates and premium models are opt-in on individual scenes.
 - Clear failed-generation details and one-click retry
 - Script, duration, voice-over, and target-image validation warnings
 - Candidate review and manual image selection
-- Timeline actions for motion and transitions
-- Local FFmpeg rendering, voice-over muxing, and optional burned captions
+- Voice-over preview with an image/video stage and synchronized playhead
+- Horizontal thumbnail filmstrip with zoom and drag-to-reorder
+- Per-scene duration, caption, motion, fade, and cut controls
+- Local replacement image/video uploads with automatic scene selection
+- Project caption fonts, size, position, colors, opacity, and export styling
+- Local FFmpeg rendering, voice-over muxing, and optional styled burned captions
 - Extension contracts for new image providers, video providers, and effects
 - Browser UI served only on `127.0.0.1` by default
 - Finder/Explorer output access and a direct rendered-video link
@@ -62,7 +66,9 @@ The command accepts `--data-dir`, `--host`, `--port`, and `--no-browser`.
    three only where a stronger hook or reveal is worth the extra cost.
 5. Click **Generate missing images**. The queue can be paused, resumed, retried,
    or safely restarted. Provider errors appear with their scene and option.
-6. Review/select candidates and adjust motion or transition actions.
+6. Open **Timeline** to preview the voice-over against the selected visuals. Edit
+   scene duration and caption text, drag clips to reorder them, or upload a local
+   replacement image/video. Set the caption design and save it for the project.
 7. Export locally. Caption burning can be disabled to produce a clean video;
    `captions.srt` is always written in the project folder. Use **Open output
    folder** or **Open rendered video** when the render completes.
@@ -84,8 +90,9 @@ local Faster-Whisper adapter for word timestamps:
 python -m pip install -e ".[transcription]"
 ```
 
-Automatic word-level alignment in the UI is a planned precision-sync upgrade. The
-current base remains dependency-free so it installs reliably on modest PCs.
+Automatic word-level alignment and an audio waveform remain planned precision-sync
+upgrades. The current visual editor stays dependency-free so it installs reliably
+on modest PCs.
 
 ## Windows
 
@@ -103,9 +110,9 @@ and final renders. SQLite uses WAL mode so an interrupted session can resume.
 ## Safe updates
 
 Program code and project data live in different folders, so updating the code
-does not replace projects, keys, images, captions, or renders. On the first v0.2
-launch, the database is copied to `backups/studio-pre-v2-<timestamp>.sqlite3`
-before the new columns are added.
+does not replace projects, keys, images, captions, or renders. On the first v0.3
+launch, the database is copied to `backups/studio-pre-v3-<timestamp>.sqlite3`
+before editable captions and caption-style storage are added.
 
 To update a GitHub clone on macOS, stop the running studio and double-click
 **Update Local Video Studio.command**. It pulls only the currently checked-out

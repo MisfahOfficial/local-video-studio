@@ -31,8 +31,8 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
-                self.assertEqual(health["version"], "0.2.0")
-                self.assertEqual(health["schema_version"], 2)
+                self.assertEqual(health["version"], "0.3.0")
+                self.assertEqual(health["schema_version"], 3)
                 project = self._request(
                     f"{base}/api/projects",
                     method="POST",
@@ -51,6 +51,40 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(len(plan["scenes"]), 2)
                 self.assertEqual(plan["generation_count"], 2)
                 self.assertIn("warnings", plan)
+                first_scene, second_scene = plan["scenes"]
+                updated_scene = self._request(
+                    f"{base}/api/scenes/{first_scene['id']}", method="PATCH",
+                    payload={"duration_seconds": 7.5, "caption_text": "Edited caption"},
+                )
+                self.assertEqual(updated_scene["caption_text"], "Edited caption")
+                project_payload = self._request(f"{base}/api/projects/{project['id']}")
+                self.assertEqual(project_payload["scenes"][1]["start_seconds"], 7.5)
+                caption_style = self._request(
+                    f"{base}/api/projects/{project['id']}/caption-style", method="POST",
+                    payload={"font": "Georgia", "size": 48, "position": "top", "text_color": "#FFFFFF", "background_color": "#000000", "background_opacity": 0.6},
+                )
+                self.assertEqual(caption_style["caption_style"]["position"], "top")
+                reordered = self._request(
+                    f"{base}/api/projects/{project['id']}/scenes/reorder", method="POST",
+                    payload={"scene_ids": [second_scene["id"], first_scene["id"]]},
+                )
+                self.assertEqual(reordered["scenes"][0]["id"], second_scene["id"])
+
+                upload_request = urllib.request.Request(
+                    f"{base}/api/scenes/{first_scene['id']}/asset",
+                    data=b"replacement-image-data", method="POST",
+                    headers={"X-Filename": "replacement.png", "Content-Type": "application/octet-stream"},
+                )
+                with urllib.request.urlopen(upload_request, timeout=3) as response:
+                    uploaded = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(uploaded["asset"]["provider"], "local")
+                self.assertEqual(uploaded["scene"]["selected_asset_id"], uploaded["asset"]["id"])
+                range_request = urllib.request.Request(
+                    f"{base}{uploaded['asset']['media_url']}", headers={"Range": "bytes=0-3"},
+                )
+                with urllib.request.urlopen(range_request, timeout=3) as response:
+                    self.assertEqual(response.status, 206)
+                    self.assertEqual(response.read(), b"repl")
                 bulk = self._request(
                     f"{base}/api/projects/{project['id']}/scenes/bulk",
                     method="POST",
@@ -67,6 +101,7 @@ class ServerTests(unittest.TestCase):
                     popen.assert_called_once()
                 page = urllib.request.urlopen(f"{base}/", timeout=3).read().decode("utf-8")
                 self.assertIn("Local Video Studio", page)
+                self.assertIn("Preview and visual timeline", page)
             finally:
                 server.shutdown()
                 server.server_close()

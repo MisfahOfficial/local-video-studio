@@ -124,12 +124,67 @@
         </section>
 
         <section class="tab-panel" data-panel="timeline">
-          <div class="section-heading">
-            <div><span class="eyebrow">Local editor</span><h2>Timeline actions</h2></div>
+          <div class="section-heading wrap">
+            <div><span class="eyebrow">Local editor</span><h2>Preview and visual timeline</h2></div>
+            <span class="hint">Click a clip to edit it. Drag clips to change their order.</span>
           </div>
-          <p class="section-copy">Motion and transition instructions are saved on each scene. Future effects and video clips use the same action system.</p>
-          <div class="timeline-legend"><span>Image/clip</span><span>Narration timing</span><span>Motion</span><span>Transition</span></div>
-          <div id="timelineList" class="timeline-list"></div>
+          <div class="editor-layout">
+            <div class="preview-panel panel">
+              <div class="preview-stage" id="previewStage">
+                <img id="previewImage" alt="Selected scene preview" hidden>
+                <video id="previewVideo" muted playsinline preload="metadata" hidden></video>
+                <div class="preview-empty" id="previewEmpty">Generate or upload media to preview this scene</div>
+                <div class="preview-caption" id="previewCaption" hidden></div>
+                <span class="preview-scene-badge" id="previewSceneBadge">No scene</span>
+              </div>
+              <audio id="previewAudio" preload="metadata"></audio>
+              <div class="preview-controls">
+                <button class="button primary small" id="previewPlayButton" type="button">Play</button>
+                <span class="time" id="previewCurrentTime">00:00</span>
+                <input id="previewScrubber" type="range" min="0" max="1" step="0.01" value="0" aria-label="Preview playhead">
+                <span class="time" id="previewTotalTime">00:00</span>
+              </div>
+            </div>
+
+            <aside class="timeline-inspector panel">
+              <div><span class="eyebrow">Scene inspector</span><h3 id="timelineSceneTitle">Select a scene</h3></div>
+              <label>Scene duration (seconds)<input id="timelineDuration" type="number" min="0.5" max="600" step="0.1"></label>
+              <label>Caption text<textarea id="timelineCaption" rows="5" placeholder="Caption shown during this scene"></textarea></label>
+              <div class="inspector-grid">
+                <label>Motion<select id="timelineMotion"></select></label>
+                <label>Transition<select id="timelineTransition"><option value="fade">Fade</option><option value="cut">Cut</option></select></label>
+                <label>Fade duration<input id="timelineTransitionDuration" type="number" min="0" max="1.5" step="0.05" value="0.32"></label>
+              </div>
+              <div class="action-row inspector-actions">
+                <input id="replacementMediaInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" hidden>
+                <button class="button ghost" id="replaceMediaButton" type="button">Upload replacement</button>
+                <button class="button primary" id="saveTimelineButton" type="button">Save scene</button>
+              </div>
+            </aside>
+          </div>
+
+          <div class="caption-style-panel panel">
+            <div class="bulk-heading">
+              <div><span class="eyebrow">Caption design</span><strong>Style the exported subtitles</strong></div>
+              <button class="button ghost small" id="saveCaptionStyleButton" type="button">Save caption style</button>
+            </div>
+            <div class="caption-style-grid">
+              <label>Font<select id="captionFont"><option>Arial</option><option>Helvetica</option><option>Verdana</option><option>Georgia</option></select></label>
+              <label>Size<input id="captionSize" type="number" min="16" max="96" value="54"></label>
+              <label>Position<select id="captionPosition"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label>
+              <label>Text color<input id="captionTextColor" type="color" value="#ffffff"></label>
+              <label>Background<input id="captionBackgroundColor" type="color" value="#000000"></label>
+              <label>Background opacity<input id="captionBackgroundOpacity" type="range" min="0" max="1" step="0.05" value="0.72"></label>
+            </div>
+          </div>
+
+          <div class="timeline-filmstrip panel">
+            <div class="timeline-toolbar">
+              <div><span class="eyebrow">Filmstrip</span><strong id="timelineSummary">No scenes yet</strong></div>
+              <label>Zoom<input id="timelineZoom" type="range" min="5" max="24" step="1" value="10"></label>
+            </div>
+            <div class="timeline-scroll"><div id="timelineList" class="timeline-track"></div></div>
+          </div>
         </section>
 
         <section class="tab-panel" data-panel="export">

@@ -16,16 +16,16 @@ def utc_now() -> str:
 
 
 class Database:
-    LATEST_SCHEMA_VERSION = 2
+    LATEST_SCHEMA_VERSION = 3
 
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self._requires_v2_upgrade():
+        if self._requires_upgrade():
             self._backup_before_upgrade()
         self.migrate()
 
-    def _requires_v2_upgrade(self) -> bool:
+    def _requires_upgrade(self) -> bool:
         if not self.path.is_file() or self.path.stat().st_size == 0:
             return False
         try:
@@ -33,8 +33,11 @@ class Database:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
                 if "projects" not in tables:
                     return False
-                columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
-                return "default_provider" not in columns
+                project_columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
+                scene_columns = {row[1] for row in db.execute("PRAGMA table_info(scenes)")} if "scenes" in tables else set()
+                return "default_provider" not in project_columns or "caption_style" not in project_columns or (
+                    scene_columns and "caption_text" not in scene_columns
+                )
         except sqlite3.DatabaseError:
             return False
 
@@ -42,7 +45,7 @@ class Database:
         backup_dir = self.path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        backup_path = backup_dir / f"studio-pre-v2-{timestamp}.sqlite3"
+        backup_path = backup_dir / f"studio-pre-v3-{timestamp}.sqlite3"
         with sqlite3.connect(self.path) as source, sqlite3.connect(backup_path) as destination:
             source.backup(destination)
 
@@ -81,6 +84,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'draft',
                     estimated_cost REAL NOT NULL DEFAULT 0,
                     actual_cost REAL NOT NULL DEFAULT 0,
+                    caption_style TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -92,6 +96,7 @@ class Database:
                     start_seconds REAL NOT NULL,
                     end_seconds REAL NOT NULL,
                     narration TEXT NOT NULL,
+                    caption_text TEXT NOT NULL DEFAULT '',
                     visual_subject TEXT NOT NULL,
                     emotion TEXT NOT NULL,
                     narrative_role TEXT NOT NULL,
@@ -177,6 +182,17 @@ class Database:
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)",
                 (utc_now(),),
             )
+            project_columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
+            if "caption_style" not in project_columns:
+                db.execute("ALTER TABLE projects ADD COLUMN caption_style TEXT NOT NULL DEFAULT '{}'")
+            scene_columns = {row[1] for row in db.execute("PRAGMA table_info(scenes)")}
+            if "caption_text" not in scene_columns:
+                db.execute("ALTER TABLE scenes ADD COLUMN caption_text TEXT NOT NULL DEFAULT ''")
+            db.execute("UPDATE scenes SET caption_text = narration WHERE caption_text = ''")
+            db.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)",
+                (utc_now(),),
+            )
 
     def schema_version(self) -> int:
         with self.connection() as db:
@@ -188,7 +204,7 @@ class Database:
         if row is None:
             return None
         data = dict(row)
-        for key in ("timeline_actions", "metadata", "settings"):
+        for key in ("timeline_actions", "metadata", "settings", "caption_style"):
             if key in data and isinstance(data[key], str):
                 try:
                     data[key] = json.loads(data[key])
@@ -220,9 +236,11 @@ class Database:
         allowed = {
             "name", "theme_id", "script", "voiceover_path", "duration_seconds", "target_scene_count",
             "requested_scene_count", "status", "estimated_cost", "actual_cost", "default_provider", "default_model_role",
-            "default_candidate_count", "default_motion", "default_transition"
+            "default_candidate_count", "default_motion", "default_transition", "caption_style"
         }
         values = {key: value for key, value in changes.items() if key in allowed}
+        if "caption_style" in values:
+            values["caption_style"] = json.dumps(values["caption_style"])
         if values:
             values["updated_at"] = utc_now()
             assignments = ", ".join(f"{key} = ?" for key in values)
@@ -248,14 +266,14 @@ class Database:
                 db.execute(
                     """
                     INSERT INTO scenes (
-                        id, project_id, position, start_seconds, end_seconds, narration, visual_subject,
+                        id, project_id, position, start_seconds, end_seconds, narration, caption_text, visual_subject,
                         emotion, narrative_role, importance, prompt, negative_prompt, media_kind,
                         provider, model_role, candidate_count, timeline_actions, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()), project_id, data["position"], data["start_seconds"], data["end_seconds"],
-                        data["narration"], data["visual_subject"], data["emotion"], data["narrative_role"],
+                        data["narration"], data["narration"], data["visual_subject"], data["emotion"], data["narrative_role"],
                         data["importance"], data["prompt"], data["negative_prompt"], data["media_kind"],
                         project["default_provider"], project["default_model_role"],
                         int(project["default_candidate_count"]),
@@ -285,7 +303,7 @@ class Database:
 
     def update_scene(self, scene_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         allowed = {
-            "start_seconds", "end_seconds", "narration", "visual_subject", "emotion", "narrative_role",
+            "start_seconds", "end_seconds", "narration", "caption_text", "visual_subject", "emotion", "narrative_role",
             "importance", "prompt", "negative_prompt", "media_kind", "provider", "model_role",
             "candidate_count", "timeline_actions", "generation_status", "selected_asset_id"
         }
@@ -301,6 +319,54 @@ class Database:
         if not scene:
             raise KeyError("Scene not found")
         return scene
+
+    def set_scene_duration(self, scene_id: str, duration_seconds: float) -> list[dict[str, Any]]:
+        scene = self.get_scene(scene_id)
+        if not scene:
+            raise KeyError("Scene not found")
+        duration = float(duration_seconds)
+        if not 0.5 <= duration <= 600:
+            raise ValueError("Scene duration must be between 0.5 and 600 seconds")
+        scenes = self.list_scenes(str(scene["project_id"]))
+        cursor = 0.0
+        now = utc_now()
+        with self.connection() as db:
+            for item in scenes:
+                item_duration = duration if item["id"] == scene_id else max(
+                    0.5, float(item["end_seconds"]) - float(item["start_seconds"])
+                )
+                db.execute(
+                    "UPDATE scenes SET start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                    (cursor, cursor + item_duration, now, item["id"]),
+                )
+                cursor += item_duration
+            db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, scene["project_id"]))
+        return self.list_scenes(str(scene["project_id"]))
+
+    def reorder_scenes(self, project_id: str, ordered_scene_ids: list[str]) -> list[dict[str, Any]]:
+        scenes = self.list_scenes(project_id)
+        current_ids = [str(scene["id"]) for scene in scenes]
+        if len(ordered_scene_ids) != len(current_ids) or set(ordered_scene_ids) != set(current_ids):
+            raise ValueError("The reordered timeline must contain every project scene exactly once")
+        by_id = {str(scene["id"]): scene for scene in scenes}
+        cursor = 0.0
+        now = utc_now()
+        with self.connection() as db:
+            for temporary_position, scene_id in enumerate(ordered_scene_ids, start=1):
+                db.execute(
+                    "UPDATE scenes SET position = ?, updated_at = ? WHERE id = ?",
+                    (-temporary_position, now, scene_id),
+                )
+            for position, scene_id in enumerate(ordered_scene_ids, start=1):
+                scene = by_id[scene_id]
+                duration = max(0.5, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+                db.execute(
+                    "UPDATE scenes SET position = ?, start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                    (position, cursor, cursor + duration, now, scene_id),
+                )
+                cursor += duration
+            db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
+        return self.list_scenes(project_id)
 
     def bulk_update_scenes(self, project_id: str, scene_ids: list[str] | None,
                            changes: dict[str, Any]) -> list[dict[str, Any]]:
@@ -369,6 +435,14 @@ class Database:
         with self.connection() as db:
             rows = db.execute(query, params).fetchall()
         return [self._dict(row) or {} for row in rows]
+
+    def next_asset_candidate_index(self, scene_id: str) -> int:
+        with self.connection() as db:
+            row = db.execute(
+                "SELECT COALESCE(MAX(candidate_index), -1) + 1 FROM assets WHERE scene_id = ?",
+                (scene_id,),
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def add_asset(self, *, project_id: str, scene_id: str, candidate_index: int, media_kind: str,
                   provider: str, model: str, local_path: str, remote_url: str | None,

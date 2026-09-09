@@ -28,7 +28,8 @@ def _srt_time(seconds: float) -> str:
 def write_scene_srt(scenes: list[dict[str, Any]], destination: Path) -> None:
     blocks: list[str] = []
     for index, scene in enumerate(scenes, start=1):
-        text = str(scene["narration"]).replace("--> ", "→ ").strip()
+        caption = scene["caption_text"] if "caption_text" in scene else scene["narration"]
+        text = str(caption).replace("--> ", "→ ").strip()
         blocks.append(
             f"{index}\n{_srt_time(float(scene['start_seconds']))} --> {_srt_time(float(scene['end_seconds']))}\n{text}\n"
         )
@@ -53,6 +54,32 @@ def _escape_subtitle_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
 
+def _ass_color(hex_color: str, opacity: float = 1.0) -> str:
+    value = str(hex_color).lstrip("#")
+    red, green, blue = value[0:2], value[2:4], value[4:6]
+    alpha = round((1 - max(0.0, min(1.0, opacity))) * 255)
+    return f"&H{alpha:02X}{blue}{green}{red}"
+
+
+def build_subtitle_style(style: dict[str, Any] | None) -> str:
+    value = style or {}
+    position = str(value.get("position") or "bottom")
+    alignment = {"top": 8, "middle": 5, "bottom": 2}.get(position, 2)
+    margin = 55 if position in {"top", "bottom"} else 0
+    font = str(value.get("font") or "Arial")
+    size = max(16, min(96, int(value.get("size", 54))))
+    text_color = _ass_color(str(value.get("text_color") or "#FFFFFF"))
+    background_color = _ass_color(
+        str(value.get("background_color") or "#000000"),
+        float(value.get("background_opacity", 0.72)),
+    )
+    return (
+        f"FontName={font},FontSize={size},PrimaryColour={text_color},"
+        f"OutlineColour={background_color},BackColour={background_color},"
+        f"BorderStyle=3,Outline=1,Shadow=0,Alignment={alignment},MarginV={margin}"
+    )
+
+
 class FFmpegRenderer:
     def __init__(self, ffmpeg_path: str = "ffmpeg", motion_registry: MotionRegistry | None = None):
         self.ffmpeg_path = ffmpeg_path
@@ -69,6 +96,7 @@ class FFmpegRenderer:
         height: int = 1080,
         fps: int = 30,
         burn_captions: bool = True,
+        caption_style: dict[str, Any] | None = None,
         progress: ProgressCallback | None = None,
     ) -> Path:
         selected = {scene["id"]: scene.get("selected_asset_id") for scene in scenes}
@@ -117,7 +145,11 @@ class FFmpegRenderer:
             command += ["-i", str(voiceover)]
 
         if burn_captions:
-            command += ["-vf", f"subtitles='{_escape_subtitle_path(subtitle_path)}'", "-c:v", encoder]
+            subtitle_filter = (
+                f"subtitles='{_escape_subtitle_path(subtitle_path)}':"
+                f"force_style='{build_subtitle_style(caption_style)}'"
+            )
+            command += ["-vf", subtitle_filter, "-c:v", encoder]
             if encoder == "libx264":
                 command += ["-preset", "veryfast", "-crf", "20"]
         else:
@@ -210,6 +242,7 @@ class RenderManager:
                 height=int(options.get("height", 1080)),
                 fps=int(options.get("fps", 30)),
                 burn_captions=bool(options.get("burn_captions", True)),
+                caption_style=options.get("caption_style"),
                 progress=lambda value: self._update(job_id, progress=value),
             )
             self._update(job_id, status="complete", progress=1.0, output_path=str(output))
