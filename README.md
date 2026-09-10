@@ -1,4 +1,4 @@
-# Local Video Studio v0.3
+# Local Video Studio v0.4
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -20,12 +20,14 @@ Extra candidates and premium models are opt-in on individual scenes.
 - Clear failed-generation details and one-click retry
 - Script, duration, voice-over, and target-image validation warnings
 - Candidate review and manual image selection
-- Voice-over preview with an image/video stage and synchronized playhead
-- Horizontal thumbnail filmstrip with zoom and drag-to-reorder
+- CapCut-inspired three-panel editor with a media bin, separate real-time preview, and inspector
+- Synchronized video, caption, and voice-over tracks with a ruler, zoom, seeking, and drag-to-reorder
 - Per-scene duration, caption, motion, fade, and cut controls
 - Local replacement image/video uploads with automatic scene selection
-- Project caption fonts, size, position, colors, opacity, and export styling
+- Advanced caption font, pattern, case, alignment, spacing, transform, blend, stroke, background, glow, shadow, and presets
+- TTF/OTF font installation from a file or a protected direct Google Fonts/GitHub download
 - Local FFmpeg rendering, voice-over muxing, and optional styled burned captions
+- Separate export window with resolution, frame rate, progress, output-folder, and video access
 - Extension contracts for new image providers, video providers, and effects
 - Browser UI served only on `127.0.0.1` by default
 - Finder/Explorer output access and a direct rendered-video link
@@ -66,10 +68,11 @@ The command accepts `--data-dir`, `--host`, `--port`, and `--no-browser`.
    three only where a stronger hook or reveal is worth the extra cost.
 5. Click **Generate missing images**. The queue can be paused, resumed, retried,
    or safely restarted. Provider errors appear with their scene and option.
-6. Open **Timeline** to preview the voice-over against the selected visuals. Edit
-   scene duration and caption text, drag clips to reorder them, or upload a local
-   replacement image/video. Set the caption design and save it for the project.
-7. Export locally. Caption burning can be disabled to produce a clean video;
+6. Open **Timeline** to use the media bin, live player, caption inspector, and
+   synchronized tracks. Edit scene duration and caption text, drag clips to
+   reorder them, or import a local replacement image/video. Save the caption
+   design for the project.
+7. Open the separate **Export** window. Caption burning can be disabled to produce a clean video;
    `captions.srt` is always written in the project folder. Use **Open output
    folder** or **Open rendered video** when the render completes.
 
@@ -102,7 +105,8 @@ PowerShell. The build places the executable in `dist/LocalVideoStudio/`.
 
 ## Data and recovery
 
-By default, data is stored under the platform application-data directory. Set
+By default, data is stored under the platform application-data directory. Custom
+fonts are stored in its `fonts` folder for both live preview and FFmpeg export. Set
 `LOCAL_VIDEO_STUDIO_HOME` or pass `--data-dir` to choose another location. Each
 project owns its source voice-over, generated assets, caption file, cached clips,
 and final renders. SQLite uses WAL mode so an interrupted session can resume.

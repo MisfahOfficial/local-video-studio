@@ -53,7 +53,7 @@
           <button class="tab active" data-tab="script" type="button">1. Script & VO</button>
           <button class="tab" data-tab="scenes" type="button">2. Visual plan</button>
           <button class="tab" data-tab="timeline" type="button">3. Timeline</button>
-          <button class="tab" data-tab="export" type="button">4. Export</button>
+          <button class="tab" id="workflowExportButton" type="button">4. Export</button>
         </nav>
 
         <section class="tab-panel active" data-panel="script">
@@ -123,93 +123,122 @@
           <div id="sceneList" class="scene-list"></div>
         </section>
 
-        <section class="tab-panel" data-panel="timeline">
-          <div class="section-heading wrap">
-            <div><span class="eyebrow">Local editor</span><h2>Preview and visual timeline</h2></div>
-            <span class="hint">Click a clip to edit it. Drag clips to change their order.</span>
+        <section class="tab-panel studio-editor" data-panel="timeline">
+          <div class="editor-topbar">
+            <div class="editor-tools" role="toolbar" aria-label="Editor tools">
+              <button class="editor-tool active" type="button" data-editor-tool="media"><span>▣</span>Media</button>
+              <button class="editor-tool" type="button" data-editor-tool="audio"><span>♫</span>Audio</button>
+              <button class="editor-tool" type="button" data-editor-tool="captions"><span>CC</span>Captions</button>
+              <button class="editor-tool" type="button" data-editor-tool="effects"><span>✦</span>Effects</button>
+              <button class="editor-tool" type="button" data-editor-tool="transitions"><span>◇</span>Transitions</button>
+            </div>
+            <div class="editor-project-name"><span class="status-dot"></span><strong id="editorProjectName">Project</strong><span id="autosaveStatus">Saved locally</span></div>
+            <div class="editor-actions">
+              <button class="button ghost small" id="editorImportButton" type="button">↓ Import</button>
+              <button class="button export-button small" id="editorExportButton" type="button">↑ Export</button>
+            </div>
           </div>
-          <div class="editor-layout">
-            <div class="preview-panel panel">
-              <div class="preview-stage" id="previewStage">
-                <img id="previewImage" alt="Selected scene preview" hidden>
-                <video id="previewVideo" muted playsinline preload="metadata" hidden></video>
-                <div class="preview-empty" id="previewEmpty">Generate or upload media to preview this scene</div>
-                <div class="preview-caption" id="previewCaption" hidden></div>
-                <span class="preview-scene-badge" id="previewSceneBadge">No scene</span>
+
+          <div class="editor-workspace">
+            <aside class="editor-library">
+              <div class="editor-panel-head"><strong id="libraryTitle">Media</strong><button class="icon-button tiny" id="libraryImportButton" type="button">+</button></div>
+              <div class="library-tabs"><button class="active" type="button">Project</button><button type="button">Local</button></div>
+              <button class="button ghost full compact" id="libraryUploadButton" type="button">Import for selected scene</button>
+              <div class="media-bin" id="mediaBin"></div>
+              <div class="library-help" id="libraryHelp">Select a scene, then import an image or video. Generated options remain available here.</div>
+            </aside>
+
+            <section class="player-panel">
+              <div class="player-title"><span id="playerTitle">Player</span><span id="playerResolution">1920 × 1080</span></div>
+              <div class="preview-wrap">
+                <div class="preview-stage" id="previewStage">
+                  <img id="previewImage" alt="Selected scene preview" hidden>
+                  <video id="previewVideo" muted playsinline preload="metadata" hidden></video>
+                  <div class="preview-empty" id="previewEmpty">Generate or import media to preview this scene</div>
+                  <div class="preview-caption" id="previewCaption" hidden></div>
+                  <span class="preview-scene-badge" id="previewSceneBadge">No scene</span>
+                </div>
               </div>
               <audio id="previewAudio" preload="metadata"></audio>
               <div class="preview-controls">
-                <button class="button primary small" id="previewPlayButton" type="button">Play</button>
-                <span class="time" id="previewCurrentTime">00:00</span>
-                <input id="previewScrubber" type="range" min="0" max="1" step="0.01" value="0" aria-label="Preview playhead">
+                <span class="time accent-time" id="previewCurrentTime">00:00</span>
+                <span class="time-divider">/</span>
                 <span class="time" id="previewTotalTime">00:00</span>
+                <button class="player-button" id="previewBackButton" type="button" aria-label="Previous scene">|◀</button>
+                <button class="player-button play" id="previewPlayButton" type="button" aria-label="Play">▶</button>
+                <button class="player-button" id="previewForwardButton" type="button" aria-label="Next scene">▶|</button>
+                <input id="previewScrubber" type="range" min="0" max="1" step="0.01" value="0" aria-label="Preview playhead">
+                <button class="player-button" id="previewFullscreenButton" type="button" aria-label="Fullscreen">⛶</button>
               </div>
-            </div>
+            </section>
 
-            <aside class="timeline-inspector panel">
-              <div><span class="eyebrow">Scene inspector</span><h3 id="timelineSceneTitle">Select a scene</h3></div>
-              <label>Scene duration (seconds)<input id="timelineDuration" type="number" min="0.5" max="600" step="0.1"></label>
-              <label>Caption text<textarea id="timelineCaption" rows="5" placeholder="Caption shown during this scene"></textarea></label>
-              <div class="inspector-grid">
+            <aside class="timeline-inspector">
+              <div class="inspector-tabs"><button class="active" type="button" data-inspector-tab="text">Text</button><button type="button" data-inspector-tab="scene">Scene</button><button type="button" data-inspector-tab="animation">Animation</button></div>
+
+              <div class="inspector-content active" data-inspector-panel="text">
+                <div class="subtabs"><button class="active" type="button">Basic</button><button type="button">Bubble</button><button type="button">Effects</button></div>
+                <label class="sr-only" for="timelineCaption">Caption text</label>
+                <textarea id="timelineCaption" rows="4" placeholder="Caption shown during this scene"></textarea>
+                <div class="control-row"><span>Font</span><select id="captionFont"><option>Arial</option><option>Helvetica</option><option>Verdana</option><option>Georgia</option></select><button class="mini-button" id="addFontButton" type="button" title="Add font">+</button></div>
+                <input id="fontUploadInput" type="file" accept=".ttf,.otf,font/ttf,font/otf" hidden>
+                <div class="control-row"><span>Font size</span><input id="captionSizeRange" type="range" min="12" max="160" value="54"><input id="captionSize" class="number-box" type="number" min="12" max="160" value="54"></div>
+                <div class="control-row"><span>Pattern</span><div class="segmented format-controls"><button type="button" data-style-toggle="bold"><b>B</b></button><button type="button" data-style-toggle="underline"><u>U</u></button><button type="button" data-style-toggle="italic"><i>I</i></button></div></div>
+                <div class="control-row"><span>Case</span><div class="segmented"><button class="active" type="button" data-caption-case="normal">Tt</button><button type="button" data-caption-case="upper">TT</button><button type="button" data-caption-case="lower">tt</button></div></div>
+                <div class="control-row"><span>Color</span><input id="captionTextColor" type="color" value="#ffffff"></div>
+                <div class="control-row split"><label>Character<input id="captionCharacterSpacing" type="number" min="-5" max="50" step="0.5" value="0"></label><label>Line<input id="captionLineSpacing" type="number" min="0.5" max="3" step="0.05" value="1.2"></label></div>
+                <div class="control-row"><span>Alignment</span><div class="segmented grow"><button type="button" data-caption-align="left">≡</button><button class="active" type="button" data-caption-align="center">≡</button><button type="button" data-caption-align="right">≡</button></div></div>
+                <div class="control-block"><span>Preset style</span><div class="preset-grid" id="captionPresets">
+                  <button class="preset active" type="button" data-caption-preset="clean"><span>Aa</span><small>Clean</small></button>
+                  <button class="preset outline" type="button" data-caption-preset="outline"><span>Aa</span><small>Outline</small></button>
+                  <button class="preset boxed" type="button" data-caption-preset="boxed"><span>Aa</span><small>Boxed</small></button>
+                  <button class="preset yellow" type="button" data-caption-preset="yellow"><span>Aa</span><small>Yellow</small></button>
+                  <button class="preset red" type="button" data-caption-preset="red"><span>Aa</span><small>Impact</small></button>
+                  <button class="preset shadow" type="button" data-caption-preset="shadow"><span>Aa</span><small>Shadow</small></button>
+                </div></div>
+
+                <details class="inspector-section" open><summary>Transform</summary>
+                  <div class="control-row"><span>Scale</span><input id="captionScale" type="range" min="25" max="300" value="100"><output id="captionScaleValue">100%</output></div>
+                  <div class="control-row split"><label>X<input id="captionPositionX" type="number" min="-100" max="100" value="0"></label><label>Y<input id="captionPositionY" type="number" min="-100" max="100" value="0"></label></div>
+                  <div class="control-row"><span>Plane rotation</span><input id="captionRotation" type="number" min="-180" max="180" step="0.1" value="0"></div>
+                  <div class="control-row"><span>Anchor</span><select id="captionPosition"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></div>
+                </details>
+                <details class="inspector-section" open><summary>Blend</summary><div class="control-row"><span>Opacity</span><input id="captionOpacity" type="range" min="0" max="1" step="0.05" value="1"><output id="captionOpacityValue">100%</output></div></details>
+                <details class="inspector-section"><summary><input id="captionStrokeEnabled" type="checkbox"> Stroke</summary><div class="control-row"><span>Color</span><input id="captionStrokeColor" type="color" value="#000000"><input id="captionStrokeWidth" class="number-box" type="number" min="0" max="20" value="3"></div></details>
+                <details class="inspector-section"><summary><input id="captionBackgroundEnabled" type="checkbox" checked> Background</summary><div class="control-row"><span>Color</span><input id="captionBackgroundColor" type="color" value="#000000"></div><div class="control-row"><span>Opacity</span><input id="captionBackgroundOpacity" type="range" min="0" max="1" step="0.05" value="0.72"></div></details>
+                <details class="inspector-section"><summary><input id="captionGlowEnabled" type="checkbox"> Glow</summary><div class="control-row"><span>Color</span><input id="captionGlowColor" type="color" value="#ffffff"><input id="captionGlowRadius" class="number-box" type="number" min="0" max="40" value="8"></div></details>
+                <details class="inspector-section"><summary><input id="captionShadowEnabled" type="checkbox"> Shadow</summary><div class="control-row"><span>Color</span><input id="captionShadowColor" type="color" value="#000000"><input id="captionShadowBlur" class="number-box" type="number" min="0" max="40" value="5"></div><div class="control-row split"><label>X<input id="captionShadowX" type="number" min="-50" max="50" value="2"></label><label>Y<input id="captionShadowY" type="number" min="-50" max="50" value="3"></label></div></details>
+                <div class="inspector-footer"><button class="button ghost small" id="downloadFontButton" type="button">Download font</button><button class="button primary small" id="saveCaptionStyleButton" type="button">Save as preset</button></div>
+              </div>
+
+              <div class="inspector-content" data-inspector-panel="scene">
+                <div><span class="eyebrow">Scene inspector</span><h3 id="timelineSceneTitle">Select a scene</h3></div>
+                <label>Scene duration (seconds)<input id="timelineDuration" type="number" min="0.5" max="600" step="0.1"></label>
                 <label>Motion<select id="timelineMotion"></select></label>
                 <label>Transition<select id="timelineTransition"><option value="fade">Fade</option><option value="cut">Cut</option></select></label>
                 <label>Fade duration<input id="timelineTransitionDuration" type="number" min="0" max="1.5" step="0.05" value="0.32"></label>
-              </div>
-              <div class="action-row inspector-actions">
                 <input id="replacementMediaInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" hidden>
-                <button class="button ghost" id="replaceMediaButton" type="button">Upload replacement</button>
-                <button class="button primary" id="saveTimelineButton" type="button">Save scene</button>
+                <div class="inspector-footer"><button class="button ghost small" id="replaceMediaButton" type="button">Replace media</button><button class="button primary small" id="saveTimelineButton" type="button">Save scene</button></div>
               </div>
+              <div class="inspector-content" data-inspector-panel="animation"><p class="hint">Scene motion and transitions are available in the Scene tab. Caption animation keyframes are prepared for a later module.</p></div>
             </aside>
           </div>
 
-          <div class="caption-style-panel panel">
-            <div class="bulk-heading">
-              <div><span class="eyebrow">Caption design</span><strong>Style the exported subtitles</strong></div>
-              <button class="button ghost small" id="saveCaptionStyleButton" type="button">Save caption style</button>
-            </div>
-            <div class="caption-style-grid">
-              <label>Font<select id="captionFont"><option>Arial</option><option>Helvetica</option><option>Verdana</option><option>Georgia</option></select></label>
-              <label>Size<input id="captionSize" type="number" min="16" max="96" value="54"></label>
-              <label>Position<select id="captionPosition"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label>
-              <label>Text color<input id="captionTextColor" type="color" value="#ffffff"></label>
-              <label>Background<input id="captionBackgroundColor" type="color" value="#000000"></label>
-              <label>Background opacity<input id="captionBackgroundOpacity" type="range" min="0" max="1" step="0.05" value="0.72"></label>
-            </div>
-          </div>
-
-          <div class="timeline-filmstrip panel">
+          <section class="pro-timeline">
             <div class="timeline-toolbar">
-              <div><span class="eyebrow">Filmstrip</span><strong id="timelineSummary">No scenes yet</strong></div>
-              <label>Zoom<input id="timelineZoom" type="range" min="5" max="24" step="1" value="10"></label>
+              <div class="timeline-edit-buttons"><button class="icon-button tiny" type="button" id="timelineAddButton">+</button><button class="icon-button tiny" type="button" id="timelineUndoButton" disabled>↶</button><button class="icon-button tiny" type="button" id="timelineSplitButton" disabled>⑂</button><button class="icon-button tiny" type="button" id="timelineDeleteButton" disabled>⌫</button></div>
+              <strong id="timelineSummary">No scenes yet</strong>
+              <label>Zoom <input id="timelineZoom" type="range" min="2" max="30" step="1" value="8"></label>
             </div>
-            <div class="timeline-scroll"><div id="timelineList" class="timeline-track"></div></div>
-          </div>
-        </section>
-
-        <section class="tab-panel" data-panel="export">
-          <div class="section-heading">
-            <div><span class="eyebrow">FFmpeg render</span><h2>Export the finished video locally</h2></div>
-          </div>
-          <div class="export-layout">
-            <div class="panel">
-              <div class="form-grid two">
-                <label>Width<input id="exportWidth" type="number" value="1920"></label>
-                <label>Height<input id="exportHeight" type="number" value="1080"></label>
-                <label>Frame rate<select id="exportFps"><option>24</option><option selected>30</option><option>60</option></select></label>
-                <label class="check"><input id="burnCaptions" type="checkbox" checked><span>Burn captions into video</span></label>
+            <div class="timeline-scroll" id="timelineScroll">
+              <div class="timeline-canvas" id="timelineCanvas">
+                <div class="timeline-ruler-row"><div class="track-label">Time</div><div class="timeline-ruler" id="timelineRuler"></div></div>
+                <div class="track-row"><div class="track-label"><strong>▣ Video</strong><span>◉</span></div><div id="timelineList" class="timeline-track video-track"></div></div>
+                <div class="track-row"><div class="track-label"><strong>CC Captions</strong><span>◉</span></div><div id="captionTrack" class="timeline-track caption-track"></div></div>
+                <div class="track-row"><div class="track-label"><strong>♫ Voice-over</strong><span>◉</span></div><div id="audioTrack" class="timeline-track audio-track"></div></div>
+                <div class="timeline-playhead" id="timelinePlayhead"><span></span></div>
               </div>
-              <button class="button primary full" id="renderButton" type="button">Render final MP4</button>
-              <button class="button ghost full" id="openOutputButton" type="button">Open output folder</button>
             </div>
-            <div class="render-status panel">
-              <span class="eyebrow">Render status</span>
-              <h3 id="renderState">Not started</h3>
-              <progress id="renderProgress" max="100" value="0"></progress>
-              <p id="renderMessage">Generate and select an asset for every scene before rendering.</p>
-              <a class="button primary output-link" id="openVideoLink" href="#" target="_blank" rel="noopener" hidden>Open rendered video</a>
-            </div>
-          </div>
+          </section>
         </section>
       </section>
     </main>
@@ -240,6 +269,42 @@
       </div>
       <p class="settings-note" id="keyStatus"></p>
       <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>Cancel</button><button class="button primary" id="saveSettingsButton" value="default">Save settings</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="fontDialog" class="compact-dialog">
+    <form method="dialog" id="fontDownloadForm">
+      <div class="dialog-head"><div><span class="eyebrow">Caption fonts</span><h2>Add a font</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <p class="section-copy">Upload a TTF/OTF file, or paste a direct HTTPS font-file link from Google Fonts or GitHub.</p>
+      <button class="button ghost full" id="dialogUploadFontButton" type="button">Choose TTF or OTF file</button>
+      <label>Direct font URL<input id="fontUrlInput" type="url" placeholder="https://fonts.gstatic.com/.../font.ttf"></label>
+      <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>Cancel</button><button class="button primary" id="confirmDownloadFont" value="default">Download font</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="exportDialog" class="export-dialog">
+    <form method="dialog" id="exportForm">
+      <div class="dialog-head"><div><span class="eyebrow">Local FFmpeg render</span><h2>Export video</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <div class="export-dialog-layout">
+        <div>
+          <div class="export-preview" id="exportPreview"><span>MP4</span><strong id="exportProjectName">Project</strong></div>
+          <div class="form-grid two">
+            <label>Width<input id="exportWidth" type="number" min="320" max="7680" value="1920"></label>
+            <label>Height<input id="exportHeight" type="number" min="240" max="4320" value="1080"></label>
+            <label>Frame rate<select id="exportFps"><option>24</option><option selected>30</option><option>60</option></select></label>
+            <label>Format<select id="exportFormat"><option value="mp4">MP4 (H.264)</option></select></label>
+          </div>
+          <label class="check"><input id="burnCaptions" type="checkbox" checked><span>Burn styled captions into video</span></label>
+          <button class="button primary full" id="renderButton" type="button">Export final MP4</button>
+          <button class="button ghost full" id="openOutputButton" type="button">Open output folder</button>
+        </div>
+        <div class="render-status panel">
+          <span class="eyebrow">Render status</span><h3 id="renderState">Not started</h3>
+          <progress id="renderProgress" max="100" value="0"></progress>
+          <p id="renderMessage">Select an asset for every scene before rendering.</p>
+          <a class="button primary output-link" id="openVideoLink" href="#" target="_blank" rel="noopener" hidden>Open rendered video</a>
+        </div>
+      </div>
     </form>
   </dialog>
 

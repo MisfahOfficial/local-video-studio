@@ -3,6 +3,7 @@ const state = {
   scenes: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
   selectedSceneIds: new Set(), planWarnings: [], activeTimelineSceneId: null,
   previewTime: 0, manualPreviewFrame: null, manualPreviewStartedAt: 0, draggedSceneId: null,
+  fonts: [], captionFlags: { bold: true, italic: false, underline: false }, captionCase: "normal", captionAlignment: "center",
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -43,20 +44,22 @@ function toast(message, error = false) {
 
 async function boot() {
   try {
-    const [health, themeData, settings, projectData] = await Promise.all([
-      api("/api/health"), api("/api/themes"), api("/api/settings"), api("/api/projects"),
+    const [health, themeData, settings, projectData, fontData] = await Promise.all([
+      api("/api/health"), api("/api/themes"), api("/api/settings"), api("/api/projects"), api("/api/fonts"),
     ]);
     state.themes = themeData.themes;
     state.motions = themeData.motions;
     state.settings = settings;
     state.projects = projectData.projects;
+    state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.3.0"}`;
+    $("#appVersion").textContent = `v${health.version || "0.4.0"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
     $("#timelineMotion").innerHTML = state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join("");
+    loadFontOptions();
     renderProjects();
     fillSettings();
     if (state.projects.length) await openProject(state.projects[0].id);
@@ -109,6 +112,9 @@ async function openProject(projectId, keepTab = false) {
   $("#emptyState").hidden = true;
   $("#workspace").hidden = false;
   $("#projectTitle").textContent = state.current.name;
+  $("#editorProjectName").textContent = state.current.name;
+  $("#exportProjectName").textContent = state.current.name;
+  $("#playerTitle").textContent = `${state.current.name} · Preview`;
   const theme = state.themes.find(item => item.id === state.current.theme_id);
   $("#projectThemeLabel").textContent = theme?.name || state.current.theme_id;
   $("#themeSelect").value = state.current.theme_id;
@@ -137,6 +143,7 @@ function updateMetrics() {
 function activateTab(tabName) {
   $$(".tab").forEach(tab => tab.classList.toggle("active", tab.dataset.tab === tabName));
   $$(".tab-panel").forEach(panel => panel.classList.toggle("active", panel.dataset.panel === tabName));
+  document.body.classList.toggle("editor-mode", tabName === "timeline");
   if (tabName === "timeline") renderTimeline();
 }
 
@@ -374,38 +381,128 @@ function timelineDuration() {
   return Math.max(sceneEnd, Number(state.current?.duration_seconds || 0), 0.1);
 }
 
+function loadFontOptions(selected = null) {
+  const select = $("#captionFont");
+  const current = selected || select.value || "Arial";
+  select.innerHTML = state.fonts.map(font => `<option value="${escapeHtml(font.family)}">${escapeHtml(font.family)}${font.custom ? " · Custom" : ""}</option>`).join("");
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+  for (const font of state.fonts.filter(item => item.custom && item.url)) {
+    if (!document.fonts.check(`12px "${font.family}"`)) {
+      const face = new FontFace(font.family, `url("${font.url}")`);
+      face.load().then(loaded => document.fonts.add(loaded)).catch(() => {});
+    }
+  }
+}
+
 function captionStyleFromInputs() {
   return {
     font: $("#captionFont").value,
     size: Number($("#captionSize").value),
+    bold: state.captionFlags.bold,
+    italic: state.captionFlags.italic,
+    underline: state.captionFlags.underline,
+    case: state.captionCase,
     position: $("#captionPosition").value,
+    alignment: state.captionAlignment,
     text_color: $("#captionTextColor").value.toUpperCase(),
+    character_spacing: Number($("#captionCharacterSpacing").value),
+    line_spacing: Number($("#captionLineSpacing").value),
+    preset: $("#captionPresets .preset.active")?.dataset.captionPreset || "custom",
+    scale: Number($("#captionScale").value),
+    position_x: Number($("#captionPositionX").value),
+    position_y: Number($("#captionPositionY").value),
+    rotation: Number($("#captionRotation").value),
+    opacity: Number($("#captionOpacity").value),
+    stroke_enabled: $("#captionStrokeEnabled").checked,
+    stroke_color: $("#captionStrokeColor").value.toUpperCase(),
+    stroke_width: Number($("#captionStrokeWidth").value),
+    background_enabled: $("#captionBackgroundEnabled").checked,
     background_color: $("#captionBackgroundColor").value.toUpperCase(),
     background_opacity: Number($("#captionBackgroundOpacity").value),
+    glow_enabled: $("#captionGlowEnabled").checked,
+    glow_color: $("#captionGlowColor").value.toUpperCase(),
+    glow_radius: Number($("#captionGlowRadius").value),
+    shadow_enabled: $("#captionShadowEnabled").checked,
+    shadow_color: $("#captionShadowColor").value.toUpperCase(),
+    shadow_blur: Number($("#captionShadowBlur").value),
+    shadow_x: Number($("#captionShadowX").value),
+    shadow_y: Number($("#captionShadowY").value),
   };
 }
 
 function fillCaptionStyle() {
   const style = state.current?.caption_style || {};
+  if (![...$("#captionFont").options].some(option => option.value === style.font) && style.font) {
+    $("#captionFont").insertAdjacentHTML("beforeend", `<option>${escapeHtml(style.font)}</option>`);
+  }
   $("#captionFont").value = style.font || "Arial";
   $("#captionSize").value = style.size || 54;
+  $("#captionSizeRange").value = style.size || 54;
+  state.captionFlags = { bold: style.bold ?? true, italic: style.italic ?? false, underline: style.underline ?? false };
+  state.captionCase = style.case || "normal";
+  state.captionAlignment = style.alignment || "center";
   $("#captionPosition").value = style.position || "bottom";
   $("#captionTextColor").value = style.text_color || "#FFFFFF";
+  $("#captionCharacterSpacing").value = style.character_spacing ?? 0;
+  $("#captionLineSpacing").value = style.line_spacing ?? 1.2;
+  $("#captionScale").value = style.scale ?? 100;
+  $("#captionPositionX").value = style.position_x ?? 0;
+  $("#captionPositionY").value = style.position_y ?? 0;
+  $("#captionRotation").value = style.rotation ?? 0;
+  $("#captionOpacity").value = style.opacity ?? 1;
+  $("#captionStrokeEnabled").checked = style.stroke_enabled ?? false;
+  $("#captionStrokeColor").value = style.stroke_color || "#000000";
+  $("#captionStrokeWidth").value = style.stroke_width ?? 3;
+  $("#captionBackgroundEnabled").checked = style.background_enabled ?? true;
   $("#captionBackgroundColor").value = style.background_color || "#000000";
   $("#captionBackgroundOpacity").value = style.background_opacity ?? 0.72;
+  $("#captionGlowEnabled").checked = style.glow_enabled ?? false;
+  $("#captionGlowColor").value = style.glow_color || "#FFFFFF";
+  $("#captionGlowRadius").value = style.glow_radius ?? 8;
+  $("#captionShadowEnabled").checked = style.shadow_enabled ?? false;
+  $("#captionShadowColor").value = style.shadow_color || "#000000";
+  $("#captionShadowBlur").value = style.shadow_blur ?? 5;
+  $("#captionShadowX").value = style.shadow_x ?? 2;
+  $("#captionShadowY").value = style.shadow_y ?? 3;
+  $$("[data-style-toggle]").forEach(button => button.classList.toggle("active", Boolean(state.captionFlags[button.dataset.styleToggle])));
+  $$("[data-caption-case]").forEach(button => button.classList.toggle("active", button.dataset.captionCase === state.captionCase));
+  $$("[data-caption-align]").forEach(button => button.classList.toggle("active", button.dataset.captionAlign === state.captionAlignment));
+  $$("[data-caption-preset]").forEach(button => button.classList.toggle("active", button.dataset.captionPreset === (style.preset || "clean")));
   updateCaptionPreviewStyle();
+}
+
+function hexToRgb(value) {
+  return value.match(/[A-Fa-f0-9]{2}/g)?.map(item => parseInt(item, 16)) || [0, 0, 0];
 }
 
 function updateCaptionPreviewStyle() {
   const caption = $("#previewCaption");
   const style = captionStyleFromInputs();
-  caption.style.fontFamily = style.font;
+  caption.style.fontFamily = `"${style.font}", sans-serif`;
   caption.style.fontSize = `${Math.max(12, style.size * 0.42)}px`;
+  caption.style.fontWeight = style.bold ? "800" : "400";
+  caption.style.fontStyle = style.italic ? "italic" : "normal";
+  caption.style.textDecoration = style.underline ? "underline" : "none";
+  caption.style.textTransform = ({ upper: "uppercase", lower: "lowercase", title: "capitalize" })[style.case] || "none";
+  caption.style.textAlign = style.alignment;
+  caption.style.letterSpacing = `${style.character_spacing}px`;
+  caption.style.lineHeight = style.line_spacing;
   caption.style.color = style.text_color;
-  const color = style.background_color.match(/[A-Fa-f0-9]{2}/g)?.map(value => parseInt(value, 16)) || [0, 0, 0];
-  caption.style.backgroundColor = `rgba(${color[0]},${color[1]},${color[2]},${style.background_opacity})`;
+  const color = hexToRgb(style.background_color);
+  caption.style.backgroundColor = style.background_enabled ? `rgba(${color[0]},${color[1]},${color[2]},${style.background_opacity})` : "transparent";
+  caption.style.padding = style.background_enabled ? ".16em .38em" : "0";
+  caption.style.webkitTextStroke = style.stroke_enabled ? `${style.stroke_width * 0.42}px ${style.stroke_color}` : "0 transparent";
+  const shadows = [];
+  if (style.shadow_enabled) shadows.push(`${style.shadow_x}px ${style.shadow_y}px ${style.shadow_blur}px ${style.shadow_color}`);
+  if (style.glow_enabled) shadows.push(`0 0 ${style.glow_radius}px ${style.glow_color}`);
+  caption.style.textShadow = shadows.join(", ") || "none";
+  caption.style.opacity = style.opacity;
   caption.classList.remove("position-top", "position-middle", "position-bottom");
   caption.classList.add(`position-${style.position}`);
+  const middleOffset = style.position === "middle" ? "translateY(-50%) " : "";
+  caption.style.transform = `${middleOffset}translate(${style.position_x}%, ${style.position_y}%) scale(${style.scale / 100}) rotate(${style.rotation}deg)`;
+  $("#captionScaleValue").textContent = `${Math.round(style.scale)}%`;
+  $("#captionOpacityValue").textContent = `${Math.round(style.opacity * 100)}%`;
 }
 
 function configurePreviewAudio() {
@@ -473,10 +570,13 @@ function updatePreviewAt(time, selectScene = true) {
   state.previewTime = Math.max(0, Math.min(Number(time || 0), duration));
   $("#previewScrubber").value = state.previewTime;
   $("#previewCurrentTime").textContent = clock(state.previewTime);
+  const zoom = Number($("#timelineZoom").value || 8);
+  $("#timelinePlayhead").style.left = `calc(var(--track-label-width) + ${state.previewTime * zoom}px)`;
   const scene = activeSceneAt(state.previewTime);
   if (scene && selectScene && state.activeTimelineSceneId !== scene.id) {
     state.activeTimelineSceneId = scene.id;
     $$(".timeline-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
+    $$(".caption-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
     fillTimelineInspector(scene);
   }
   const active = scene || state.scenes.find(item => item.id === state.activeTimelineSceneId);
@@ -508,28 +608,64 @@ function updatePreviewAt(time, selectScene = true) {
   }
 }
 
+function renderMediaBin() {
+  const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  const assets = state.assets.filter(asset => asset.scene_id === scene?.id);
+  $("#mediaBin").innerHTML = assets.map(asset => {
+    const visual = asset.media_kind === "video"
+      ? `<video src="${escapeHtml(asset.media_url)}" muted preload="metadata"></video>`
+      : `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">`;
+    return `<button class="media-bin-card ${asset.id === scene?.selected_asset_id ? "active" : ""}" type="button" data-asset-id="${asset.id}" data-scene-id="${scene.id}">${visual}<span>${escapeHtml(asset.provider)} · option ${Number(asset.candidate_index) + 1}</span></button>`;
+  }).join("") || `<p class="library-help">No media for this scene yet. Use Import or generate an image from Visual plan.</p>`;
+}
+
+function rulerStep(zoom) {
+  if (zoom >= 20) return 10;
+  if (zoom >= 8) return 30;
+  if (zoom >= 4) return 60;
+  return 120;
+}
+
 function renderTimeline() {
   if (!state.scenes.some(scene => scene.id === state.activeTimelineSceneId)) {
     state.activeTimelineSceneId = state.scenes[0]?.id || null;
   }
-  const zoom = Number($("#timelineZoom").value || 10);
+  const zoom = Number($("#timelineZoom").value || 8);
+  const duration = timelineDuration();
+  const contentWidth = Math.max(900, Math.ceil(duration * zoom) + 40);
+  $("#timelineCanvas").style.setProperty("--content-width", `${contentWidth}px`);
   $("#timelineList").innerHTML = state.scenes.map(scene => {
     const asset = selectedAssetForScene(scene);
-    const duration = Math.max(0.5, Number(scene.end_seconds) - Number(scene.start_seconds));
-    const width = Math.max(112, Math.min(430, duration * zoom));
+    const sceneDuration = Math.max(0.5, Number(scene.end_seconds) - Number(scene.start_seconds));
+    const width = Math.max(18, sceneDuration * zoom);
+    const left = Number(scene.start_seconds) * zoom;
     const media = asset?.media_kind === "video"
       ? `<div class="timeline-clip-placeholder">VIDEO</div>`
-      : asset ? `<img src="${escapeHtml(asset.media_url)}" alt="">` : `<div class="timeline-clip-placeholder">No media</div>`;
-    return `<div class="timeline-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" style="width:${width}px" draggable="true" tabindex="0" role="button" data-scene-id="${scene.id}">
+      : asset ? `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">` : `<div class="timeline-clip-placeholder">No media</div>`;
+    return `<div class="timeline-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" style="left:${left}px;width:${width}px" draggable="true" tabindex="0" role="button" data-scene-id="${scene.id}">
       <div class="timeline-clip-media">${media}<span class="timeline-clip-number">${scene.position}</span></div>
       <strong class="timeline-clip-title">${escapeHtml(scene.caption_text || scene.narration)}</strong>
-      <div class="timeline-clip-info"><span>${clock(scene.start_seconds)}</span><span>${duration.toFixed(1)}s</span></div>
+      <div class="timeline-clip-info"><span>${clock(scene.start_seconds)}</span><span>${sceneDuration.toFixed(1)}s</span></div>
     </div>`;
   }).join("") || `<div class="queue-status">Create the visual plan first.</div>`;
-  $("#timelineSummary").textContent = state.scenes.length ? `${state.scenes.length} scenes · ${clock(timelineDuration())}` : "No scenes yet";
-  $("#previewScrubber").max = timelineDuration();
-  $("#previewTotalTime").textContent = clock(timelineDuration());
+  $("#captionTrack").innerHTML = state.scenes.map(scene => {
+    const width = Math.max(18, (Number(scene.end_seconds) - Number(scene.start_seconds)) * zoom);
+    const left = Number(scene.start_seconds) * zoom;
+    return `<button class="caption-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" type="button" style="left:${left}px;width:${width}px" data-scene-id="${scene.id}">${escapeHtml(scene.caption_text || scene.narration)}</button>`;
+  }).join("");
+  $("#audioTrack").innerHTML = state.current?.voiceover_path ? `<div class="audio-wave" style="left:0;width:${Math.max(18, duration * zoom)}px"></div>` : `<span class="library-help">No voice-over attached</span>`;
+  const step = rulerStep(zoom);
+  const marks = [];
+  for (let second = 0; second <= duration; second += step) {
+    marks.push(`<span class="ruler-mark" style="left:${second * zoom}px">${clock(second)}</span>`);
+    if (step * zoom >= 80) marks.push(`<span class="ruler-mark minor" style="left:${(second + step / 2) * zoom}px"></span>`);
+  }
+  $("#timelineRuler").innerHTML = marks.join("");
+  $("#timelineSummary").textContent = state.scenes.length ? `${state.scenes.length} scenes · ${clock(duration)}` : "No scenes yet";
+  $("#previewScrubber").max = duration;
+  $("#previewTotalTime").textContent = clock(duration);
   fillTimelineInspector(state.scenes.find(scene => scene.id === state.activeTimelineSceneId));
+  renderMediaBin();
   updatePreviewAt(state.previewTime, false);
 }
 
@@ -543,7 +679,9 @@ function selectTimelineScene(sceneId, seek = true) {
     if (audio.getAttribute("src")) audio.currentTime = state.previewTime;
   }
   $$(".timeline-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
+  $$(".caption-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
   fillTimelineInspector(scene);
+  renderMediaBin();
   updatePreviewAt(state.previewTime, false);
 }
 
@@ -584,12 +722,97 @@ async function uploadReplacementMedia(file) {
 }
 
 async function saveCaptionStyle() {
+  const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  if (scene && $("#timelineCaption").value.trim() !== (scene.caption_text ?? scene.narration ?? "")) {
+    const updated = await api(`/api/scenes/${scene.id}`, {
+      method: "PATCH", body: JSON.stringify({ caption_text: $("#timelineCaption").value.trim() }),
+    });
+    state.scenes = state.scenes.map(item => item.id === updated.id ? updated : item);
+  }
   const result = await api(`/api/projects/${state.current.id}/caption-style`, {
     method: "POST", body: JSON.stringify(captionStyleFromInputs()),
   });
   state.current.caption_style = result.caption_style;
+  renderTimeline();
+  $("#autosaveStatus").textContent = "Caption preset saved";
+  toast("Caption and style saved for this project");
+}
+
+const CAPTION_PRESETS = {
+  clean: { text_color: "#FFFFFF", background_enabled: false, stroke_enabled: false, glow_enabled: false, shadow_enabled: false, bold: true },
+  outline: { text_color: "#FFFFFF", background_enabled: false, stroke_enabled: true, stroke_color: "#000000", stroke_width: 4, glow_enabled: false, shadow_enabled: false, bold: true },
+  boxed: { text_color: "#FFFFFF", background_enabled: true, background_color: "#000000", background_opacity: .78, stroke_enabled: false, glow_enabled: false, shadow_enabled: false, bold: true },
+  yellow: { text_color: "#FFF200", background_enabled: false, stroke_enabled: true, stroke_color: "#000000", stroke_width: 3, glow_enabled: false, shadow_enabled: true, shadow_color: "#000000", shadow_blur: 2, shadow_x: 2, shadow_y: 2, bold: true },
+  red: { text_color: "#FFFFFF", background_enabled: false, stroke_enabled: true, stroke_color: "#E33535", stroke_width: 5, glow_enabled: false, shadow_enabled: false, bold: true },
+  shadow: { text_color: "#FFFFFF", background_enabled: false, stroke_enabled: false, glow_enabled: false, shadow_enabled: true, shadow_color: "#000000", shadow_blur: 7, shadow_x: 4, shadow_y: 4, bold: true },
+};
+
+function applyCaptionPreset(name) {
+  const preset = CAPTION_PRESETS[name];
+  if (!preset) return;
+  state.captionFlags.bold = preset.bold;
+  $("#captionTextColor").value = preset.text_color;
+  $("#captionBackgroundEnabled").checked = preset.background_enabled;
+  if (preset.background_color) $("#captionBackgroundColor").value = preset.background_color;
+  if (preset.background_opacity != null) $("#captionBackgroundOpacity").value = preset.background_opacity;
+  $("#captionStrokeEnabled").checked = preset.stroke_enabled;
+  if (preset.stroke_color) $("#captionStrokeColor").value = preset.stroke_color;
+  if (preset.stroke_width != null) $("#captionStrokeWidth").value = preset.stroke_width;
+  $("#captionGlowEnabled").checked = preset.glow_enabled;
+  $("#captionShadowEnabled").checked = preset.shadow_enabled;
+  if (preset.shadow_color) $("#captionShadowColor").value = preset.shadow_color;
+  if (preset.shadow_blur != null) $("#captionShadowBlur").value = preset.shadow_blur;
+  if (preset.shadow_x != null) $("#captionShadowX").value = preset.shadow_x;
+  if (preset.shadow_y != null) $("#captionShadowY").value = preset.shadow_y;
+  $$("[data-caption-preset]").forEach(button => button.classList.toggle("active", button.dataset.captionPreset === name));
+  $$("[data-style-toggle]").forEach(button => button.classList.toggle("active", Boolean(state.captionFlags[button.dataset.styleToggle])));
   updateCaptionPreviewStyle();
-  toast("Caption style saved for this project");
+}
+
+async function refreshFonts(selected) {
+  state.fonts = (await api("/api/fonts")).fonts || [];
+  loadFontOptions(selected);
+  updateCaptionPreviewStyle();
+}
+
+async function uploadFont(file) {
+  if (!file) return;
+  const result = await api("/api/fonts/upload", { method: "POST", body: file, headers: { "X-Filename": file.name } });
+  await refreshFonts(result.font.family);
+  $("#fontDialog").close();
+  $("#fontUploadInput").value = "";
+  toast(`${result.font.family} installed locally`);
+}
+
+async function downloadFont(event) {
+  event.preventDefault();
+  const url = $("#fontUrlInput").value.trim();
+  if (!url) throw new Error("Paste a direct TTF or OTF font link");
+  const button = $("#confirmDownloadFont");
+  button.disabled = true;
+  button.textContent = "Downloading…";
+  try {
+    const result = await api("/api/fonts/download", { method: "POST", body: JSON.stringify({ url }) });
+    await refreshFonts(result.font.family);
+    $("#fontDialog").close();
+    $("#fontUrlInput").value = "";
+    toast(`${result.font.family} installed locally`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Download font";
+  }
+}
+
+function openExportDialog() {
+  if (!state.current) return;
+  $("#exportProjectName").textContent = state.current.name;
+  $("#exportDialog").showModal();
+  refreshRenderStatus().catch(error => toast(error.message, true));
+}
+
+function showInspector(name) {
+  $$("[data-inspector-tab]").forEach(button => button.classList.toggle("active", button.dataset.inspectorTab === name));
+  $$("[data-inspector-panel]").forEach(panel => panel.classList.toggle("active", panel.dataset.inspectorPanel === name));
 }
 
 function pausePreview() {
@@ -597,12 +820,12 @@ function pausePreview() {
   state.manualPreviewFrame = null;
   const audio = $("#previewAudio");
   if (!audio.paused) audio.pause();
-  $("#previewPlayButton").textContent = "Play";
+  $("#previewPlayButton").textContent = "▶";
 }
 
 function startManualPreview() {
   state.manualPreviewStartedAt = performance.now() - state.previewTime * 1000;
-  $("#previewPlayButton").textContent = "Pause";
+  $("#previewPlayButton").textContent = "❚❚";
   const tick = now => {
     const current = (now - state.manualPreviewStartedAt) / 1000;
     if (current >= timelineDuration()) { pausePreview(); updatePreviewAt(0); return; }
@@ -618,10 +841,10 @@ async function togglePreview() {
     if (audio.paused) {
       if (state.previewTime >= timelineDuration() - 0.05) audio.currentTime = 0;
       await audio.play();
-      $("#previewPlayButton").textContent = "Pause";
+      $("#previewPlayButton").textContent = "❚❚";
     } else {
       audio.pause();
-      $("#previewPlayButton").textContent = "Play";
+      $("#previewPlayButton").textContent = "▶";
     }
     return;
   }
@@ -708,7 +931,9 @@ $("#settingsButton").addEventListener("click", () => { fillSettings(); $("#setti
 $("#settingsForm").addEventListener("submit", saveSettings);
 $$('[data-close-dialog]').forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
 $("#projectList").addEventListener("click", event => { const button = event.target.closest("[data-project-id]"); if (button) openProject(button.dataset.projectId).catch(error => toast(error.message, true)); });
-$$(".tab").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
+$$(".tab[data-tab]").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
+$("#workflowExportButton").addEventListener("click", openExportDialog);
+$("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
 $("#createPlanButton").addEventListener("click", createPlan);
 $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; renderScenes(); });
@@ -742,6 +967,14 @@ $("#timelineList").addEventListener("click", event => {
   const clip = event.target.closest(".timeline-clip");
   if (clip) selectTimelineScene(clip.dataset.sceneId);
 });
+$("#captionTrack").addEventListener("click", event => {
+  const clip = event.target.closest(".caption-clip");
+  if (clip) { selectTimelineScene(clip.dataset.sceneId); showInspector("text"); }
+});
+$("#mediaBin").addEventListener("click", event => {
+  const asset = event.target.closest("[data-asset-id]");
+  if (asset) selectAsset(asset.dataset.sceneId, asset.dataset.assetId).catch(error => toast(error.message, true));
+});
 $("#timelineList").addEventListener("keydown", event => {
   const clip = event.target.closest(".timeline-clip");
   if (clip && ["Enter", " "].includes(event.key)) { event.preventDefault(); selectTimelineScene(clip.dataset.sceneId); }
@@ -770,13 +1003,38 @@ $("#timelineList").addEventListener("drop", event => {
   reorderTimeline(sourceId, target.dataset.sceneId, insertAfter).catch(error => toast(error.message, true));
 });
 $("#timelineZoom").addEventListener("input", renderTimeline);
+$("#timelineCanvas").addEventListener("click", event => {
+  if (event.target.closest(".timeline-clip,.caption-clip")) return;
+  const scroll = $("#timelineScroll");
+  const labelWidth = parseFloat(getComputedStyle($(".studio-editor")).getPropertyValue("--track-label-width")) || 128;
+  const x = event.clientX - scroll.getBoundingClientRect().left + scroll.scrollLeft - labelWidth;
+  const value = Math.max(0, x / Number($("#timelineZoom").value || 8));
+  const audio = $("#previewAudio");
+  if (audio.getAttribute("src")) audio.currentTime = value;
+  updatePreviewAt(value);
+});
 $("#saveTimelineButton").addEventListener("click", () => saveTimelineScene().catch(error => toast(error.message, true)));
 $("#replaceMediaButton").addEventListener("click", () => $("#replacementMediaInput").click());
+[$("#editorImportButton"), $("#libraryImportButton"), $("#libraryUploadButton"), $("#timelineAddButton")].forEach(button => button.addEventListener("click", () => {
+  if (!state.activeTimelineSceneId) return toast("Select a scene before importing media", true);
+  $("#replacementMediaInput").click();
+}));
 $("#replacementMediaInput").addEventListener("change", event => uploadReplacementMedia(event.target.files[0]).catch(error => toast(error.message, true)));
 $("#timelineTransition").addEventListener("change", event => { $("#timelineTransitionDuration").disabled = event.target.value === "cut"; updatePreviewAt(state.previewTime, false); });
 $("#timelineCaption").addEventListener("input", event => { $("#previewCaption").textContent = event.target.value; $("#previewCaption").hidden = !event.target.value; });
+$("#timelineCaption").addEventListener("input", () => { $("#autosaveStatus").textContent = "Unsaved caption changes"; });
 $("#timelineMotion").addEventListener("change", () => updatePreviewAt(state.previewTime, false));
 $("#previewPlayButton").addEventListener("click", () => togglePreview().catch(error => toast(error.message, true)));
+$("#previewBackButton").addEventListener("click", () => {
+  const index = Math.max(0, state.scenes.findIndex(scene => scene.id === state.activeTimelineSceneId) - 1);
+  if (state.scenes[index]) selectTimelineScene(state.scenes[index].id);
+});
+$("#previewForwardButton").addEventListener("click", () => {
+  const current = state.scenes.findIndex(scene => scene.id === state.activeTimelineSceneId);
+  const index = Math.min(state.scenes.length - 1, current + 1);
+  if (state.scenes[index]) selectTimelineScene(state.scenes[index].id);
+});
+$("#previewFullscreenButton").addEventListener("click", () => $("#previewStage").requestFullscreen?.());
 $("#previewScrubber").addEventListener("input", event => {
   const value = Number(event.target.value);
   const audio = $("#previewAudio");
@@ -784,17 +1042,65 @@ $("#previewScrubber").addEventListener("input", event => {
   updatePreviewAt(value);
 });
 $("#previewAudio").addEventListener("timeupdate", event => updatePreviewAt(event.target.currentTime));
-$("#previewAudio").addEventListener("play", () => { $("#previewPlayButton").textContent = "Pause"; });
-$("#previewAudio").addEventListener("pause", () => { $("#previewPlayButton").textContent = "Play"; });
-$("#previewAudio").addEventListener("ended", () => { $("#previewPlayButton").textContent = "Play"; updatePreviewAt(0); });
+$("#previewAudio").addEventListener("play", () => { $("#previewPlayButton").textContent = "❚❚"; });
+$("#previewAudio").addEventListener("pause", () => { $("#previewPlayButton").textContent = "▶"; });
+$("#previewAudio").addEventListener("ended", () => { $("#previewPlayButton").textContent = "▶"; updatePreviewAt(0); });
 $("#saveCaptionStyleButton").addEventListener("click", () => saveCaptionStyle().catch(error => toast(error.message, true)));
-$$('#captionFont,#captionSize,#captionPosition,#captionTextColor,#captionBackgroundColor,#captionBackgroundOpacity').forEach(input => input.addEventListener("input", updateCaptionPreviewStyle));
+$$("[data-inspector-tab]").forEach(button => button.addEventListener("click", () => showInspector(button.dataset.inspectorTab)));
+$$("[data-style-toggle]").forEach(button => button.addEventListener("click", () => {
+  const key = button.dataset.styleToggle;
+  state.captionFlags[key] = !state.captionFlags[key];
+  button.classList.toggle("active", state.captionFlags[key]);
+  updateCaptionPreviewStyle();
+}));
+$$("[data-caption-case]").forEach(button => button.addEventListener("click", () => {
+  state.captionCase = button.dataset.captionCase;
+  $$("[data-caption-case]").forEach(item => item.classList.toggle("active", item === button));
+  updateCaptionPreviewStyle();
+}));
+$$("[data-caption-align]").forEach(button => button.addEventListener("click", () => {
+  state.captionAlignment = button.dataset.captionAlign;
+  $$("[data-caption-align]").forEach(item => item.classList.toggle("active", item === button));
+  updateCaptionPreviewStyle();
+}));
+$$("[data-caption-preset]").forEach(button => button.addEventListener("click", () => applyCaptionPreset(button.dataset.captionPreset)));
+$("#captionSizeRange").addEventListener("input", event => { $("#captionSize").value = event.target.value; updateCaptionPreviewStyle(); });
+$("#captionSize").addEventListener("input", event => { $("#captionSizeRange").value = event.target.value; updateCaptionPreviewStyle(); });
+$$('#captionFont,#captionPosition,#captionTextColor,#captionCharacterSpacing,#captionLineSpacing,#captionScale,#captionPositionX,#captionPositionY,#captionRotation,#captionOpacity,#captionStrokeEnabled,#captionStrokeColor,#captionStrokeWidth,#captionBackgroundEnabled,#captionBackgroundColor,#captionBackgroundOpacity,#captionGlowEnabled,#captionGlowColor,#captionGlowRadius,#captionShadowEnabled,#captionShadowColor,#captionShadowBlur,#captionShadowX,#captionShadowY').forEach(input => input.addEventListener("input", updateCaptionPreviewStyle));
+$("#addFontButton").addEventListener("click", () => $("#fontDialog").showModal());
+$("#downloadFontButton").addEventListener("click", () => $("#fontDialog").showModal());
+$("#dialogUploadFontButton").addEventListener("click", () => $("#fontUploadInput").click());
+$("#fontUploadInput").addEventListener("change", event => uploadFont(event.target.files[0]).catch(error => toast(error.message, true)));
+$("#fontDownloadForm").addEventListener("submit", event => downloadFont(event).catch(error => toast(error.message, true)));
+$$("[data-editor-tool]").forEach(button => button.addEventListener("click", () => {
+  $$("[data-editor-tool]").forEach(item => item.classList.toggle("active", item === button));
+  const tool = button.dataset.editorTool;
+  $("#libraryTitle").textContent = tool[0].toUpperCase() + tool.slice(1);
+  if (tool === "captions") showInspector("text");
+  if (["effects", "transitions"].includes(tool)) showInspector("animation");
+  if (tool === "media") renderMediaBin();
+}));
 $("#renderButton").addEventListener("click", startRender);
 $("#openOutputButton").addEventListener("click", async () => {
   try {
     const result = await api(`/api/projects/${state.current.id}/open-folder`, { method: "POST", body: JSON.stringify({ kind: "renders" }) });
     toast(`Opened ${result.path}`);
   } catch (error) { toast(error.message, true); }
+});
+document.addEventListener("keydown", event => {
+  if (!document.body.classList.contains("editor-mode") || event.target.matches("input,textarea,select")) return;
+  if (event.code === "Space") { event.preventDefault(); togglePreview().catch(error => toast(error.message, true)); }
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    const direction = event.key === "ArrowLeft" ? -1 : 1;
+    const next = Math.max(0, Math.min(timelineDuration(), state.previewTime + direction));
+    const audio = $("#previewAudio");
+    if (audio.getAttribute("src")) audio.currentTime = next;
+    updatePreviewAt(next);
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault(); saveCaptionStyle().catch(error => toast(error.message, true));
+  }
 });
 
 boot();

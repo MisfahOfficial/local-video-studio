@@ -31,8 +31,16 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
-                self.assertEqual(health["version"], "0.3.0")
+                self.assertEqual(health["version"], "0.4.0")
                 self.assertEqual(health["schema_version"], 3)
+                font_request = urllib.request.Request(
+                    f"{base}/api/fonts/upload", data=b"\x00\x01\x00\x00font-data", method="POST",
+                    headers={"X-Filename": "Channel-Font.ttf", "Content-Type": "application/octet-stream"},
+                )
+                with urllib.request.urlopen(font_request, timeout=3) as response:
+                    font = json.loads(response.read().decode("utf-8"))["font"]
+                self.assertTrue(font["custom"])
+                self.assertIn(font["family"], [item["family"] for item in self._request(f"{base}/api/fonts")["fonts"]])
                 project = self._request(
                     f"{base}/api/projects",
                     method="POST",
@@ -61,9 +69,11 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(project_payload["scenes"][1]["start_seconds"], 7.5)
                 caption_style = self._request(
                     f"{base}/api/projects/{project['id']}/caption-style", method="POST",
-                    payload={"font": "Georgia", "size": 48, "position": "top", "text_color": "#FFFFFF", "background_color": "#000000", "background_opacity": 0.6},
+                    payload={"font": "Georgia", "size": 48, "position": "top", "text_color": "#FFFFFF", "background_color": "#000000", "background_opacity": 0.6, "stroke_enabled": True, "stroke_width": 4, "alignment": "right", "scale": 110},
                 )
                 self.assertEqual(caption_style["caption_style"]["position"], "top")
+                self.assertEqual(caption_style["caption_style"]["alignment"], "right")
+                self.assertEqual(caption_style["caption_style"]["scale"], 110)
                 reordered = self._request(
                     f"{base}/api/projects/{project['id']}/scenes/reorder", method="POST",
                     payload={"scene_ids": [second_scene["id"], first_scene["id"]]},
@@ -101,7 +111,9 @@ class ServerTests(unittest.TestCase):
                     popen.assert_called_once()
                 page = urllib.request.urlopen(f"{base}/", timeout=3).read().decode("utf-8")
                 self.assertIn("Local Video Studio", page)
-                self.assertIn("Preview and visual timeline", page)
+                self.assertIn("Voice-over", page)
+                self.assertIn("captionPresets", page)
+                self.assertIn("exportDialog", page)
             finally:
                 server.shutdown()
                 server.server_close()

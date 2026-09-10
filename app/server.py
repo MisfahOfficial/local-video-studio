@@ -18,6 +18,7 @@ from .config import SettingsStore
 from .database import Database
 from .generation import GenerationManager
 from .gemini_analyzer import GeminiSceneEnhancer
+from .fonts import FontError, FontManager
 from .paths import AppPaths
 from .scene_planner import RuleBasedScenePlanner, estimate_generation_count, validate_plan_inputs
 from .themes import get_theme, list_themes
@@ -28,34 +29,84 @@ from .transcription import probe_duration
 DEFAULT_CAPTION_STYLE = {
     "font": "Arial",
     "size": 54,
+    "bold": True,
+    "italic": False,
+    "underline": False,
+    "case": "normal",
     "position": "bottom",
+    "alignment": "center",
     "text_color": "#FFFFFF",
+    "character_spacing": 0,
+    "line_spacing": 1.2,
+    "preset": "clean",
+    "scale": 100,
+    "position_x": 0,
+    "position_y": 0,
+    "rotation": 0,
+    "opacity": 1,
+    "stroke_enabled": False,
+    "stroke_color": "#000000",
+    "stroke_width": 3,
+    "background_enabled": True,
     "background_color": "#000000",
     "background_opacity": 0.72,
+    "glow_enabled": False,
+    "glow_color": "#FFFFFF",
+    "glow_radius": 8,
+    "shadow_enabled": False,
+    "shadow_color": "#000000",
+    "shadow_blur": 5,
+    "shadow_x": 2,
+    "shadow_y": 3,
 }
-CAPTION_FONTS = {"Arial", "Helvetica", "Verdana", "Georgia"}
 
 
 def normalize_caption_style(value: Any) -> dict[str, Any]:
     supplied = value if isinstance(value, dict) else {}
     style = {**DEFAULT_CAPTION_STYLE, **supplied}
     font = str(style.get("font") or "Arial")
-    if font not in CAPTION_FONTS:
-        raise ApiError("Unknown caption font")
+    if not 1 <= len(font) <= 100 or any(ord(character) < 32 for character in font):
+        raise ApiError("Invalid caption font name")
     try:
         size = int(style.get("size", 54))
-        opacity = float(style.get("background_opacity", 0.72))
+        background_opacity = float(style.get("background_opacity", 0.72))
+        opacity = float(style.get("opacity", 1))
+        character_spacing = float(style.get("character_spacing", 0))
+        line_spacing = float(style.get("line_spacing", 1.2))
+        scale = float(style.get("scale", 100))
+        position_x = float(style.get("position_x", 0))
+        position_y = float(style.get("position_y", 0))
+        rotation = float(style.get("rotation", 0))
+        stroke_width = float(style.get("stroke_width", 3))
+        glow_radius = float(style.get("glow_radius", 8))
+        shadow_blur = float(style.get("shadow_blur", 5))
+        shadow_x = float(style.get("shadow_x", 2))
+        shadow_y = float(style.get("shadow_y", 3))
     except (TypeError, ValueError) as error:
-        raise ApiError("Caption size and background opacity must be valid numbers") from error
-    if not 16 <= size <= 96:
-        raise ApiError("Caption size must be between 16 and 96")
-    if not 0 <= opacity <= 1:
-        raise ApiError("Caption background opacity must be between 0 and 1")
+        raise ApiError("Caption style contains an invalid number") from error
+    ranges = {
+        "size": (size, 12, 160), "background opacity": (background_opacity, 0, 1),
+        "opacity": (opacity, 0, 1), "character spacing": (character_spacing, -5, 50),
+        "line spacing": (line_spacing, 0.5, 3), "scale": (scale, 25, 300),
+        "horizontal position": (position_x, -100, 100), "vertical position": (position_y, -100, 100),
+        "rotation": (rotation, -180, 180), "stroke width": (stroke_width, 0, 20),
+        "glow radius": (glow_radius, 0, 40), "shadow blur": (shadow_blur, 0, 40),
+        "shadow x": (shadow_x, -50, 50), "shadow y": (shadow_y, -50, 50),
+    }
+    for label, (number, minimum, maximum) in ranges.items():
+        if not minimum <= number <= maximum:
+            raise ApiError(f"Caption {label} must be between {minimum} and {maximum}")
     position = str(style.get("position") or "bottom")
     if position not in {"top", "middle", "bottom"}:
         raise ApiError("Unknown caption position")
+    alignment = str(style.get("alignment") or "center")
+    if alignment not in {"left", "center", "right"}:
+        raise ApiError("Unknown caption alignment")
+    text_case = str(style.get("case") or "normal")
+    if text_case not in {"normal", "upper", "lower", "title"}:
+        raise ApiError("Unknown caption case")
     colors: dict[str, str] = {}
-    for key in ("text_color", "background_color"):
+    for key in ("text_color", "background_color", "stroke_color", "glow_color", "shadow_color"):
         color = str(style.get(key) or DEFAULT_CAPTION_STYLE[key]).upper()
         if not re.fullmatch(r"#[0-9A-F]{6}", color):
             raise ApiError(f"Invalid {key.replace('_', ' ')}")
@@ -63,9 +114,31 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
     return {
         "font": font,
         "size": size,
+        "bold": bool(style.get("bold", True)),
+        "italic": bool(style.get("italic", False)),
+        "underline": bool(style.get("underline", False)),
+        "case": text_case,
         "position": position,
+        "alignment": alignment,
         **colors,
-        "background_opacity": opacity,
+        "character_spacing": character_spacing,
+        "line_spacing": line_spacing,
+        "preset": str(style.get("preset") or "clean")[:50],
+        "scale": scale,
+        "position_x": position_x,
+        "position_y": position_y,
+        "rotation": rotation,
+        "opacity": opacity,
+        "stroke_enabled": bool(style.get("stroke_enabled", False)),
+        "stroke_width": stroke_width,
+        "background_enabled": bool(style.get("background_enabled", True)),
+        "background_opacity": background_opacity,
+        "glow_enabled": bool(style.get("glow_enabled", False)),
+        "glow_radius": glow_radius,
+        "shadow_enabled": bool(style.get("shadow_enabled", False)),
+        "shadow_blur": shadow_blur,
+        "shadow_x": shadow_x,
+        "shadow_y": shadow_y,
     }
 
 
@@ -80,6 +153,7 @@ class StudioApplication:
         self.paths = paths
         self.db = Database(paths.database)
         self.settings = SettingsStore(paths.settings)
+        self.fonts = FontManager(paths.root)
         self.generation = GenerationManager(self.db, paths, self.settings)
         self.rendering = RenderManager(self.db, paths, self.settings)
         self.planner = RuleBasedScenePlanner()
@@ -262,6 +336,9 @@ def build_handler(application: StudioApplication):
             if path == "/api/settings":
                 self._json(application.settings.load().public_dict())
                 return
+            if path == "/api/fonts":
+                self._json({"fonts": application.fonts.list_fonts()})
+                return
             if path == "/api/projects":
                 self._json({"projects": application.db.list_projects()})
                 return
@@ -297,6 +374,13 @@ def build_handler(application: StudioApplication):
             if match:
                 self._serve_media(match.group(1), urllib.parse.unquote(match.group(2)))
                 return
+            match = re.fullmatch(r"/fonts/(.+)", path)
+            if match:
+                try:
+                    self._serve_file(application.fonts.resolve(urllib.parse.unquote(match.group(1))))
+                except FontError as error:
+                    raise ApiError(str(error), HTTPStatus.NOT_FOUND) from error
+                return
             if path == "/":
                 self._serve_file(application.paths.static / "index.html")
                 return
@@ -319,6 +403,22 @@ def build_handler(application: StudioApplication):
                 body = self._read_json()
                 project = application.db.create_project(str(body.get("name", "Untitled project")), str(body.get("theme_id", "us_nostalgia")))
                 self._json(project, HTTPStatus.CREATED)
+                return
+            if path == "/api/fonts/upload":
+                length = self._content_length(maximum=FontManager.MAX_BYTES)
+                filename = self.headers.get("X-Filename", "font.ttf")
+                try:
+                    font = application.fonts.save_upload(filename, self.rfile, length)
+                except FontError as error:
+                    raise ApiError(str(error)) from error
+                self._json({"font": font}, HTTPStatus.CREATED)
+                return
+            if path == "/api/fonts/download":
+                try:
+                    font = application.fonts.download(str(self._read_json().get("url") or ""))
+                except FontError as error:
+                    raise ApiError(str(error)) from error
+                self._json({"font": font}, HTTPStatus.CREATED)
                 return
 
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/voiceover", path)

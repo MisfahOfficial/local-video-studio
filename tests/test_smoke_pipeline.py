@@ -61,10 +61,19 @@ class SmokePipelineTests(unittest.TestCase):
                 assets=db.list_assets(project["id"]),
                 project_dir=root / "project",
                 width=320, height=180, fps=10, burn_captions=True,
+                caption_style={
+                    "font": "Arial", "size": 28, "case": "upper", "position": "bottom",
+                    "alignment": "center", "text_color": "#FFFFFF", "opacity": 1,
+                    "background_enabled": False, "background_color": "#000000", "background_opacity": .7,
+                    "stroke_enabled": True, "stroke_color": "#000000", "stroke_width": 2,
+                    "glow_enabled": True, "glow_color": "#88CCFF", "glow_radius": 3,
+                    "shadow_enabled": True, "shadow_color": "#000000", "shadow_x": 2, "shadow_y": 2,
+                },
             )
             self.assertTrue(output.is_file())
             self.assertGreater(output.stat().st_size, 1_000)
             self.assertTrue((root / "project" / "captions.srt").is_file())
+            self.assertTrue((root / "project" / "captions.ass").is_file())
 
 
 if __name__ == "__main__":

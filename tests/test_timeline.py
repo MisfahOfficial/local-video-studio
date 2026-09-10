@@ -8,7 +8,7 @@ from pathlib import Path
 from app.domain import GenerationRequest
 from app.providers.mock import MockImageProvider
 from app.timeline.actions import build_default_motion_registry
-from app.timeline.renderer import FFmpegRenderer, build_subtitle_style, write_scene_srt
+from app.timeline.renderer import FFmpegRenderer, build_subtitle_style, write_scene_ass, write_scene_srt
 
 
 class TimelineTests(unittest.TestCase):
@@ -41,6 +41,23 @@ class TimelineTests(unittest.TestCase):
         self.assertIn("FontSize=48", style)
         self.assertIn("Alignment=8", style)
         self.assertIn("PrimaryColour=&H00D0E0F0", style)
+
+    def test_ass_supports_transform_case_and_advanced_style(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "captions.ass"
+            write_scene_ass(
+                [{"start_seconds": 0, "end_seconds": 2.5, "caption_text": "Mixed Case"}],
+                destination, 1920, 1080,
+                {"font": "Georgia", "size": 60, "case": "upper", "position": "middle",
+                 "alignment": "right", "position_x": -10, "position_y": 5, "scale": 115,
+                 "rotation": 2, "background_enabled": False, "stroke_enabled": True,
+                 "stroke_color": "#112233", "stroke_width": 4},
+            )
+            text = destination.read_text(encoding="utf-8")
+            self.assertIn("PlayResX: 1920", text)
+            self.assertIn("Style: Default,Georgia,60", text)
+            self.assertIn("MIXED CASE", text)
+            self.assertIn("\\pos(", text)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for filter validation")
     def test_all_motion_presets_execute_in_ffmpeg(self) -> None:

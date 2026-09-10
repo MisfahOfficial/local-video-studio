@@ -28,7 +28,16 @@
 - Reusable caption font, size, position, colors, and opacity
 - Styled FFmpeg caption export and long-audio range streaming
 
-## Version 0.4 — precision sync
+## Version 0.4 — professional editor workspace (included now)
+
+- CapCut-inspired media/player/inspector workspace
+- Separate synchronized preview and export window
+- Video, caption, and voice-over tracks with ruler, seeking, zoom, and playhead
+- Advanced caption typography, presets, transforms, blend, stroke, background, glow, and shadow
+- Local TTF/OTF upload and protected direct font downloads
+- Advanced ASS caption rendering through FFmpeg/libass
+
+## Version 0.5 — precision sync
 
 - Background Faster-Whisper transcription job
 - Word-level script-to-audio alignment and shorter caption phrases
@@ -36,14 +45,14 @@
 - Drag-to-adjust scene boundaries with duration validation
 - Re-render only changed scene clips
 
-## Version 0.5 — generated mixed media
+## Version 0.6 — generated mixed media
 
 - One or more image-to-video/text-to-video provider adapters
 - Per-scene media choice: still, generated clip, or imported clip
 - Video job polling, cancellation, retries, and provider cost estimates
 - B-roll library and automatic still/video budget allocation
 
-## Version 0.6 — richer editing
+## Version 0.7 — richer editing
 
 - Transition registry with real overlaps and crossfades
 - Animated captions and reusable caption themes

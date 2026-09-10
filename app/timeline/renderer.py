@@ -61,23 +61,115 @@ def _ass_color(hex_color: str, opacity: float = 1.0) -> str:
     return f"&H{alpha:02X}{blue}{green}{red}"
 
 
+def _caption_case(text: str, style: dict[str, Any]) -> str:
+    case = str(style.get("case") or "normal")
+    if case == "upper":
+        return text.upper()
+    if case == "lower":
+        return text.lower()
+    if case == "title":
+        return text.title()
+    return text
+
+
+def _ass_alignment(style: dict[str, Any]) -> int:
+    row = {"bottom": 0, "middle": 3, "top": 6}.get(str(style.get("position") or "bottom"), 0)
+    column = {"left": 1, "center": 2, "right": 3}.get(str(style.get("alignment") or "center"), 2)
+    return row + column
+
+
 def build_subtitle_style(style: dict[str, Any] | None) -> str:
     value = style or {}
-    position = str(value.get("position") or "bottom")
-    alignment = {"top": 8, "middle": 5, "bottom": 2}.get(position, 2)
-    margin = 55 if position in {"top", "bottom"} else 0
     font = str(value.get("font") or "Arial")
-    size = max(16, min(96, int(value.get("size", 54))))
-    text_color = _ass_color(str(value.get("text_color") or "#FFFFFF"))
-    background_color = _ass_color(
-        str(value.get("background_color") or "#000000"),
-        float(value.get("background_opacity", 0.72)),
-    )
+    size = max(12, min(160, int(value.get("size", 54))))
+    opacity = float(value.get("opacity", 1))
+    text_color = _ass_color(str(value.get("text_color") or "#FFFFFF"), opacity)
+    background_enabled = bool(value.get("background_enabled", True))
+    stroke_enabled = bool(value.get("stroke_enabled", False))
+    if background_enabled:
+        border_style = 3
+        outline_color = _ass_color(
+            str(value.get("background_color") or "#000000"),
+            float(value.get("background_opacity", 0.72)) * opacity,
+        )
+        outline = max(1, min(20, float(value.get("stroke_width", 3))))
+    else:
+        border_style = 1
+        outline_color = _ass_color(str(value.get("stroke_color") or "#000000"), opacity)
+        outline = max(0, min(20, float(value.get("stroke_width", 3)))) if stroke_enabled else 0
+    shadow = max(abs(float(value.get("shadow_x", 2))), abs(float(value.get("shadow_y", 3)))) if value.get("shadow_enabled") else 0
     return (
         f"FontName={font},FontSize={size},PrimaryColour={text_color},"
-        f"OutlineColour={background_color},BackColour={background_color},"
-        f"BorderStyle=3,Outline=1,Shadow=0,Alignment={alignment},MarginV={margin}"
+        f"OutlineColour={outline_color},BackColour={outline_color},"
+        f"Bold={-1 if value.get('bold', True) else 0},Italic={-1 if value.get('italic') else 0},"
+        f"Underline={-1 if value.get('underline') else 0},Spacing={float(value.get('character_spacing', 0)):.2f},"
+        f"ScaleX={float(value.get('scale', 100)):.2f},ScaleY={float(value.get('scale', 100)):.2f},"
+        f"Angle={float(value.get('rotation', 0)):.2f},BorderStyle={border_style},"
+        f"Outline={outline:.2f},Shadow={shadow:.2f},Alignment={_ass_alignment(value)},MarginV=55"
     )
+
+
+def write_scene_ass(
+    scenes: list[dict[str, Any]], destination: Path, width: int, height: int,
+    style: dict[str, Any] | None = None,
+) -> None:
+    value = style or {}
+    position = str(value.get("position") or "bottom")
+    alignment = str(value.get("alignment") or "center")
+    base_x = {"left": width * 0.08, "center": width * 0.5, "right": width * 0.92}.get(alignment, width * 0.5)
+    base_y = {"top": height * 0.1, "middle": height * 0.5, "bottom": height * 0.9}.get(position, height * 0.9)
+    x = max(0, min(width, base_x + float(value.get("position_x", 0)) * width / 200))
+    y = max(0, min(height, base_y + float(value.get("position_y", 0)) * height / 200))
+    # Rebuild the ASS style in the strict field order required by libass.
+    font = str(value.get("font") or "Arial").replace(",", " ")
+    size = max(12, min(160, int(value.get("size", 54))))
+    primary = _ass_color(str(value.get("text_color") or "#FFFFFF"), float(value.get("opacity", 1)))
+    background_enabled = bool(value.get("background_enabled", True))
+    border_style = 3 if background_enabled else 1
+    outline_color = _ass_color(
+        str((value.get("background_color") or "#000000") if background_enabled else (value.get("stroke_color") or "#000000")),
+        float(value.get("background_opacity", 0.72)) * float(value.get("opacity", 1)) if background_enabled else float(value.get("opacity", 1)),
+    )
+    back_color = _ass_color(
+        str(value.get("shadow_color") or "#000000"), float(value.get("opacity", 1))
+    ) if value.get("shadow_enabled") else outline_color
+    outline = max(1, float(value.get("stroke_width", 3))) if background_enabled else (
+        max(0, float(value.get("stroke_width", 3))) if value.get("stroke_enabled") else 0
+    )
+    shadow = max(abs(float(value.get("shadow_x", 2))), abs(float(value.get("shadow_y", 3)))) if value.get("shadow_enabled") else 0
+    header = (
+        "[Script Info]\nScriptType: v4.00+\n"
+        f"PlayResX: {width}\nPlayResY: {height}\nScaledBorderAndShadow: yes\nWrapStyle: 0\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{font},{size},{primary},{primary},{outline_color},{back_color},"
+        f"{-1 if value.get('bold', True) else 0},{-1 if value.get('italic') else 0},"
+        f"{-1 if value.get('underline') else 0},0,{float(value.get('scale', 100)):.2f},"
+        f"{float(value.get('scale', 100)):.2f},{float(value.get('character_spacing', 0)):.2f},"
+        f"{float(value.get('rotation', 0)):.2f},{border_style},{outline:.2f},{shadow:.2f},"
+        f"{_ass_alignment(value)},55,55,55,1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    events: list[str] = []
+    for scene in scenes:
+        caption = scene["caption_text"] if "caption_text" in scene else scene["narration"]
+        text = _caption_case(str(caption).strip(), value)
+        text = text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
+        start = _srt_time(float(scene["start_seconds"])).replace(",", ".")[:-1]
+        end = _srt_time(float(scene["end_seconds"])).replace(",", ".")[:-1]
+        if value.get("glow_enabled"):
+            glow_style_color = _ass_color(str(value.get("glow_color") or "#FFFFFF"), float(value.get("opacity", 1)))
+            glow = f"&H{glow_style_color[-6:]}&"
+            glow_radius = max(0, min(40, float(value.get("glow_radius", 8))))
+            events.append(
+                f"Dialogue: 0,{start},{end},Default,,0,0,0,,"
+                f"{{\\pos({x:.1f},{y:.1f})\\blur{glow_radius:.1f}\\bord{max(1, glow_radius / 2):.1f}"
+                f"\\1a&HFF&\\3c{glow}}}{text}"
+            )
+        events.append(f"Dialogue: 1,{start},{end},Default,,0,0,0,,{{\\pos({x:.1f},{y:.1f})}}{text}")
+    destination.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
 
 class FFmpegRenderer:
@@ -97,6 +189,7 @@ class FFmpegRenderer:
         fps: int = 30,
         burn_captions: bool = True,
         caption_style: dict[str, Any] | None = None,
+        fonts_dir: Path | None = None,
         progress: ProgressCallback | None = None,
     ) -> Path:
         selected = {scene["id"]: scene.get("selected_asset_id") for scene in scenes}
@@ -112,6 +205,8 @@ class FFmpegRenderer:
         clip_dir.mkdir(parents=True, exist_ok=True)
         subtitle_path = project_dir / "captions.srt"
         write_scene_srt(scenes, subtitle_path)
+        ass_path = project_dir / "captions.ass"
+        write_scene_ass(scenes, ass_path, width, height, caption_style)
 
         clip_paths: list[Path] = []
         total = max(1, len(scenes))
@@ -145,10 +240,9 @@ class FFmpegRenderer:
             command += ["-i", str(voiceover)]
 
         if burn_captions:
-            subtitle_filter = (
-                f"subtitles='{_escape_subtitle_path(subtitle_path)}':"
-                f"force_style='{build_subtitle_style(caption_style)}'"
-            )
+            subtitle_filter = f"subtitles='{_escape_subtitle_path(ass_path)}'"
+            if fonts_dir and fonts_dir.exists():
+                subtitle_filter += f":fontsdir='{_escape_subtitle_path(fonts_dir)}'"
             command += ["-vf", subtitle_filter, "-c:v", encoder]
             if encoder == "libx264":
                 command += ["-preset", "veryfast", "-crf", "20"]
@@ -243,6 +337,7 @@ class RenderManager:
                 fps=int(options.get("fps", 30)),
                 burn_captions=bool(options.get("burn_captions", True)),
                 caption_style=options.get("caption_style"),
+                fonts_dir=self.paths.root / "fonts",
                 progress=lambda value: self._update(job_id, progress=value),
             )
             self._update(job_id, status="complete", progress=1.0, output_path=str(output))
