@@ -187,6 +187,8 @@
                 <div class="control-row"><span>Color</span><input id="captionTextColor" type="color" value="#ffffff"></div>
                 <div class="control-row split"><label>Character<input id="captionCharacterSpacing" type="number" min="-5" max="50" step="0.5" value="0"></label><label>Line<input id="captionLineSpacing" type="number" min="0.5" max="3" step="0.05" value="1.2"></label></div>
                 <div class="control-row"><span>Alignment</span><div class="segmented grow"><button type="button" data-caption-align="left">≡</button><button class="active" type="button" data-caption-align="center">≡</button><button type="button" data-caption-align="right">≡</button></div></div>
+                <div class="control-row"><span>Caption lines</span><select id="captionMaxLines"><option value="1">Single line</option><option value="2" selected>2 lines</option><option value="3">3 lines</option><option value="4">4 lines</option><option value="0">Full scene text</option></select></div>
+                <div class="control-row"><span>Words per line</span><input id="captionWordsPerLine" type="range" min="2" max="20" value="7"><output id="captionWordsPerLineValue">7</output></div>
                 <div class="control-block"><span>Preset style</span><div class="preset-grid" id="captionPresets">
                   <button class="preset active" type="button" data-caption-preset="clean"><span>Aa</span><small>Clean</small></button>
                   <button class="preset outline" type="button" data-caption-preset="outline"><span>Aa</span><small>Outline</small></button>
@@ -225,7 +227,17 @@
 
           <section class="pro-timeline">
             <div class="timeline-toolbar">
-              <div class="timeline-edit-buttons"><button class="icon-button tiny" type="button" id="timelineAddButton">+</button><button class="icon-button tiny" type="button" id="timelineUndoButton" disabled>↶</button><button class="icon-button tiny" type="button" id="timelineSplitButton" disabled>⑂</button><button class="icon-button tiny" type="button" id="timelineDeleteButton" disabled>⌫</button></div>
+              <div class="timeline-edit-buttons">
+                <button class="icon-button tiny active" type="button" id="timelineSelectTool" title="Selection tool (V)" aria-label="Selection tool">↖</button>
+                <button class="icon-button tiny" type="button" id="timelineRazorTool" title="Razor tool (B)" aria-label="Razor tool">⑂</button>
+                <span class="toolbar-divider"></span>
+                <button class="icon-button tiny" type="button" id="timelineAddButton" title="Import media for selected scene">+</button>
+                <button class="icon-button tiny" type="button" id="timelineUndoButton" title="Undo (Command-Z)" disabled>↶</button>
+                <button class="icon-button tiny" type="button" id="timelineRedoButton" title="Redo (Shift-Command-Z)" disabled>↷</button>
+                <button class="icon-button tiny" type="button" id="timelineSplitButton" title="Split selected clip at playhead" disabled>┆</button>
+                <button class="icon-button tiny" type="button" id="timelineDeleteButton" title="Delete selected clip" disabled>⌫</button>
+                <button class="icon-button tiny active" type="button" id="timelineSnapButton" title="Magnetic snapping" aria-pressed="true">🧲</button>
+              </div>
               <strong id="timelineSummary">No scenes yet</strong>
               <label>Zoom <input id="timelineZoom" type="range" min="2" max="30" step="1" value="8"></label>
             </div>
@@ -288,12 +300,20 @@
       <div class="export-dialog-layout">
         <div>
           <div class="export-preview" id="exportPreview"><span>MP4</span><strong id="exportProjectName">Project</strong></div>
+          <label>Video name<input id="exportName" maxlength="160" placeholder="My finished video"></label>
+          <label>Quality preset<select id="exportPreset"><option value="youtube-1080p" selected>YouTube 1080p · Recommended</option><option value="youtube-1080p60">YouTube 1080p · 60 fps</option><option value="youtube-1440p">YouTube 1440p</option><option value="youtube-4k">YouTube 4K</option><option value="compact-720p">Compact 720p</option><option value="custom">Custom</option></select></label>
           <div class="form-grid two">
-            <label>Width<input id="exportWidth" type="number" min="320" max="7680" value="1920"></label>
-            <label>Height<input id="exportHeight" type="number" min="240" max="4320" value="1080"></label>
-            <label>Frame rate<select id="exportFps"><option>24</option><option selected>30</option><option>60</option></select></label>
+            <label>Resolution<select id="exportResolution"><option value="1280x720">1280 × 720 · HD</option><option value="1920x1080" selected>1920 × 1080 · Full HD</option><option value="2560x1440">2560 × 1440 · 2K</option><option value="3840x2160">3840 × 2160 · 4K</option><option value="1080x1920">1080 × 1920 · Vertical</option><option value="custom">Custom size</option></select></label>
+            <label>Frame rate<select id="exportFps"><option>24</option><option>25</option><option selected>30</option><option>50</option><option>60</option></select></label>
+            <label class="custom-dimension" hidden>Width<input id="exportWidth" type="number" min="320" max="7680" value="1920"></label>
+            <label class="custom-dimension" hidden>Height<input id="exportHeight" type="number" min="240" max="4320" value="1080"></label>
+            <label>Video bitrate<select id="exportVideoBitrate"><option value="4000">4 Mbps · Small</option><option value="6000">6 Mbps</option><option value="8000">8 Mbps</option><option value="12000" selected>12 Mbps · Recommended</option><option value="16000">16 Mbps</option><option value="24000">24 Mbps</option><option value="35000">35 Mbps · 4K</option><option value="custom">Custom</option></select></label>
+            <label class="custom-bitrate" hidden>Custom Kbps<input id="exportCustomBitrate" type="number" min="500" max="100000" value="12000"></label>
+            <label>Audio bitrate<select id="exportAudioBitrate"><option value="128">128 Kbps</option><option value="192" selected>192 Kbps · Recommended</option><option value="256">256 Kbps</option><option value="320">320 Kbps</option></select></label>
             <label>Format<select id="exportFormat"><option value="mp4">MP4 (H.264)</option></select></label>
           </div>
+          <label>Export location<div class="browse-row"><input id="exportDirectory" readonly placeholder="Project renders folder"><button class="button ghost" id="browseExportDirectory" type="button">Browse…</button></div></label>
+          <p class="export-summary" id="exportSummary">1920 × 1080 · 30 fps · 12 Mbps</p>
           <label class="check"><input id="burnCaptions" type="checkbox" checked><span>Burn styled captions into video</span></label>
           <button class="button primary full" id="renderButton" type="button">Export final MP4</button>
           <button class="button ghost full" id="openOutputButton" type="button">Open output folder</button>

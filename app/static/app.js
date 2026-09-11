@@ -1,8 +1,12 @@
 const state = {
   themes: [], motions: [], settings: {}, projects: [], current: null,
-  scenes: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
-  selectedSceneIds: new Set(), planWarnings: [], activeTimelineSceneId: null,
-  previewTime: 0, manualPreviewFrame: null, manualPreviewStartedAt: 0, draggedSceneId: null,
+  scenes: [], timelineClips: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
+  selectedSceneIds: new Set(), planWarnings: [], activeTimelineSceneId: null, activeTimelineClipId: null,
+  previewTime: 0, manualPreviewFrame: null, manualPreviewStartedAt: 0, draggedClipId: null,
+  editTool: "select", snapEnabled: true, trimSession: null, trimFrame: null,
+  timelineUndo: [], timelineRedo: [], isPreviewPlaying: false,
+  exportProjectId: null, lastRenderOutputPath: "",
+  captionDrafts: {},
   fonts: [], captionFlags: { bold: true, italic: false, underline: false }, captionCase: "normal", captionAlignment: "center",
 };
 
@@ -54,7 +58,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.4.0"}`;
+    $("#appVersion").textContent = `v${health.version || "0.5.0"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -97,16 +101,25 @@ async function openProject(projectId, keepTab = false) {
   const payload = await api(`/api/projects/${projectId}`);
   state.current = payload.project;
   state.scenes = payload.scenes;
+  state.timelineClips = payload.timeline_clips || [];
   state.assets = payload.assets;
   state.planWarnings = payload.warnings || [];
   if (projectChanged) {
     state.selectedSceneIds.clear();
     pausePreview();
     state.activeTimelineSceneId = null;
+    state.activeTimelineClipId = null;
     state.previewTime = 0;
+    state.timelineUndo = [];
+    state.timelineRedo = [];
+    state.captionDrafts = {};
   }
   if (!state.scenes.some(scene => scene.id === state.activeTimelineSceneId)) {
     state.activeTimelineSceneId = state.scenes[0]?.id || null;
+  }
+  if (!state.timelineClips.some(clip => clip.id === state.activeTimelineClipId)) {
+    state.activeTimelineClipId = state.timelineClips.find(clip => clip.scene_id === state.activeTimelineSceneId)?.id
+      || state.timelineClips[0]?.id || null;
   }
   state.scenePage = 1;
   $("#emptyState").hidden = true;
@@ -329,7 +342,8 @@ async function applyBulk(scope) {
     body: JSON.stringify({ scene_ids: sceneIds, changes, save_as_default: scope === "all" }),
   });
   const payload = await api(`/api/projects/${state.current.id}`);
-  state.current = payload.project; state.scenes = payload.scenes; state.assets = payload.assets;
+  state.current = payload.project; state.scenes = payload.scenes;
+  state.timelineClips = payload.timeline_clips || state.timelineClips; state.assets = payload.assets;
   updateMetrics(); renderScenes(); renderTimeline();
   toast(`Updated ${result.updated} scene${result.updated === 1 ? "" : "s"}`);
 }
@@ -361,7 +375,8 @@ async function refreshGenerationStatus() {
   }
   if ((counts.complete || 0) > state.assets.length || !result.running) {
     const payload = await api(`/api/projects/${state.current.id}`);
-    state.current = payload.project; state.scenes = payload.scenes; state.assets = payload.assets;
+    state.current = payload.project; state.scenes = payload.scenes;
+    state.timelineClips = payload.timeline_clips || state.timelineClips; state.assets = payload.assets;
     updateMetrics(); renderScenes(); renderTimeline(); await refreshProjects();
   }
 }
@@ -376,9 +391,15 @@ function selectedAssetForScene(scene) {
   return state.assets.find(asset => asset.id === scene?.selected_asset_id) || null;
 }
 
+function videoTrackDuration() {
+  return state.timelineClips.length
+    ? Math.max(...state.timelineClips.map(clip => Number(clip.end_seconds || 0)))
+    : 0;
+}
+
 function timelineDuration() {
-  const sceneEnd = state.scenes.length ? Number(state.scenes[state.scenes.length - 1].end_seconds || 0) : 0;
-  return Math.max(sceneEnd, Number(state.current?.duration_seconds || 0), 0.1);
+  const captionEnd = state.scenes.length ? Number(state.scenes[state.scenes.length - 1].end_seconds || 0) : 0;
+  return Math.max(videoTrackDuration(), captionEnd, Number(state.current?.duration_seconds || 0), 0.1);
 }
 
 function loadFontOptions(selected = null) {
@@ -427,6 +448,8 @@ function captionStyleFromInputs() {
     shadow_blur: Number($("#captionShadowBlur").value),
     shadow_x: Number($("#captionShadowX").value),
     shadow_y: Number($("#captionShadowY").value),
+    max_lines: Number($("#captionMaxLines").value),
+    words_per_line: Number($("#captionWordsPerLine").value),
   };
 }
 
@@ -464,6 +487,8 @@ function fillCaptionStyle() {
   $("#captionShadowBlur").value = style.shadow_blur ?? 5;
   $("#captionShadowX").value = style.shadow_x ?? 2;
   $("#captionShadowY").value = style.shadow_y ?? 3;
+  $("#captionMaxLines").value = style.max_lines ?? 2;
+  $("#captionWordsPerLine").value = style.words_per_line ?? 7;
   $$("[data-style-toggle]").forEach(button => button.classList.toggle("active", Boolean(state.captionFlags[button.dataset.styleToggle])));
   $$("[data-caption-case]").forEach(button => button.classList.toggle("active", button.dataset.captionCase === state.captionCase));
   $$("[data-caption-align]").forEach(button => button.classList.toggle("active", button.dataset.captionAlign === state.captionAlignment));
@@ -503,6 +528,7 @@ function updateCaptionPreviewStyle() {
   caption.style.transform = `${middleOffset}translate(${style.position_x}%, ${style.position_y}%) scale(${style.scale / 100}) rotate(${style.rotation}deg)`;
   $("#captionScaleValue").textContent = `${Math.round(style.scale)}%`;
   $("#captionOpacityValue").textContent = `${Math.round(style.opacity * 100)}%`;
+  $("#captionWordsPerLineValue").textContent = style.words_per_line;
 }
 
 function configurePreviewAudio() {
@@ -520,19 +546,62 @@ function configurePreviewAudio() {
   $("#previewTotalTime").textContent = clock(duration);
 }
 
-function activeSceneAt(time) {
+function activeCaptionSceneAt(time) {
   return state.scenes.find(scene => time >= Number(scene.start_seconds) && time < Number(scene.end_seconds))
     || (time >= timelineDuration() - 0.05 ? state.scenes[state.scenes.length - 1] : null);
+}
+
+function sceneForClip(clip) {
+  return state.scenes.find(scene => scene.id === clip?.scene_id) || null;
+}
+
+function activeVideoClipAt(time) {
+  return state.timelineClips.find(clip => time >= Number(clip.start_seconds) && time < Number(clip.end_seconds))
+    || (time >= videoTrackDuration() - 0.05 ? state.timelineClips[state.timelineClips.length - 1] : null);
+}
+
+function captionCards(text, style = captionStyleFromInputs()) {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return [];
+  const maxLines = Number(style.max_lines || 0);
+  if (maxLines <= 0) return [cleaned];
+  const words = cleaned.split(" ");
+  const wordsPerLine = Math.max(2, Number(style.words_per_line || 7));
+  const perCard = maxLines * wordsPerLine;
+  const cards = [];
+  for (let index = 0; index < words.length; index += perCard) {
+    const card = words.slice(index, index + perCard);
+    const lines = [];
+    for (let line = 0; line < card.length; line += wordsPerLine) lines.push(card.slice(line, line + wordsPerLine).join(" "));
+    cards.push(lines.join("\n"));
+  }
+  return cards;
+}
+
+function captionTextAt(scene, time) {
+  if (!scene) return "";
+  const source = state.captionDrafts[scene.id] ?? scene.caption_text ?? scene.narration ?? "";
+  const style = captionStyleFromInputs();
+  const cards = captionCards(source, style);
+  if (!cards.length) return "";
+  const duration = Math.max(0.01, Number(scene.end_seconds) - Number(scene.start_seconds));
+  const progress = Math.max(0, Math.min(0.999999, (time - Number(scene.start_seconds)) / duration));
+  if (Number(style.max_lines || 0) <= 0) return cards[0];
+  const totalWords = String(source).trim().split(/\s+/).filter(Boolean).length;
+  const wordsPerCard = Number(style.max_lines) * Number(style.words_per_line);
+  return cards[Math.min(cards.length - 1, Math.floor(progress * totalWords / wordsPerCard))];
 }
 
 function actionFor(scene, type, defaults) {
   return (scene?.timeline_actions || []).find(action => action.type === type)?.params || defaults;
 }
 
-function fillTimelineInspector(scene) {
+function fillTimelineInspector(scene, clip = null) {
   const controls = ["#timelineDuration", "#timelineCaption", "#timelineMotion", "#timelineTransition", "#timelineTransitionDuration", "#replaceMediaButton", "#saveTimelineButton"];
   controls.forEach(selector => { $(selector).disabled = !scene; });
-  $("#timelineSceneTitle").textContent = scene ? `Scene ${scene.position} · ${clock(scene.start_seconds)}–${clock(scene.end_seconds)}` : "Select a scene";
+  $("#timelineSceneTitle").textContent = scene
+    ? `Scene ${scene.position}${clip ? ` · Clip ${clip.position} · ${clock(clip.start_seconds)}–${clock(clip.end_seconds)}` : ""}`
+    : "Select a scene";
   if (!scene) {
     $("#timelineDuration").value = "";
     $("#timelineCaption").value = "";
@@ -540,15 +609,17 @@ function fillTimelineInspector(scene) {
   }
   const motion = actionFor(scene, "motion", { preset: "slow_push" });
   const transition = actionFor(scene, "transition", { preset: "fade", duration: 0.32 });
-  $("#timelineDuration").value = (Number(scene.end_seconds) - Number(scene.start_seconds)).toFixed(2);
-  $("#timelineCaption").value = scene.caption_text ?? scene.narration ?? "";
+  $("#timelineDuration").value = clip
+    ? (Number(clip.end_seconds) - Number(clip.start_seconds)).toFixed(2)
+    : (Number(scene.end_seconds) - Number(scene.start_seconds)).toFixed(2);
+  $("#timelineCaption").value = state.captionDrafts[scene.id] ?? scene.caption_text ?? scene.narration ?? "";
   $("#timelineMotion").value = motion.preset || "slow_push";
   $("#timelineTransition").value = transition.preset || "fade";
   $("#timelineTransitionDuration").value = transition.preset === "cut" ? 0 : Number(transition.duration ?? 0.32);
   $("#timelineTransitionDuration").disabled = transition.preset === "cut";
 }
 
-function applyPreviewMotion(scene, progress) {
+function applyPreviewMotion(scene, progress, clip = null) {
   const media = $("#previewImage").hidden ? $("#previewVideo") : $("#previewImage");
   const preset = actionFor(scene, "motion", { preset: "slow_push" }).preset;
   let transform = "scale(1)";
@@ -559,10 +630,10 @@ function applyPreviewMotion(scene, progress) {
   if (preset === "pan_right") transform = `scale(1.08) translateX(${-4 + 8 * progress}%)`;
   media.style.transform = transform;
   const transition = actionFor(scene, "transition", { preset: "fade", duration: 0.32 });
-  const duration = Math.max(0.1, Number(scene.end_seconds) - Number(scene.start_seconds));
-  const elapsed = Math.max(0, state.previewTime - Number(scene.start_seconds));
+  const duration = Math.max(0.1, Number(clip?.end_seconds ?? scene.end_seconds) - Number(clip?.start_seconds ?? scene.start_seconds));
+  const elapsed = Math.max(0, state.previewTime - Number(clip?.start_seconds ?? scene.start_seconds));
   const fade = transition.preset === "fade" ? Math.min(Number(transition.duration || 0.32), duration / 2) : 0;
-  media.style.opacity = fade ? Math.min(1, elapsed / fade, (duration - elapsed) / fade) : 1;
+  media.style.opacity = state.isPreviewPlaying && fade ? Math.min(1, elapsed / fade, (duration - elapsed) / fade) : 1;
 }
 
 function updatePreviewAt(time, selectScene = true) {
@@ -572,14 +643,17 @@ function updatePreviewAt(time, selectScene = true) {
   $("#previewCurrentTime").textContent = clock(state.previewTime);
   const zoom = Number($("#timelineZoom").value || 8);
   $("#timelinePlayhead").style.left = `calc(var(--track-label-width) + ${state.previewTime * zoom}px)`;
-  const scene = activeSceneAt(state.previewTime);
-  if (scene && selectScene && state.activeTimelineSceneId !== scene.id) {
-    state.activeTimelineSceneId = scene.id;
-    $$(".timeline-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
-    $$(".caption-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
-    fillTimelineInspector(scene);
+  const videoClip = activeVideoClipAt(state.previewTime);
+  const scene = sceneForClip(videoClip);
+  if (videoClip && selectScene && state.activeTimelineClipId !== videoClip.id) {
+    state.activeTimelineClipId = videoClip.id;
+    state.activeTimelineSceneId = videoClip.scene_id;
+    $$(".timeline-clip").forEach(element => element.classList.toggle("active", element.dataset.clipId === videoClip.id));
+    $$(".caption-clip").forEach(element => element.classList.toggle("active", element.dataset.sceneId === videoClip.scene_id));
+    fillTimelineInspector(scene, videoClip);
   }
-  const active = scene || state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  const activeClip = videoClip || state.timelineClips.find(item => item.id === state.activeTimelineClipId);
+  const active = sceneForClip(activeClip) || state.scenes.find(item => item.id === state.activeTimelineSceneId);
   const asset = selectedAssetForScene(active);
   const image = $("#previewImage");
   const video = $("#previewVideo");
@@ -590,22 +664,28 @@ function updatePreviewAt(time, selectScene = true) {
   if (asset?.media_kind === "video") {
     video.hidden = false;
     if (video.getAttribute("src") !== asset.media_url) { video.src = asset.media_url; video.load(); }
-    const localTime = Math.max(0, state.previewTime - Number(active.start_seconds));
+    const rawLocalTime = Math.max(0, Number(activeClip?.source_in_seconds || 0) + state.previewTime - Number(activeClip?.start_seconds || 0));
+    const localTime = Number.isFinite(video.duration) && video.duration > 0 ? rawLocalTime % video.duration : rawLocalTime;
     if (video.readyState >= 1 && Math.abs(video.currentTime - localTime) > 0.35) video.currentTime = localTime;
+    if (state.isPreviewPlaying && video.paused) video.play().catch(() => {});
   } else if (asset) {
+    if (!video.paused) video.pause();
     image.hidden = false;
     if (image.getAttribute("src") !== asset.media_url) image.src = asset.media_url;
   }
   $("#previewSceneBadge").textContent = active ? `Scene ${active.position}` : "No scene";
   const caption = $("#previewCaption");
-  caption.textContent = active ? (active.caption_text ?? active.narration ?? "") : "";
+  const captionScene = activeCaptionSceneAt(state.previewTime);
+  caption.textContent = captionTextAt(captionScene, state.previewTime);
   caption.hidden = !caption.textContent;
   updateCaptionPreviewStyle();
   if (active && asset) {
-    const sceneDuration = Math.max(0.1, Number(active.end_seconds) - Number(active.start_seconds));
-    const progress = Math.max(0, Math.min(1, (state.previewTime - Number(active.start_seconds)) / sceneDuration));
-    applyPreviewMotion(active, progress);
+    const clipStart = Number(activeClip?.start_seconds || 0);
+    const sceneDuration = Math.max(0.1, Number(activeClip?.end_seconds || 0.1) - clipStart);
+    const progress = Math.max(0, Math.min(1, (state.previewTime - clipStart) / sceneDuration));
+    applyPreviewMotion(active, progress, activeClip);
   }
+  updateTimelineControls();
 }
 
 function renderMediaBin() {
@@ -627,25 +707,31 @@ function rulerStep(zoom) {
 }
 
 function renderTimeline() {
-  if (!state.scenes.some(scene => scene.id === state.activeTimelineSceneId)) {
-    state.activeTimelineSceneId = state.scenes[0]?.id || null;
+  if (!state.timelineClips.some(clip => clip.id === state.activeTimelineClipId)) {
+    state.activeTimelineClipId = state.timelineClips[0]?.id || null;
   }
+  const selectedClip = state.timelineClips.find(clip => clip.id === state.activeTimelineClipId) || null;
+  if (selectedClip) state.activeTimelineSceneId = selectedClip.scene_id;
   const zoom = Number($("#timelineZoom").value || 8);
   const duration = timelineDuration();
   const contentWidth = Math.max(900, Math.ceil(duration * zoom) + 40);
   $("#timelineCanvas").style.setProperty("--content-width", `${contentWidth}px`);
-  $("#timelineList").innerHTML = state.scenes.map(scene => {
+  $("#timelineList").classList.toggle("razor-mode", state.editTool === "razor");
+  $("#timelineList").innerHTML = state.timelineClips.map(clip => {
+    const scene = sceneForClip(clip);
     const asset = selectedAssetForScene(scene);
-    const sceneDuration = Math.max(0.5, Number(scene.end_seconds) - Number(scene.start_seconds));
-    const width = Math.max(18, sceneDuration * zoom);
-    const left = Number(scene.start_seconds) * zoom;
+    const clipDuration = Math.max(0.25, Number(clip.end_seconds) - Number(clip.start_seconds));
+    const width = Math.max(18, clipDuration * zoom);
+    const left = Number(clip.start_seconds) * zoom;
     const media = asset?.media_kind === "video"
       ? `<div class="timeline-clip-placeholder">VIDEO</div>`
       : asset ? `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">` : `<div class="timeline-clip-placeholder">No media</div>`;
-    return `<div class="timeline-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" style="left:${left}px;width:${width}px" draggable="true" tabindex="0" role="button" data-scene-id="${scene.id}">
-      <div class="timeline-clip-media">${media}<span class="timeline-clip-number">${scene.position}</span></div>
-      <strong class="timeline-clip-title">${escapeHtml(scene.caption_text || scene.narration)}</strong>
-      <div class="timeline-clip-info"><span>${clock(scene.start_seconds)}</span><span>${sceneDuration.toFixed(1)}s</span></div>
+    return `<div class="timeline-clip ${clip.id === state.activeTimelineClipId ? "active" : ""}" style="left:${left}px;width:${width}px" draggable="${state.editTool === "select"}" tabindex="0" role="button" data-clip-id="${clip.id}" data-scene-id="${scene?.id || ""}">
+      <button class="trim-handle trim-left" type="button" data-trim-edge="left" aria-label="Trim clip start"></button>
+      <div class="timeline-clip-media">${media}<span class="timeline-clip-number">${clip.position}</span></div>
+      <strong class="timeline-clip-title">${escapeHtml(scene?.caption_text || scene?.narration || "Clip")}</strong>
+      <div class="timeline-clip-info"><span>${clock(clip.start_seconds)}</span><span>${clipDuration.toFixed(1)}s</span></div>
+      <button class="trim-handle trim-right" type="button" data-trim-edge="right" aria-label="Trim clip end"></button>
     </div>`;
   }).join("") || `<div class="queue-status">Create the visual plan first.</div>`;
   $("#captionTrack").innerHTML = state.scenes.map(scene => {
@@ -661,11 +747,31 @@ function renderTimeline() {
     if (step * zoom >= 80) marks.push(`<span class="ruler-mark minor" style="left:${(second + step / 2) * zoom}px"></span>`);
   }
   $("#timelineRuler").innerHTML = marks.join("");
-  $("#timelineSummary").textContent = state.scenes.length ? `${state.scenes.length} scenes · ${clock(duration)}` : "No scenes yet";
+  $("#timelineSummary").textContent = state.timelineClips.length ? `${state.timelineClips.length} clips · ${clock(videoTrackDuration())}` : "No clips yet";
   $("#previewScrubber").max = duration;
   $("#previewTotalTime").textContent = clock(duration);
-  fillTimelineInspector(state.scenes.find(scene => scene.id === state.activeTimelineSceneId));
+  fillTimelineInspector(sceneForClip(selectedClip), selectedClip);
   renderMediaBin();
+  updateTimelineControls();
+  updatePreviewAt(state.previewTime, false);
+}
+
+function selectTimelineClip(clipId, seek = true) {
+  const clip = state.timelineClips.find(item => item.id === clipId);
+  const scene = sceneForClip(clip);
+  if (!clip || !scene) return;
+  state.activeTimelineClipId = clip.id;
+  state.activeTimelineSceneId = clip.scene_id;
+  if (seek) {
+    const audio = $("#previewAudio");
+    state.previewTime = Number(clip.start_seconds);
+    if (audio.getAttribute("src")) audio.currentTime = state.previewTime;
+  }
+  $$(".timeline-clip").forEach(element => element.classList.toggle("active", element.dataset.clipId === clip.id));
+  $$(".caption-clip").forEach(element => element.classList.toggle("active", element.dataset.sceneId === scene.id));
+  fillTimelineInspector(scene, clip);
+  renderMediaBin();
+  updateTimelineControls();
   updatePreviewAt(state.previewTime, false);
 }
 
@@ -673,24 +779,36 @@ function selectTimelineScene(sceneId, seek = true) {
   const scene = state.scenes.find(item => item.id === sceneId);
   if (!scene) return;
   state.activeTimelineSceneId = scene.id;
+  const matchingClip = state.timelineClips.find(clip => clip.scene_id === scene.id);
+  if (matchingClip) state.activeTimelineClipId = matchingClip.id;
   if (seek) {
-    const audio = $("#previewAudio");
     state.previewTime = Number(scene.start_seconds);
+    const audio = $("#previewAudio");
     if (audio.getAttribute("src")) audio.currentTime = state.previewTime;
   }
-  $$(".timeline-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
-  $$(".caption-clip").forEach(clip => clip.classList.toggle("active", clip.dataset.sceneId === scene.id));
-  fillTimelineInspector(scene);
+  $$(".caption-clip").forEach(element => element.classList.toggle("active", element.dataset.sceneId === scene.id));
+  fillTimelineInspector(scene, matchingClip || null);
   renderMediaBin();
+  updateTimelineControls();
   updatePreviewAt(state.previewTime, false);
+}
+
+function updateTimelineControls() {
+  const clip = state.timelineClips.find(item => item.id === state.activeTimelineClipId);
+  const canSplit = clip && state.previewTime - Number(clip.start_seconds) >= 0.25
+    && Number(clip.end_seconds) - state.previewTime >= 0.25;
+  $("#timelineSplitButton").disabled = !canSplit;
+  $("#timelineDeleteButton").disabled = !clip || state.timelineClips.length <= 1;
+  $("#timelineUndoButton").disabled = !state.timelineUndo.length;
+  $("#timelineRedoButton").disabled = !state.timelineRedo.length;
 }
 
 async function saveTimelineScene() {
   const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  const clip = state.timelineClips.find(item => item.id === state.activeTimelineClipId);
   if (!scene) throw new Error("Select a scene first");
   const transitionPreset = $("#timelineTransition").value;
   const body = {
-    duration_seconds: Number($("#timelineDuration").value),
     caption_text: $("#timelineCaption").value.trim(),
     timeline_actions: [
       { type: "motion", params: { preset: $("#timelineMotion").value, strength: 0.55 } },
@@ -698,6 +816,13 @@ async function saveTimelineScene() {
     ],
   };
   await api(`/api/scenes/${scene.id}`, { method: "PATCH", body: JSON.stringify(body) });
+  delete state.captionDrafts[scene.id];
+  if (clip) {
+    rememberTimeline();
+    await api(`/api/timeline-clips/${clip.id}`, {
+      method: "PATCH", body: JSON.stringify({ duration_seconds: Number($("#timelineDuration").value) }),
+    });
+  }
   await openProject(state.current.id, true);
   activateTab("timeline");
   toast(`Scene ${scene.position} timeline saved`);
@@ -728,6 +853,7 @@ async function saveCaptionStyle() {
       method: "PATCH", body: JSON.stringify({ caption_text: $("#timelineCaption").value.trim() }),
     });
     state.scenes = state.scenes.map(item => item.id === updated.id ? updated : item);
+    delete state.captionDrafts[scene.id];
   }
   const result = await api(`/api/projects/${state.current.id}/caption-style`, {
     method: "POST", body: JSON.stringify(captionStyleFromInputs()),
@@ -803,9 +929,68 @@ async function downloadFont(event) {
   }
 }
 
+const EXPORT_PRESETS = {
+  "youtube-1080p": { resolution: "1920x1080", fps: 30, bitrate: "12000", audio: "192" },
+  "youtube-1080p60": { resolution: "1920x1080", fps: 60, bitrate: "16000", audio: "192" },
+  "youtube-1440p": { resolution: "2560x1440", fps: 30, bitrate: "24000", audio: "192" },
+  "youtube-4k": { resolution: "3840x2160", fps: 30, bitrate: "35000", audio: "256" },
+  "compact-720p": { resolution: "1280x720", fps: 30, bitrate: "6000", audio: "128" },
+};
+
+function applyExportPreset() {
+  const preset = EXPORT_PRESETS[$("#exportPreset").value];
+  if (preset) {
+    $("#exportResolution").value = preset.resolution;
+    $("#exportFps").value = String(preset.fps);
+    $("#exportVideoBitrate").value = preset.bitrate;
+    $("#exportAudioBitrate").value = preset.audio;
+  }
+  updateExportFields();
+}
+
+function exportDimensions() {
+  const resolution = $("#exportResolution").value;
+  if (resolution === "custom") return [Number($("#exportWidth").value), Number($("#exportHeight").value)];
+  return resolution.split("x").map(Number);
+}
+
+function exportBitrate() {
+  return $("#exportVideoBitrate").value === "custom"
+    ? Number($("#exportCustomBitrate").value)
+    : Number($("#exportVideoBitrate").value);
+}
+
+function updateExportFields(markCustom = false) {
+  const customResolution = $("#exportResolution").value === "custom";
+  $$(".custom-dimension").forEach(element => { element.hidden = !customResolution; });
+  const customBitrate = $("#exportVideoBitrate").value === "custom";
+  $(".custom-bitrate").hidden = !customBitrate;
+  if (markCustom) $("#exportPreset").value = "custom";
+  const [width, height] = exportDimensions();
+  const bitrate = exportBitrate();
+  $("#exportSummary").textContent = `${width} × ${height} · ${$("#exportFps").value} fps · ${(bitrate / 1000).toFixed(bitrate % 1000 ? 1 : 0)} Mbps · H.264 MP4`;
+}
+
+async function browseExportDirectory() {
+  const result = await api(`/api/projects/${state.current.id}/choose-export-folder`, { method: "POST", body: "{}" });
+  if (!result.cancelled) {
+    $("#exportDirectory").value = result.path;
+    toast("Export location selected");
+  }
+}
+
 function openExportDialog() {
   if (!state.current) return;
   $("#exportProjectName").textContent = state.current.name;
+  if (state.exportProjectId !== state.current.id) {
+    $("#exportName").value = state.current.name;
+    $("#exportDirectory").value = "";
+    $("#exportPreset").value = "youtube-1080p";
+    state.exportProjectId = state.current.id;
+    applyExportPreset();
+  } else {
+    updateExportFields();
+  }
   $("#exportDialog").showModal();
   refreshRenderStatus().catch(error => toast(error.message, true));
 }
@@ -820,12 +1005,16 @@ function pausePreview() {
   state.manualPreviewFrame = null;
   const audio = $("#previewAudio");
   if (!audio.paused) audio.pause();
+  const video = $("#previewVideo");
+  if (!video.paused) video.pause();
+  state.isPreviewPlaying = false;
   $("#previewPlayButton").textContent = "▶";
 }
 
 function startManualPreview() {
   state.manualPreviewStartedAt = performance.now() - state.previewTime * 1000;
   $("#previewPlayButton").textContent = "❚❚";
+  state.isPreviewPlaying = true;
   const tick = now => {
     const current = (now - state.manualPreviewStartedAt) / 1000;
     if (current >= timelineDuration()) { pausePreview(); updatePreviewAt(0); return; }
@@ -841,9 +1030,11 @@ async function togglePreview() {
     if (audio.paused) {
       if (state.previewTime >= timelineDuration() - 0.05) audio.currentTime = 0;
       await audio.play();
+      state.isPreviewPlaying = true;
       $("#previewPlayButton").textContent = "❚❚";
     } else {
       audio.pause();
+      state.isPreviewPlaying = false;
       $("#previewPlayButton").textContent = "▶";
     }
     return;
@@ -851,26 +1042,199 @@ async function togglePreview() {
   if (state.manualPreviewFrame) pausePreview(); else startManualPreview();
 }
 
+function timelineSnapshot() {
+  return state.timelineClips.map(clip => ({
+    id: clip.id,
+    scene_id: clip.scene_id,
+    start_seconds: Number(clip.start_seconds),
+    end_seconds: Number(clip.end_seconds),
+    source_in_seconds: Number(clip.source_in_seconds || 0),
+  }));
+}
+
+function rememberTimeline(snapshot = timelineSnapshot()) {
+  state.timelineUndo.push(snapshot);
+  if (state.timelineUndo.length > 30) state.timelineUndo.shift();
+  state.timelineRedo = [];
+  updateTimelineControls();
+}
+
+async function restoreTimelineSnapshot(snapshot) {
+  const result = await api(`/api/projects/${state.current.id}/timeline/restore`, {
+    method: "POST", body: JSON.stringify({ timeline_clips: snapshot }),
+  });
+  state.timelineClips = result.timeline_clips;
+  if (!state.timelineClips.some(clip => clip.id === state.activeTimelineClipId)) {
+    state.activeTimelineClipId = state.timelineClips[0]?.id || null;
+  }
+  renderTimeline();
+}
+
+async function undoTimeline() {
+  if (!state.timelineUndo.length) return;
+  const previous = state.timelineUndo.pop();
+  state.timelineRedo.push(timelineSnapshot());
+  await restoreTimelineSnapshot(previous);
+  toast("Timeline change undone");
+}
+
+async function redoTimeline() {
+  if (!state.timelineRedo.length) return;
+  const next = state.timelineRedo.pop();
+  state.timelineUndo.push(timelineSnapshot());
+  await restoreTimelineSnapshot(next);
+  toast("Timeline change restored");
+}
+
 async function reorderTimeline(sourceId, targetId, insertAfter) {
   if (!sourceId || !targetId || sourceId === targetId) return;
-  const ordered = state.scenes.map(scene => scene.id).filter(id => id !== sourceId);
+  const before = timelineSnapshot();
+  const ordered = state.timelineClips.map(clip => clip.id).filter(id => id !== sourceId);
   let targetIndex = ordered.indexOf(targetId);
   if (insertAfter) targetIndex += 1;
   ordered.splice(targetIndex, 0, sourceId);
-  await api(`/api/projects/${state.current.id}/scenes/reorder`, {
-    method: "POST", body: JSON.stringify({ scene_ids: ordered }),
+  const result = await api(`/api/projects/${state.current.id}/timeline/reorder`, {
+    method: "POST", body: JSON.stringify({ clip_ids: ordered }),
   });
-  await openProject(state.current.id, true);
-  activateTab("timeline");
+  rememberTimeline(before);
+  state.timelineClips = result.timeline_clips;
+  state.activeTimelineClipId = sourceId;
+  renderTimeline();
   toast("Timeline order updated");
+}
+
+async function splitTimelineClip(clipId = state.activeTimelineClipId, atTime = state.previewTime) {
+  const clip = state.timelineClips.find(item => item.id === clipId);
+  if (!clip) throw new Error("Select a video clip first");
+  const offset = Number(atTime) - Number(clip.start_seconds);
+  const before = timelineSnapshot();
+  const result = await api(`/api/timeline-clips/${clip.id}/split`, {
+    method: "POST", body: JSON.stringify({ offset_seconds: offset }),
+  });
+  rememberTimeline(before);
+  state.timelineClips = result.timeline_clips;
+  state.activeTimelineClipId = result.new_clip_id;
+  renderTimeline();
+  toast("Clip split at playhead");
+}
+
+async function deleteTimelineClip() {
+  const clip = state.timelineClips.find(item => item.id === state.activeTimelineClipId);
+  if (!clip) throw new Error("Select a video clip first");
+  const before = timelineSnapshot();
+  const result = await api(`/api/timeline-clips/${clip.id}/delete`, { method: "POST", body: "{}" });
+  rememberTimeline(before);
+  state.timelineClips = result.timeline_clips;
+  state.activeTimelineClipId = state.timelineClips[Math.min(clip.position - 1, state.timelineClips.length - 1)]?.id || null;
+  renderTimeline();
+  toast("Clip deleted; timeline closed the gap");
+}
+
+function retimeLocalTimeline() {
+  let cursor = 0;
+  state.timelineClips.forEach((clip, index) => {
+    const duration = Math.max(0.25, Number(clip.end_seconds) - Number(clip.start_seconds));
+    clip.position = index + 1;
+    clip.start_seconds = cursor;
+    clip.end_seconds = cursor + duration;
+    cursor += duration;
+  });
+}
+
+function beginClipTrim(event) {
+  const handle = event.target.closest("[data-trim-edge]");
+  const element = event.target.closest(".timeline-clip");
+  if (!handle || !element || state.editTool !== "select") return;
+  event.preventDefault();
+  event.stopPropagation();
+  pausePreview();
+  const clip = state.timelineClips.find(item => item.id === element.dataset.clipId);
+  if (!clip) return;
+  selectTimelineClip(clip.id, false);
+  state.trimSession = {
+    clipId: clip.id,
+    edge: handle.dataset.trimEdge,
+    startX: event.clientX,
+    duration: Number(clip.end_seconds) - Number(clip.start_seconds),
+    sourceIn: Number(clip.source_in_seconds || 0),
+    before: timelineSnapshot(),
+    changed: false,
+  };
+  document.body.classList.add("is-trimming");
+}
+
+function moveClipTrim(event) {
+  const session = state.trimSession;
+  if (!session) return;
+  const clip = state.timelineClips.find(item => item.id === session.clipId);
+  if (!clip) return;
+  const zoom = Number($("#timelineZoom").value || 8);
+  let delta = (event.clientX - session.startX) / zoom;
+  if (state.snapEnabled) delta = Math.round(delta * 10) / 10;
+  let duration;
+  let sourceIn = session.sourceIn;
+  if (session.edge === "right") {
+    duration = Math.max(0.25, session.duration + delta);
+  } else {
+    const scene = sceneForClip(clip);
+    const isVideo = selectedAssetForScene(scene)?.media_kind === "video";
+    if (isVideo) delta = Math.max(-session.sourceIn, delta);
+    duration = Math.max(0.25, session.duration - delta);
+    const appliedDelta = session.duration - duration;
+    sourceIn = isVideo ? Math.max(0, session.sourceIn + appliedDelta) : 0;
+  }
+  clip.end_seconds = Number(clip.start_seconds) + duration;
+  clip.source_in_seconds = sourceIn;
+  retimeLocalTimeline();
+  session.changed = Math.abs(duration - session.duration) > 0.001 || Math.abs(sourceIn - session.sourceIn) > 0.001;
+  cancelAnimationFrame(state.trimFrame);
+  state.trimFrame = requestAnimationFrame(renderTimeline);
+}
+
+async function endClipTrim() {
+  const session = state.trimSession;
+  if (!session) return;
+  state.trimSession = null;
+  document.body.classList.remove("is-trimming");
+  cancelAnimationFrame(state.trimFrame);
+  const clip = state.timelineClips.find(item => item.id === session.clipId);
+  if (!session.changed || !clip) { renderTimeline(); return; }
+  try {
+    const result = await api(`/api/timeline-clips/${clip.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        duration_seconds: Number(clip.end_seconds) - Number(clip.start_seconds),
+        source_in_seconds: Number(clip.source_in_seconds || 0),
+      }),
+    });
+    rememberTimeline(session.before);
+    state.timelineClips = result.timeline_clips;
+    renderTimeline();
+    toast("Clip duration saved");
+  } catch (error) {
+    state.timelineClips = session.before;
+    renderTimeline();
+    toast(error.message, true);
+  }
 }
 
 async function startRender() {
   if (!state.current) return;
+  const [width, height] = exportDimensions();
+  const outputName = $("#exportName").value.trim();
+  if (!outputName) return toast("Enter a name for the exported video", true);
+  const button = $("#renderButton");
+  button.disabled = true;
+  button.textContent = "Starting export…";
   try {
     await api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
-      width: Number($("#exportWidth").value), height: Number($("#exportHeight").value),
+      width, height,
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
+      output_name: outputName,
+      output_directory: $("#exportDirectory").value,
+      preset: $("#exportPreset").value,
+      video_bitrate_kbps: exportBitrate(),
+      audio_bitrate_kbps: Number($("#exportAudioBitrate").value),
       caption_style: captionStyleFromInputs(),
     }) });
     toast("Local render started");
@@ -878,6 +1242,7 @@ async function startRender() {
     state.renderTimer = setInterval(() => refreshRenderStatus().catch(error => toast(error.message, true)), 2500);
     await refreshRenderStatus();
   } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "Export final MP4"; }
 }
 
 async function refreshRenderStatus() {
@@ -888,6 +1253,7 @@ async function refreshRenderStatus() {
   $("#renderState").textContent = render.status[0].toUpperCase() + render.status.slice(1);
   $("#renderProgress").value = Math.round(Number(render.progress || 0) * 100);
   $("#renderMessage").textContent = render.error || render.output_path || `${Math.round(Number(render.progress || 0) * 100)}% complete`;
+  state.lastRenderOutputPath = render.output_path || state.lastRenderOutputPath;
   const videoLink = $("#openVideoLink");
   videoLink.hidden = !(render.status === "complete" && render.media_url);
   if (!videoLink.hidden) videoLink.href = render.media_url;
@@ -965,8 +1331,21 @@ $("#sceneList").addEventListener("change", event => {
 });
 $("#timelineList").addEventListener("click", event => {
   const clip = event.target.closest(".timeline-clip");
-  if (clip) selectTimelineScene(clip.dataset.sceneId);
+  if (!clip || event.target.closest("[data-trim-edge]")) return;
+  if (state.editTool === "razor") {
+    const bounds = clip.getBoundingClientRect();
+    const item = state.timelineClips.find(candidate => candidate.id === clip.dataset.clipId);
+    const atTime = Number(item.start_seconds) + ((event.clientX - bounds.left) / bounds.width) * (Number(item.end_seconds) - Number(item.start_seconds));
+    state.previewTime = atTime;
+    splitTimelineClip(item.id, atTime).catch(error => toast(error.message, true));
+  } else {
+    selectTimelineClip(clip.dataset.clipId);
+  }
 });
+$("#timelineList").addEventListener("pointerdown", beginClipTrim);
+window.addEventListener("pointermove", moveClipTrim);
+window.addEventListener("pointerup", () => endClipTrim().catch(error => toast(error.message, true)));
+window.addEventListener("pointercancel", () => endClipTrim().catch(error => toast(error.message, true)));
 $("#captionTrack").addEventListener("click", event => {
   const clip = event.target.closest(".caption-clip");
   if (clip) { selectTimelineScene(clip.dataset.sceneId); showInspector("text"); }
@@ -977,19 +1356,19 @@ $("#mediaBin").addEventListener("click", event => {
 });
 $("#timelineList").addEventListener("keydown", event => {
   const clip = event.target.closest(".timeline-clip");
-  if (clip && ["Enter", " "].includes(event.key)) { event.preventDefault(); selectTimelineScene(clip.dataset.sceneId); }
+  if (clip && event.key === "Enter") { event.preventDefault(); selectTimelineClip(clip.dataset.clipId); }
 });
 $("#timelineList").addEventListener("dragstart", event => {
   const clip = event.target.closest(".timeline-clip");
-  if (!clip) return;
-  state.draggedSceneId = clip.dataset.sceneId;
+  if (!clip || state.editTool !== "select") { event.preventDefault(); return; }
+  state.draggedClipId = clip.dataset.clipId;
   clip.classList.add("dragging");
   event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", state.draggedSceneId);
+  event.dataTransfer.setData("text/plain", state.draggedClipId);
 });
 $("#timelineList").addEventListener("dragend", event => {
   event.target.closest(".timeline-clip")?.classList.remove("dragging");
-  state.draggedSceneId = null;
+  state.draggedClipId = null;
 });
 $("#timelineList").addEventListener("dragover", event => {
   if (event.target.closest(".timeline-clip")) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }
@@ -998,11 +1377,34 @@ $("#timelineList").addEventListener("drop", event => {
   const target = event.target.closest(".timeline-clip");
   if (!target) return;
   event.preventDefault();
-  const sourceId = state.draggedSceneId || event.dataTransfer.getData("text/plain");
+  const sourceId = state.draggedClipId || event.dataTransfer.getData("text/plain");
   const insertAfter = event.clientX > target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2;
-  reorderTimeline(sourceId, target.dataset.sceneId, insertAfter).catch(error => toast(error.message, true));
+  reorderTimeline(sourceId, target.dataset.clipId, insertAfter).catch(error => toast(error.message, true));
 });
 $("#timelineZoom").addEventListener("input", renderTimeline);
+$("#timelineSelectTool").addEventListener("click", () => {
+  state.editTool = "select";
+  $("#timelineSelectTool").classList.add("active");
+  $("#timelineRazorTool").classList.remove("active");
+  renderTimeline();
+});
+$("#timelineRazorTool").addEventListener("click", () => {
+  state.editTool = "razor";
+  $("#timelineRazorTool").classList.add("active");
+  $("#timelineSelectTool").classList.remove("active");
+  renderTimeline();
+  toast("Razor ready — click a video clip to cut it");
+});
+$("#timelineSplitButton").addEventListener("click", () => splitTimelineClip().catch(error => toast(error.message, true)));
+$("#timelineDeleteButton").addEventListener("click", () => deleteTimelineClip().catch(error => toast(error.message, true)));
+$("#timelineUndoButton").addEventListener("click", () => undoTimeline().catch(error => toast(error.message, true)));
+$("#timelineRedoButton").addEventListener("click", () => redoTimeline().catch(error => toast(error.message, true)));
+$("#timelineSnapButton").addEventListener("click", () => {
+  state.snapEnabled = !state.snapEnabled;
+  $("#timelineSnapButton").classList.toggle("active", state.snapEnabled);
+  $("#timelineSnapButton").setAttribute("aria-pressed", String(state.snapEnabled));
+  toast(`Timeline snapping ${state.snapEnabled ? "enabled" : "disabled"}`);
+});
 $("#timelineCanvas").addEventListener("click", event => {
   if (event.target.closest(".timeline-clip,.caption-clip")) return;
   const scroll = $("#timelineScroll");
@@ -1021,18 +1423,21 @@ $("#replaceMediaButton").addEventListener("click", () => $("#replacementMediaInp
 }));
 $("#replacementMediaInput").addEventListener("change", event => uploadReplacementMedia(event.target.files[0]).catch(error => toast(error.message, true)));
 $("#timelineTransition").addEventListener("change", event => { $("#timelineTransitionDuration").disabled = event.target.value === "cut"; updatePreviewAt(state.previewTime, false); });
-$("#timelineCaption").addEventListener("input", event => { $("#previewCaption").textContent = event.target.value; $("#previewCaption").hidden = !event.target.value; });
+$("#timelineCaption").addEventListener("input", event => {
+  if (state.activeTimelineSceneId) state.captionDrafts[state.activeTimelineSceneId] = event.target.value;
+  updatePreviewAt(state.previewTime, false);
+});
 $("#timelineCaption").addEventListener("input", () => { $("#autosaveStatus").textContent = "Unsaved caption changes"; });
 $("#timelineMotion").addEventListener("change", () => updatePreviewAt(state.previewTime, false));
 $("#previewPlayButton").addEventListener("click", () => togglePreview().catch(error => toast(error.message, true)));
 $("#previewBackButton").addEventListener("click", () => {
-  const index = Math.max(0, state.scenes.findIndex(scene => scene.id === state.activeTimelineSceneId) - 1);
-  if (state.scenes[index]) selectTimelineScene(state.scenes[index].id);
+  const index = Math.max(0, state.timelineClips.findIndex(clip => clip.id === state.activeTimelineClipId) - 1);
+  if (state.timelineClips[index]) selectTimelineClip(state.timelineClips[index].id);
 });
 $("#previewForwardButton").addEventListener("click", () => {
-  const current = state.scenes.findIndex(scene => scene.id === state.activeTimelineSceneId);
-  const index = Math.min(state.scenes.length - 1, current + 1);
-  if (state.scenes[index]) selectTimelineScene(state.scenes[index].id);
+  const current = state.timelineClips.findIndex(clip => clip.id === state.activeTimelineClipId);
+  const index = Math.min(state.timelineClips.length - 1, current + 1);
+  if (state.timelineClips[index]) selectTimelineClip(state.timelineClips[index].id);
 });
 $("#previewFullscreenButton").addEventListener("click", () => $("#previewStage").requestFullscreen?.());
 $("#previewScrubber").addEventListener("input", event => {
@@ -1042,9 +1447,13 @@ $("#previewScrubber").addEventListener("input", event => {
   updatePreviewAt(value);
 });
 $("#previewAudio").addEventListener("timeupdate", event => updatePreviewAt(event.target.currentTime));
-$("#previewAudio").addEventListener("play", () => { $("#previewPlayButton").textContent = "❚❚"; });
-$("#previewAudio").addEventListener("pause", () => { $("#previewPlayButton").textContent = "▶"; });
-$("#previewAudio").addEventListener("ended", () => { $("#previewPlayButton").textContent = "▶"; updatePreviewAt(0); });
+$("#previewAudio").addEventListener("play", () => { state.isPreviewPlaying = true; $("#previewPlayButton").textContent = "❚❚"; });
+$("#previewAudio").addEventListener("pause", () => {
+  state.isPreviewPlaying = false;
+  if (!$("#previewVideo").paused) $("#previewVideo").pause();
+  $("#previewPlayButton").textContent = "▶";
+});
+$("#previewAudio").addEventListener("ended", () => { state.isPreviewPlaying = false; $("#previewPlayButton").textContent = "▶"; updatePreviewAt(0); });
 $("#saveCaptionStyleButton").addEventListener("click", () => saveCaptionStyle().catch(error => toast(error.message, true)));
 $$("[data-inspector-tab]").forEach(button => button.addEventListener("click", () => showInspector(button.dataset.inspectorTab)));
 $$("[data-style-toggle]").forEach(button => button.addEventListener("click", () => {
@@ -1066,7 +1475,7 @@ $$("[data-caption-align]").forEach(button => button.addEventListener("click", ()
 $$("[data-caption-preset]").forEach(button => button.addEventListener("click", () => applyCaptionPreset(button.dataset.captionPreset)));
 $("#captionSizeRange").addEventListener("input", event => { $("#captionSize").value = event.target.value; updateCaptionPreviewStyle(); });
 $("#captionSize").addEventListener("input", event => { $("#captionSizeRange").value = event.target.value; updateCaptionPreviewStyle(); });
-$$('#captionFont,#captionPosition,#captionTextColor,#captionCharacterSpacing,#captionLineSpacing,#captionScale,#captionPositionX,#captionPositionY,#captionRotation,#captionOpacity,#captionStrokeEnabled,#captionStrokeColor,#captionStrokeWidth,#captionBackgroundEnabled,#captionBackgroundColor,#captionBackgroundOpacity,#captionGlowEnabled,#captionGlowColor,#captionGlowRadius,#captionShadowEnabled,#captionShadowColor,#captionShadowBlur,#captionShadowX,#captionShadowY').forEach(input => input.addEventListener("input", updateCaptionPreviewStyle));
+$$('#captionFont,#captionPosition,#captionTextColor,#captionCharacterSpacing,#captionLineSpacing,#captionScale,#captionPositionX,#captionPositionY,#captionRotation,#captionOpacity,#captionStrokeEnabled,#captionStrokeColor,#captionStrokeWidth,#captionBackgroundEnabled,#captionBackgroundColor,#captionBackgroundOpacity,#captionGlowEnabled,#captionGlowColor,#captionGlowRadius,#captionShadowEnabled,#captionShadowColor,#captionShadowBlur,#captionShadowX,#captionShadowY,#captionMaxLines,#captionWordsPerLine').forEach(input => input.addEventListener("input", () => { updateCaptionPreviewStyle(); updatePreviewAt(state.previewTime, false); }));
 $("#addFontButton").addEventListener("click", () => $("#fontDialog").showModal());
 $("#downloadFontButton").addEventListener("click", () => $("#fontDialog").showModal());
 $("#dialogUploadFontButton").addEventListener("click", () => $("#fontUploadInput").click());
@@ -1081,15 +1490,37 @@ $$("[data-editor-tool]").forEach(button => button.addEventListener("click", () =
   if (tool === "media") renderMediaBin();
 }));
 $("#renderButton").addEventListener("click", startRender);
+$("#browseExportDirectory").addEventListener("click", () => browseExportDirectory().catch(error => toast(error.message, true)));
+$("#exportPreset").addEventListener("change", applyExportPreset);
+$("#exportResolution").addEventListener("change", () => updateExportFields(true));
+$("#exportFps").addEventListener("change", () => updateExportFields(true));
+$("#exportVideoBitrate").addEventListener("change", () => updateExportFields(true));
+$("#exportAudioBitrate").addEventListener("change", () => updateExportFields(true));
+$$('#exportWidth,#exportHeight,#exportCustomBitrate').forEach(input => input.addEventListener("input", () => updateExportFields(true)));
 $("#openOutputButton").addEventListener("click", async () => {
   try {
-    const result = await api(`/api/projects/${state.current.id}/open-folder`, { method: "POST", body: JSON.stringify({ kind: "renders" }) });
+    const result = await api(`/api/projects/${state.current.id}/open-folder`, {
+      method: "POST", body: JSON.stringify({ kind: "renders", path: $("#exportDirectory").value }),
+    });
     toast(`Opened ${result.path}`);
   } catch (error) { toast(error.message, true); }
 });
 document.addEventListener("keydown", event => {
-  if (!document.body.classList.contains("editor-mode") || event.target.matches("input,textarea,select")) return;
+  if (event.defaultPrevented || !document.body.classList.contains("editor-mode") || event.target.closest("input,textarea,select,button,[contenteditable='true']")) return;
   if (event.code === "Space") { event.preventDefault(); togglePreview().catch(error => toast(error.message, true)); }
+  if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "v") {
+    event.preventDefault(); $("#timelineSelectTool").click();
+  }
+  if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "b") {
+    event.preventDefault(); $("#timelineRazorTool").click();
+  }
+  if ((event.key === "Backspace" || event.key === "Delete") && state.activeTimelineClipId) {
+    event.preventDefault(); deleteTimelineClip().catch(error => toast(error.message, true));
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    (event.shiftKey ? redoTimeline() : undoTimeline()).catch(error => toast(error.message, true));
+  }
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
     event.preventDefault();
     const direction = event.key === "ArrowLeft" ? -1 : 1;

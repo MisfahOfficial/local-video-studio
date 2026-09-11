@@ -37,22 +37,30 @@
 - Local TTF/OTF upload and protected direct font downloads
 - Advanced ASS caption rendering through FFmpeg/libass
 
-## Version 0.5 — precision sync
+## Version 0.5 — real timeline editing and export control (included now)
+
+- Persistent main-track clips independent from script/caption timing
+- Drag reorder, left/right trim handles, playhead split, razor, delete, undo/redo, and magnetic gap closing
+- Visible preview transport with Space-bar play/pause and keyboard shortcuts
+- One-to-four-line caption cards with adjustable words per line
+- Named exports, destination browser, quality presets, resolutions, frame rates, and video/audio bitrates
+- Apple VideoToolbox H.264 acceleration when available
+
+## Version 0.6 — precision sync
 
 - Background Faster-Whisper transcription job
 - Word-level script-to-audio alignment and shorter caption phrases
 - Audio waveform in the timeline
-- Drag-to-adjust scene boundaries with duration validation
 - Re-render only changed scene clips
 
-## Version 0.6 — generated mixed media
+## Version 0.7 — generated mixed media
 
 - One or more image-to-video/text-to-video provider adapters
 - Per-scene media choice: still, generated clip, or imported clip
 - Video job polling, cancellation, retries, and provider cost estimates
 - B-roll library and automatic still/video budget allocation
 
-## Version 0.7 — richer editing
+## Version 0.8 — richer editing
 
 - Transition registry with real overlaps and crossfades
 - Animated captions and reusable caption themes

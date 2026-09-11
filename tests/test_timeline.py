@@ -8,7 +8,13 @@ from pathlib import Path
 from app.domain import GenerationRequest
 from app.providers.mock import MockImageProvider
 from app.timeline.actions import build_default_motion_registry
-from app.timeline.renderer import FFmpegRenderer, build_subtitle_style, write_scene_ass, write_scene_srt
+from app.timeline.renderer import (
+    FFmpegRenderer,
+    build_subtitle_style,
+    caption_segments,
+    write_scene_ass,
+    write_scene_srt,
+)
 
 
 class TimelineTests(unittest.TestCase):
@@ -30,6 +36,19 @@ class TimelineTests(unittest.TestCase):
             self.assertIn("00:00:00,000 --> 00:00:02,345", text)
             self.assertIn("A first caption.", text)
             self.assertNotIn("Narration.", text)
+
+    def test_caption_segments_respect_line_and_word_limits(self) -> None:
+        scene = {
+            "start_seconds": 0.0,
+            "end_seconds": 8.0,
+            "caption_text": "one two three four five six seven eight nine ten eleven twelve",
+        }
+        segments = caption_segments(scene, {"max_lines": 2, "words_per_line": 3})
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0][2], "one two three\nfour five six")
+        self.assertEqual(segments[1][2], "seven eight nine\nten eleven twelve")
+        self.assertEqual(segments[0][1], segments[1][0])
+        self.assertEqual(segments[-1][1], 8.0)
 
     def test_caption_style_builds_safe_ass_options(self) -> None:
         style = build_subtitle_style({

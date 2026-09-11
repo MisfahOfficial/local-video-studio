@@ -61,6 +61,11 @@ class SmokePipelineTests(unittest.TestCase):
                 assets=db.list_assets(project["id"]),
                 project_dir=root / "project",
                 width=320, height=180, fps=10, burn_captions=True,
+                timeline_clips=db.list_timeline_clips(project["id"]),
+                output_directory=root / "finished",
+                output_name="My Test Export",
+                video_bitrate_kbps=1_000,
+                audio_bitrate_kbps=128,
                 caption_style={
                     "font": "Arial", "size": 28, "case": "upper", "position": "bottom",
                     "alignment": "center", "text_color": "#FFFFFF", "opacity": 1,
@@ -71,6 +76,7 @@ class SmokePipelineTests(unittest.TestCase):
                 },
             )
             self.assertTrue(output.is_file())
+            self.assertEqual(output.name, "My Test Export.mp4")
             self.assertGreater(output.stat().st_size, 1_000)
             self.assertTrue((root / "project" / "captions.srt").is_file())
             self.assertTrue((root / "project" / "captions.ass").is_file())

@@ -87,12 +87,12 @@ class DatabaseTests(unittest.TestCase):
                 """
             )
         migrated = Database(path)
-        self.assertEqual(migrated.schema_version(), 3)
+        self.assertEqual(migrated.schema_version(), 4)
         self.assertEqual(migrated.get_project("kept")["name"], "Existing work")
         self.assertEqual(migrated.get_project("kept")["default_provider"], "runware")
         self.assertEqual(migrated.get_project("kept")["requested_scene_count"], 0)
         self.assertEqual(migrated.get_project("kept")["caption_style"], {})
-        self.assertEqual(len(list((root / "backups").glob("studio-pre-v3-*.sqlite3"))), 1)
+        self.assertEqual(len(list((root / "backups").glob("studio-pre-v4-*.sqlite3"))), 1)
 
     def test_scene_duration_caption_and_reorder(self) -> None:
         project = self.db.create_project("Timeline test", "us_nostalgia")
@@ -156,10 +156,46 @@ class DatabaseTests(unittest.TestCase):
                 """
             )
         migrated = Database(path)
-        self.assertEqual(migrated.schema_version(), 3)
+        self.assertEqual(migrated.schema_version(), 4)
         self.assertEqual(migrated.get_project("project-v2")["caption_style"], {})
         self.assertEqual(migrated.get_scene("scene-v2")["caption_text"], "Original caption")
-        self.assertEqual(len(list((root / "backups").glob("studio-pre-v3-*.sqlite3"))), 1)
+        clips = migrated.list_timeline_clips("project-v2")
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(clips[0]["scene_id"], "scene-v2")
+        self.assertEqual(len(list((root / "backups").glob("studio-pre-v4-*.sqlite3"))), 1)
+
+    def test_timeline_clip_trim_reorder_split_delete_and_restore(self) -> None:
+        project = self.db.create_project("Editable clips", "us_nostalgia")
+        drafts = RuleBasedScenePlanner().plan(
+            "First the kitchen opened. Then the recipe returned. Finally everyone gathered.",
+            theme_id="us_nostalgia", duration_seconds=15, target_scene_count=3,
+        )
+        scenes = self.db.replace_scenes(project["id"], drafts)
+        clips = self.db.list_timeline_clips(project["id"])
+        self.assertEqual(len(clips), 3)
+        self.assertEqual([clip["scene_id"] for clip in clips], [scene["id"] for scene in scenes])
+
+        trimmed = self.db.set_timeline_clip_duration(clips[0]["id"], 7.0, 1.25)
+        self.assertEqual(trimmed[0]["end_seconds"], 7.0)
+        self.assertEqual(trimmed[0]["source_in_seconds"], 1.25)
+        self.assertEqual(trimmed[1]["start_seconds"], 7.0)
+
+        reordered = self.db.reorder_timeline_clips(
+            project["id"], [trimmed[2]["id"], trimmed[0]["id"], trimmed[1]["id"]]
+        )
+        self.assertEqual(reordered[0]["id"], trimmed[2]["id"])
+        self.assertEqual(reordered[1]["start_seconds"], reordered[0]["end_seconds"])
+
+        split_at = (reordered[0]["end_seconds"] - reordered[0]["start_seconds"]) / 2
+        split, new_id = self.db.split_timeline_clip(reordered[0]["id"], split_at)
+        self.assertEqual(len(split), 4)
+        self.assertEqual(split[1]["id"], new_id)
+        self.assertEqual(split[1]["scene_id"], split[0]["scene_id"])
+
+        after_delete = self.db.delete_timeline_clip(new_id)
+        self.assertEqual(len(after_delete), 3)
+        restored = self.db.replace_timeline_clips(project["id"], split)
+        self.assertEqual([clip["id"] for clip in restored], [clip["id"] for clip in split])
 
 
 if __name__ == "__main__":

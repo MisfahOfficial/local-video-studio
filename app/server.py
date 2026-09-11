@@ -58,6 +58,8 @@ DEFAULT_CAPTION_STYLE = {
     "shadow_blur": 5,
     "shadow_x": 2,
     "shadow_y": 3,
+    "max_lines": 2,
+    "words_per_line": 7,
 }
 
 
@@ -82,6 +84,8 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
         shadow_blur = float(style.get("shadow_blur", 5))
         shadow_x = float(style.get("shadow_x", 2))
         shadow_y = float(style.get("shadow_y", 3))
+        max_lines = int(style.get("max_lines", 2))
+        words_per_line = int(style.get("words_per_line", 7))
     except (TypeError, ValueError) as error:
         raise ApiError("Caption style contains an invalid number") from error
     ranges = {
@@ -92,6 +96,7 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
         "rotation": (rotation, -180, 180), "stroke width": (stroke_width, 0, 20),
         "glow radius": (glow_radius, 0, 40), "shadow blur": (shadow_blur, 0, 40),
         "shadow x": (shadow_x, -50, 50), "shadow y": (shadow_y, -50, 50),
+        "maximum lines": (max_lines, 0, 4), "words per line": (words_per_line, 2, 20),
     }
     for label, (number, minimum, maximum) in ranges.items():
         if not minimum <= number <= maximum:
@@ -139,6 +144,48 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
         "shadow_blur": shadow_blur,
         "shadow_x": shadow_x,
         "shadow_y": shadow_y,
+        "max_lines": max_lines,
+        "words_per_line": words_per_line,
+    }
+
+
+def normalize_render_options(value: Any) -> dict[str, Any]:
+    supplied = value if isinstance(value, dict) else {}
+    try:
+        width = int(supplied.get("width", 1920))
+        height = int(supplied.get("height", 1080))
+        fps = int(supplied.get("fps", 30))
+        video_bitrate = int(supplied.get("video_bitrate_kbps", 12_000))
+        audio_bitrate = int(supplied.get("audio_bitrate_kbps", 192))
+    except (TypeError, ValueError) as error:
+        raise ApiError("Export settings contain an invalid number") from error
+    if not 320 <= width <= 7680 or not 240 <= height <= 4320:
+        raise ApiError("Export resolution is outside the supported range")
+    if width % 2 or height % 2:
+        raise ApiError("Export width and height must be even numbers for H.264 video")
+    if fps not in {24, 25, 30, 50, 60}:
+        raise ApiError("Export frame rate must be 24, 25, 30, 50, or 60")
+    if not 500 <= video_bitrate <= 100_000:
+        raise ApiError("Video bitrate must be between 500 and 100000 Kbps")
+    if audio_bitrate not in {96, 128, 160, 192, 256, 320}:
+        raise ApiError("Choose a supported audio bitrate")
+    output_name = str(supplied.get("output_name") or "video").strip()
+    if not output_name or len(output_name) > 160 or any(character in output_name for character in "/\\\0"):
+        raise ApiError("Video name must be 1–160 characters and cannot contain slashes")
+    output_directory = str(supplied.get("output_directory") or "").strip()
+    if len(output_directory) > 4096 or "\0" in output_directory:
+        raise ApiError("Invalid export location")
+    return {
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "video_bitrate_kbps": video_bitrate,
+        "audio_bitrate_kbps": audio_bitrate,
+        "output_name": output_name,
+        "output_directory": output_directory,
+        "burn_captions": bool(supplied.get("burn_captions", True)),
+        "preset": str(supplied.get("preset") or "youtube-1080p")[:50],
+        "caption_style": normalize_caption_style(supplied.get("caption_style")),
     }
 
 
@@ -181,7 +228,13 @@ class StudioApplication:
             target_scene_count=int(project.get("requested_scene_count") or project.get("target_scene_count") or 0),
             actual_scene_count=len(scenes) if scenes else None,
         ) if project.get("script") else []
-        return {"project": project, "scenes": scenes, "assets": assets, "warnings": warnings}
+        return {
+            "project": project,
+            "scenes": scenes,
+            "timeline_clips": self.db.list_timeline_clips(project_id),
+            "assets": assets,
+            "warnings": warnings,
+        }
 
     def asset_payloads(self, project_id: str) -> list[dict[str, Any]]:
         assets = self.db.list_assets(project_id)
@@ -211,11 +264,14 @@ class StudioApplication:
                 render["media_url"] = ""
         return render
 
-    def open_project_folder(self, project_id: str, kind: str) -> Path:
+    def open_project_folder(self, project_id: str, kind: str, custom_path: str = "") -> Path:
         if not self.db.get_project(project_id):
             raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
         project_dir = self.paths.project_dir(project_id).resolve()
-        target = project_dir / "renders" if kind == "renders" else project_dir
+        if custom_path:
+            target = Path(custom_path).expanduser().resolve()
+        else:
+            target = project_dir / "renders" if kind == "renders" else project_dir
         target.mkdir(parents=True, exist_ok=True)
         if sys.platform == "darwin":
             command = ["open", str(target)]
@@ -228,6 +284,37 @@ class StudioApplication:
             raise ApiError(f"Cannot open the folder automatically because {executable} is unavailable")
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return target
+
+    def choose_export_folder(self, project_id: str) -> Path | None:
+        if not self.db.get_project(project_id):
+            raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+        default = self.paths.project_dir(project_id) / "renders"
+        default.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "darwin":
+            script = 'POSIX path of (choose folder with prompt "Choose where to export the video")'
+            result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        elif sys.platform == "win32":
+            script = (
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$d=New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$d.Description='Choose where to export the video'; "
+                "if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}"
+            )
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-STA", "-Command", script], capture_output=True, text=True
+            )
+        elif shutil.which("zenity"):
+            result = subprocess.run(
+                ["zenity", "--file-selection", "--directory", "--title=Choose export folder"],
+                capture_output=True, text=True,
+            )
+        else:
+            return default
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        chosen = Path(result.stdout.strip()).expanduser().resolve()
+        chosen.mkdir(parents=True, exist_ok=True)
+        return chosen
 
     def plan_project(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
         project = self.db.get_project(project_id)
@@ -350,6 +437,10 @@ def build_handler(application: StudioApplication):
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/scenes", path)
             if match:
                 self._json({"scenes": application.db.list_scenes(match.group(1))})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/timeline", path)
+            if match:
+                self._json({"timeline_clips": application.db.list_timeline_clips(match.group(1))})
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/assets", path)
             if match:
@@ -528,13 +619,57 @@ def build_handler(application: StudioApplication):
                     raise ApiError(str(error)) from error
                 self._json({"scenes": scenes})
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/timeline/reorder", path)
+            if match:
+                clip_ids = self._clip_ids(self._read_json().get("clip_ids"))
+                try:
+                    clips = application.db.reorder_timeline_clips(match.group(1), clip_ids)
+                except (KeyError, ValueError) as error:
+                    raise ApiError(str(error)) from error
+                self._json({"timeline_clips": clips})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/timeline/restore", path)
+            if match:
+                body = self._read_json()
+                clips = body.get("timeline_clips")
+                if not isinstance(clips, list) or any(not isinstance(item, dict) for item in clips):
+                    raise ApiError("timeline_clips must be a list of clips")
+                try:
+                    restored = application.db.replace_timeline_clips(match.group(1), clips)
+                except (KeyError, ValueError, TypeError) as error:
+                    raise ApiError(str(error)) from error
+                self._json({"timeline_clips": restored})
+                return
+            match = re.fullmatch(r"/api/timeline-clips/([a-zA-Z0-9_-]+)/split", path)
+            if match:
+                try:
+                    clips, new_id = application.db.split_timeline_clip(
+                        match.group(1), float(self._read_json().get("offset_seconds"))
+                    )
+                except (KeyError, ValueError, TypeError) as error:
+                    raise ApiError(str(error)) from error
+                self._json({"timeline_clips": clips, "new_clip_id": new_id})
+                return
+            match = re.fullmatch(r"/api/timeline-clips/([a-zA-Z0-9_-]+)/delete", path)
+            if match:
+                try:
+                    clips = application.db.delete_timeline_clip(match.group(1))
+                except (KeyError, ValueError) as error:
+                    raise ApiError(str(error)) from error
+                self._json({"timeline_clips": clips})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/choose-export-folder", path)
+            if match:
+                chosen = application.choose_export_folder(match.group(1))
+                self._json({"cancelled": chosen is None, "path": str(chosen) if chosen else ""})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/open-folder", path)
             if match:
                 body = self._read_json()
                 kind = str(body.get("kind") or "renders")
                 if kind not in {"renders", "project"}:
                     raise ApiError("Folder kind must be renders or project")
-                target = application.open_project_folder(match.group(1), kind)
+                target = application.open_project_folder(match.group(1), kind, str(body.get("path") or ""))
                 self._json({"opened": True, "path": str(target)})
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/(pause|resume)", path)
@@ -549,9 +684,11 @@ def build_handler(application: StudioApplication):
                 project = application.db.get_project(project_id)
                 if not project:
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
-                options = self._read_json()
-                style = normalize_caption_style(options.get("caption_style") or project.get("caption_style"))
-                options["caption_style"] = style
+                supplied = self._read_json()
+                if not supplied.get("caption_style"):
+                    supplied["caption_style"] = project.get("caption_style")
+                options = normalize_render_options(supplied)
+                style = options["caption_style"]
                 application.db.update_project(project_id, caption_style=style)
                 job_id = application.rendering.start(project_id, options)
                 self._json({"render_job_id": job_id}, HTTPStatus.ACCEPTED)
@@ -610,7 +747,20 @@ def build_handler(application: StudioApplication):
             path = urllib.parse.urlparse(self.path).path
             match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)", path)
             if not match:
-                raise ApiError("Not found", HTTPStatus.NOT_FOUND)
+                clip_match = re.fullmatch(r"/api/timeline-clips/([a-zA-Z0-9_-]+)", path)
+                if not clip_match:
+                    raise ApiError("Not found", HTTPStatus.NOT_FOUND)
+                body = self._read_json()
+                try:
+                    clips = application.db.set_timeline_clip_duration(
+                        clip_match.group(1),
+                        float(body.get("duration_seconds")),
+                        float(body["source_in_seconds"]) if "source_in_seconds" in body else None,
+                    )
+                except (KeyError, ValueError, TypeError) as error:
+                    raise ApiError(str(error)) from error
+                self._json({"timeline_clips": clips})
+                return
             body = self._read_json()
             duration = body.pop("duration_seconds", None)
             caption_text = body.get("caption_text")
@@ -656,6 +806,12 @@ def build_handler(application: StudioApplication):
                 return None
             if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                 raise ApiError("scene_ids must be a list of scene identifiers")
+            return value
+
+        @staticmethod
+        def _clip_ids(value: Any) -> list[str]:
+            if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+                raise ApiError("clip_ids must be a non-empty list of clip identifiers")
             return value
 
         def _content_length(self, maximum: int) -> int:

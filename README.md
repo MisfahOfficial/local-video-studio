@@ -1,4 +1,4 @@
-# Local Video Studio v0.4
+# Local Video Studio v0.5
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -21,13 +21,15 @@ Extra candidates and premium models are opt-in on individual scenes.
 - Script, duration, voice-over, and target-image validation warnings
 - Candidate review and manual image selection
 - CapCut-inspired three-panel editor with a media bin, separate real-time preview, and inspector
-- Synchronized video, caption, and voice-over tracks with a ruler, zoom, seeking, and drag-to-reorder
-- Per-scene duration, caption, motion, fade, and cut controls
+- Synchronized video, caption, and voice-over tracks with a ruler, zoom, seeking, and persistent clip reordering
+- Real trim handles, playhead splitting, deletion, magnetic gap closing, and timeline undo/redo
+- Visible player controls plus Space-bar play/pause and one-second keyboard seeking
+- Per-clip duration/source trim plus per-scene caption, motion, fade, and cut controls
 - Local replacement image/video uploads with automatic scene selection
 - Advanced caption font, pattern, case, alignment, spacing, transform, blend, stroke, background, glow, shadow, and presets
 - TTF/OTF font installation from a file or a protected direct Google Fonts/GitHub download
 - Local FFmpeg rendering, voice-over muxing, and optional styled burned captions
-- Separate export window with resolution, frame rate, progress, output-folder, and video access
+- Separate export window with named files, quality presets, resolutions, frame rates, video/audio bitrates, browsable destination, progress, and video access
 - Extension contracts for new image providers, video providers, and effects
 - Browser UI served only on `127.0.0.1` by default
 - Finder/Explorer output access and a direct rendered-video link
@@ -69,10 +71,16 @@ The command accepts `--data-dir`, `--host`, `--port`, and `--no-browser`.
 5. Click **Generate missing images**. The queue can be paused, resumed, retried,
    or safely restarted. Provider errors appear with their scene and option.
 6. Open **Timeline** to use the media bin, live player, caption inspector, and
-   synchronized tracks. Edit scene duration and caption text, drag clips to
-   reorder them, or import a local replacement image/video. Save the caption
-   design for the project.
-7. Open the separate **Export** window. Caption burning can be disabled to produce a clean video;
+   synchronized tracks. Drag clips to reorder them, drag either cyan clip edge
+   to trim, or place the playhead and use **Split**. The razor tool cuts wherever
+   you click. Imported-video trims preserve their source-in point; still-image
+   trims change their on-screen duration. Import replacements or save the caption
+   design for the project at any time.
+7. Press **Space** to play/pause. Use **V** for selection, **B** for the razor,
+   Left/Right Arrow to seek one second, and Command/Ctrl-Z to undo a timeline edit.
+8. Open the separate **Export** window. Name the file, choose a quality preset or
+   custom resolution/frame rate/bitrates, and browse to any destination. Caption
+   burning can be disabled to produce a clean video;
    `captions.srt` is always written in the project folder. Use **Open output
    folder** or **Open rendered video** when the render completes.
 
@@ -86,6 +94,8 @@ spend.
 
 The base installation uses the supplied script as captions and distributes
 scene timing across the measured voice-over duration by narration word count.
+Caption cards can be limited to one, two, three, or four lines and have an
+adjustable words-per-line target. Preview and FFmpeg output use the same grouping.
 This is free and deterministic. `app/transcription.py` also contains an optional
 local Faster-Whisper adapter for word timestamps:
 
@@ -114,9 +124,10 @@ and final renders. SQLite uses WAL mode so an interrupted session can resume.
 ## Safe updates
 
 Program code and project data live in different folders, so updating the code
-does not replace projects, keys, images, captions, or renders. On the first v0.3
-launch, the database is copied to `backups/studio-pre-v3-<timestamp>.sqlite3`
-before editable captions and caption-style storage are added.
+does not replace projects, keys, images, captions, or renders. On the first v0.5
+launch, the database is copied to `backups/studio-pre-v4-<timestamp>.sqlite3`
+before the independent editable video timeline is added. Existing scenes become
+clips automatically without changing their media or timing.
 
 To update a GitHub clone on macOS, stop the running studio and double-click
 **Update Local Video Studio.command**. It pulls only the currently checked-out
