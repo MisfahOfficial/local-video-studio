@@ -64,8 +64,8 @@ function startPlanningProgress(mode) {
     let stage = "Securely uploading the voice-over…";
     let detail = "The VO is sent only to Gemini for this plan and removed after processing.";
     if (elapsed >= 8) { stage = "Listening and matching the script…"; detail = "Gemini is locating spoken phrases, pauses and topic changes in the real audio."; }
-    if (elapsed >= 30) { stage = "Choosing accurate scene boundaries…"; detail = "The plan is being cut at semantic changes instead of equal word estimates."; }
-    if (elapsed >= 75) { stage = "Finishing image direction…"; detail = "Specific subjects, emotions and chronological visual instructions are being validated."; }
+    if (elapsed >= 30) { stage = "Planning scenes and checking Gemini capacity…"; detail = "Temporary capacity errors are retried automatically before a stable fallback model is used."; }
+    if (elapsed >= 75) { stage = "Finishing image direction…"; detail = "Accurate boundaries, specific subjects and chronological visual instructions are being validated."; }
     $("#planningStage").textContent = stage;
     $("#planningDetail").textContent = detail;
   };
@@ -106,7 +106,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.6.0"}`;
+    $("#appVersion").textContent = `v${health.version || "0.6.1"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));

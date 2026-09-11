@@ -19,7 +19,7 @@ class ProviderHttpTests(unittest.TestCase):
     def test_valid_authorization_header_is_preserved(self) -> None:
         headers = _request_headers({"Authorization": "Bearer ascii-key-123"})
         self.assertEqual(headers["Authorization"], "Bearer ascii-key-123")
-        self.assertEqual(headers["User-Agent"], "LocalVideoStudio/0.6.0")
+        self.assertEqual(headers["User-Agent"], "LocalVideoStudio/0.6.1")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import http.client
 import json
 import math
 import mimetypes
+import random
 import time
 import urllib.parse
 from pathlib import Path
@@ -53,6 +54,24 @@ class GeminiFilesClient:
     """Small dependency-free Gemini Files + Interactions API client."""
 
     base_url = "https://generativelanguage.googleapis.com"
+    planning_fallback_models = (
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+    )
+    transient_markers = (
+        "http 408",
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "high demand",
+        "temporarily unavailable",
+        "try again later",
+        "timed out",
+        "timeout",
+    )
 
     def __init__(self, api_key: str):
         self.api_key = api_key.strip()
@@ -148,46 +167,90 @@ class GeminiFilesClient:
         return file_info
 
     def transcribe(self, *, file_uri: str, mime_type: str) -> dict[str, Any]:
-        response = request_json(
-            f"{self.base_url}/v1beta/interactions",
-            method="POST",
-            payload={
-                "model": "gemini-3.5-transcribe",
-                "input": [{"type": "audio", "uri": file_uri, "mime_type": mime_type}],
-                "generation_config": {
-                    "transcription_config": {
-                        "language_codes": [],
-                        "mode": {"type": "verbatim", "timestamp_granularities": ["word"]},
-                    }
-                },
-                "store": False,
+        payload = {
+            "model": "gemini-3.5-transcribe",
+            "input": [{"type": "audio", "uri": file_uri, "mime_type": mime_type}],
+            "generation_config": {
+                "transcription_config": {
+                    "language_codes": [],
+                    "mode": {"type": "verbatim", "timestamp_granularities": ["word"]},
+                }
             },
-            headers=self.headers,
+            "store": False,
+        }
+        return self._interaction_with_retry(
+            payload=payload,
+            models=("gemini-3.5-transcribe",),
+            preferred_attempts=4,
             timeout=1800,
+            task="voice-over transcription",
         )
-        assert isinstance(response, dict)
-        return response
 
     def create_scene_plan(self, *, model: str, prompt: str) -> dict[str, Any]:
-        response = request_json(
-            f"{self.base_url}/v1beta/interactions",
-            method="POST",
-            payload={
-                "model": model,
-                "input": [{"type": "text", "text": prompt}],
-                "response_format": AUDIO_SCENE_SCHEMA,
-                "generation_config": {
-                    "temperature": 0.15,
-                    "thinking_level": "low",
-                    "max_output_tokens": 65536,
-                },
-                "store": False,
+        payload = {
+            "model": model,
+            "input": [{"type": "text", "text": prompt}],
+            "response_format": AUDIO_SCENE_SCHEMA,
+            "generation_config": {
+                "temperature": 0.15,
+                "thinking_level": "low",
+                "max_output_tokens": 65536,
             },
-            headers=self.headers,
+            "store": False,
+        }
+        models = tuple(dict.fromkeys((model, *self.planning_fallback_models)))
+        return self._interaction_with_retry(
+            payload=payload,
+            models=models,
+            preferred_attempts=3,
             timeout=900,
+            task="scene planning",
         )
-        assert isinstance(response, dict)
-        return response
+
+    @classmethod
+    def _is_transient_error(cls, error: ProviderError) -> bool:
+        message = str(error).lower()
+        return any(marker in message for marker in cls.transient_markers)
+
+    def _interaction_with_retry(
+        self,
+        *,
+        payload: dict[str, Any],
+        models: tuple[str, ...],
+        preferred_attempts: int,
+        timeout: int,
+        task: str,
+    ) -> dict[str, Any]:
+        last_error: ProviderError | None = None
+        attempted_models: list[str] = []
+        for model_index, candidate in enumerate(models):
+            attempted_models.append(candidate)
+            attempts = preferred_attempts if model_index == 0 else 1
+            for attempt in range(attempts):
+                request_payload = {**payload, "model": candidate}
+                try:
+                    response = request_json(
+                        f"{self.base_url}/v1beta/interactions",
+                        method="POST",
+                        payload=request_payload,
+                        headers=self.headers,
+                        timeout=timeout,
+                    )
+                    assert isinstance(response, dict)
+                    return response
+                except ProviderError as error:
+                    if not self._is_transient_error(error):
+                        raise
+                    last_error = error
+                    if attempt + 1 < attempts:
+                        delay = min(8.0, 2.0 ** attempt) + random.uniform(0.0, 0.35)
+                        time.sleep(delay)
+
+        models_text = ", ".join(attempted_models)
+        raise ProviderError(
+            f"Gemini {task} is temporarily busy after automatic retries across {models_text}. "
+            "Your existing scenes were preserved. Please retry in a few minutes."
+        ) from last_error
 
     def delete_file(self, name: str) -> None:
         if not name:

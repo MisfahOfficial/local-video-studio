@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
-from app.gemini_audio_planner import GeminiAudioScenePlanner
+from app.gemini_audio_planner import GeminiAudioScenePlanner, GeminiFilesClient
 from app.providers.base import ProviderError
 from app.themes import get_theme
 
@@ -67,6 +68,43 @@ def sample_items() -> list[dict[str, Any]]:
 
 
 class GeminiAudioPlannerTests(unittest.TestCase):
+    def test_transient_capacity_error_retries_then_uses_stable_fallback(self) -> None:
+        completed = {
+            "status": "completed",
+            "steps": [{"type": "model_output", "content": [{"type": "text", "text": "[]"}]}],
+        }
+        busy = ProviderError(
+            'Provider returned HTTP 500: {"error":{"message":"gemini-3.7-flash is currently experiencing high demand"}}'
+        )
+        client = GeminiFilesClient("test-key")
+        with (
+            patch(
+                "app.gemini_audio_planner.request_json",
+                side_effect=[busy, busy, busy, completed],
+            ) as request,
+            patch("app.gemini_audio_planner.time.sleep") as sleep,
+            patch("app.gemini_audio_planner.random.uniform", return_value=0.0),
+        ):
+            result = client.create_scene_plan(model="gemini-3.7-flash", prompt="Plan this scene")
+
+        self.assertEqual(result, completed)
+        attempted_models = [call.kwargs["payload"]["model"] for call in request.call_args_list]
+        self.assertEqual(
+            attempted_models,
+            ["gemini-3.7-flash", "gemini-3.7-flash", "gemini-3.7-flash", "gemini-3.8-flash"],
+        )
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1.0, 2.0])
+
+    def test_non_transient_planning_error_is_not_retried(self) -> None:
+        client = GeminiFilesClient("test-key")
+        with patch(
+            "app.gemini_audio_planner.request_json",
+            side_effect=ProviderError("Provider returned HTTP 400: invalid request"),
+        ) as request:
+            with self.assertRaisesRegex(ProviderError, "HTTP 400"):
+                client.create_scene_plan(model="gemini-3.7-flash", prompt="Plan this scene")
+        self.assertEqual(request.call_count, 1)
+
     def test_long_projects_are_split_into_bounded_planning_batches(self) -> None:
         transcript = [{"start_seconds": 0, "end_seconds": 8940, "text": "complete transcript"}]
         batches = GeminiAudioScenePlanner._planning_batches(transcript, 8940, 715)

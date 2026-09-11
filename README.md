@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.0
+# Local Video Studio v0.6.1
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -13,6 +13,7 @@ Extra candidates and premium models are opt-in on individual scenes.
 
 - Script-to-scene planning up to the requested count, without empty scenes
 - Gemini Precision Sync that listens to the real VO, matches it to the script, and places semantic scene boundaries
+- Automatic retries and stable Gemini model fallback when a planning model is temporarily overloaded
 - Theme, emotion, narrative-role, prompt, and negative-prompt generation
 - Runware image generation with Together as an optional fallback
 - A zero-cost offline provider for testing the entire workflow
@@ -49,7 +50,7 @@ The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
 
-Version 0.6.0 installs a verified CA certificate bundle automatically on macOS,
+Version 0.6.1 installs a verified CA certificate bundle automatically on macOS,
 so HTTPS image-provider requests work with python.org Python builds without
 disabling certificate verification.
 
