@@ -176,10 +176,12 @@ def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: i
 
     subject = _visual_subject(narration)
     return (
-        f"Visualize this narration without adding unsupported facts: {subject}. "
+        f"Primary visible subject and action: {subject}. "
         f"{_era_hint(narration)}. {EMOTION_DIRECTION[emotion]}. {shot}. "
         f"{theme.visual_style}. Palette: {theme.palette}. Camera: {theme.camera_language}. "
-        "One coherent moment, realistic proportions, clean cinematic 16:9 composition, no captions inside the image."
+        "Show the named subject clearly in one coherent moment; do not substitute a generic person, room, or object. "
+        "Historically credible materials, realistic proportions, layered depth, clean cinematic 16:9 composition, "
+        "no captions, logos, collages, split screens, or watermarks inside the image."
     )
 
 

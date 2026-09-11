@@ -79,6 +79,14 @@ input[type="file"] { padding: 8px; }
 .script-field { display: block; margin-top: 18px; }
 .upload-line { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; margin-top: 12px; }
 .upload-line progress { width: min(300px, 45vw); }
+.planning-progress { max-width: 760px; margin-top: 14px; padding: 14px 16px; }
+.planning-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.planning-progress-heading span, .planning-progress small { color: var(--muted); }
+.planning-progress-track { position: relative; overflow: hidden; height: 8px; margin: 11px 0 9px; border-radius: 999px; background: #29313b; }
+.planning-progress-track span { position: absolute; inset: 0 auto 0 -35%; width: 35%; border-radius: inherit; background: linear-gradient(90deg, transparent, var(--accent), #b4ff77, transparent); animation: planning-scan 1.35s ease-in-out infinite; }
+.planning-progress.error { border-color: #6d3037; }
+.planning-progress.error .planning-progress-track span { background: linear-gradient(90deg, transparent, #ff7777, transparent); animation: none; inset: 0; width: 100%; }
+@keyframes planning-scan { to { transform: translateX(390%); } }
 .action-row { margin-top: 16px; }
 .action-row.compact { margin-top: 0; }
 .hint { color: var(--muted); font-size: 12px; }
@@ -216,7 +224,40 @@ body.editor-mode .studio-editor.active { display: flex; flex-direction: column; 
 .player-title span:last-child { color: var(--muted); }
 .preview-wrap { min-height: 0; overflow: hidden; flex: 1; display: grid; place-items: center; padding: 12px; }
 .player-panel .preview-stage { width: auto; height: 100%; max-width: 100%; max-height: 100%; aspect-ratio: 16/9; }
-.player-panel .preview-controls { min-height: 52px; display: grid; grid-template-columns: auto auto auto 1fr auto auto auto minmax(90px, 1fr) auto; gap: 7px; margin: 0; padding: 8px 13px; border-top: 1px solid #222934; }
+.player-panel .preview-controls {
+  min-height: 74px; display: grid;
+  grid-template-columns: auto auto auto 1fr auto auto auto auto auto;
+  grid-template-areas: "current divider total spacer back play forward load full" "seek seek seek seek seek seek seek seek seek";
+  align-items: center; column-gap: 7px; row-gap: 2px; margin: 0; padding: 7px 13px 8px;
+  border-top: 1px solid #222934;
+}
+#previewCurrentTime { grid-area: current; }
+.player-panel .time-divider { grid-area: divider; }
+#previewTotalTime { grid-area: total; }
+#previewBackButton { grid-area: back; }
+#previewPlayButton { grid-area: play; }
+#previewForwardButton { grid-area: forward; }
+#previewFullscreenButton { grid-area: full; }
+#previewScrubber {
+  --seek-progress: 0%; --seek-buffered: 0%; grid-area: seek; appearance: none; -webkit-appearance: none;
+  display: block; width: 100%; height: 22px; margin: 0; padding: 0; border: 0; border-radius: 0;
+  background: transparent; cursor: pointer;
+}
+#previewScrubber::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--seek-progress), #6c7887 var(--seek-progress) var(--seek-buffered), #303844 var(--seek-buffered) 100%);
+}
+#previewScrubber::-webkit-slider-thumb {
+  width: 15px; height: 15px; margin-top: -4.5px; border: 2px solid #101318; border-radius: 50%;
+  appearance: none; -webkit-appearance: none; background: #f7fbff; box-shadow: 0 0 0 1px var(--accent);
+}
+#previewScrubber::-moz-range-track { height: 6px; border-radius: 999px; background: #303844; }
+#previewScrubber::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--accent); }
+#previewScrubber::-moz-range-thumb { width: 13px; height: 13px; border: 2px solid #101318; border-radius: 50%; background: #f7fbff; }
+#previewScrubber:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preview-load-state { grid-area: load; min-width: 42px; color: var(--muted); font-size: 9px; text-align: right; }
+.preview-load-state.loading { color: #ffd36b; }
+.preview-load-state.error { color: #ff7777; }
 .player-button { min-width: 31px; height: 31px; border: 0; border-radius: 7px; background: transparent; color: var(--text); }
 .player-button:hover { background: var(--surface-3); }
 .player-button.play { color: var(--accent); font-size: 17px; }
@@ -364,7 +405,10 @@ dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
   .editor-library { max-height: 280px; border-right: 0; border-bottom: 1px solid var(--border); }
   .player-panel { min-height: 420px; }
   .timeline-inspector { max-height: 680px; border-left: 0; border-top: 1px solid var(--border); }
-  .player-panel .preview-controls { grid-template-columns: auto auto auto 1fr auto auto auto; }
-  .player-panel .preview-controls input { grid-column: 1 / -1; }
+  .player-panel .preview-controls {
+    grid-template-columns: auto auto auto 1fr auto auto auto auto;
+    grid-template-areas: "current divider total spacer back play forward full" "seek seek seek seek seek seek seek seek";
+  }
+  .player-panel .preview-load-state { display: none; }
   .export-dialog-layout { grid-template-columns: 1fr; }
 }

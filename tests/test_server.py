@@ -44,7 +44,7 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
-                self.assertEqual(health["version"], "0.5.0")
+                self.assertEqual(health["version"], "0.6.0")
                 self.assertEqual(health["schema_version"], 4)
                 font_request = urllib.request.Request(
                     f"{base}/api/fonts/upload", data=b"\x00\x01\x00\x00font-data", method="POST",
@@ -152,6 +152,9 @@ class ServerTests(unittest.TestCase):
                 self.assertIn("timelineRazorTool", page)
                 self.assertIn("exportVideoBitrate", page)
                 self.assertIn("captionMaxLines", page)
+                self.assertIn("Gemini Precision Sync", page)
+                self.assertIn("planningProgress", page)
+                self.assertIn("previewLoadState", page)
             finally:
                 server.shutdown()
                 server.server_close()

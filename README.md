@@ -1,4 +1,4 @@
-# Local Video Studio v0.5
+# Local Video Studio v0.6.0
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -12,6 +12,7 @@ Extra candidates and premium models are opt-in on individual scenes.
 ## What is included
 
 - Script-to-scene planning up to the requested count, without empty scenes
+- Gemini Precision Sync that listens to the real VO, matches it to the script, and places semantic scene boundaries
 - Theme, emotion, narrative-role, prompt, and negative-prompt generation
 - Runware image generation with Together as an optional fallback
 - A zero-cost offline provider for testing the entire workflow
@@ -24,6 +25,7 @@ Extra candidates and premium models are opt-in on individual scenes.
 - Synchronized video, caption, and voice-over tracks with a ruler, zoom, seeking, and persistent clip reordering
 - Real trim handles, playhead splitting, deletion, magnetic gap closing, and timeline undo/redo
 - Visible player controls plus Space-bar play/pause and one-second keyboard seeking
+- Smooth frame timecode, a full-width draggable seek bar, buffering state, and loaded-audio progress
 - Per-clip duration/source trim plus per-scene caption, motion, fade, and cut controls
 - Local replacement image/video uploads with automatic scene selection
 - Advanced caption font, pattern, case, alignment, spacing, transform, blend, stroke, background, glow, shadow, and presets
@@ -47,6 +49,10 @@ The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
 
+Version 0.6.0 installs a verified CA certificate bundle automatically on macOS,
+so HTTPS image-provider requests work with python.org Python builds without
+disabling certificate verification.
+
 On macOS, you can instead double-click **Start Local Video Studio.command**. The
 first launch creates the private Python environment automatically. Keep the
 Terminal window open while the studio is running.
@@ -65,7 +71,7 @@ The command accepts `--data-dir`, `--host`, `--port`, and `--no-browser`.
 
 1. Create a project and choose a theme.
 2. Upload the 2:29:00 voice-over and paste the matching script.
-3. Enter `149` minutes and `715` images, then create the plan.
+3. Select **Gemini Precision Sync**, enter `715` images, and create the plan. Precision Sync uses the measured VO duration automatically.
 4. Review high-importance scenes. Keep one candidate by default; request two or
    three only where a stronger hook or reveal is worth the extra cost.
 5. Click **Generate missing images**. The queue can be paused, resumed, retried,
@@ -92,20 +98,25 @@ spend.
 
 ## Voice sync and captions
 
-The base installation uses the supplied script as captions and distributes
-scene timing across the measured voice-over duration by narration word count.
-Caption cards can be limited to one, two, three, or four lines and have an
-adjustable words-per-line target. Preview and FFmpeg output use the same grouping.
-This is free and deterministic. `app/transcription.py` also contains an optional
-local Faster-Whisper adapter for word timestamps:
+**Gemini Precision Sync** uploads the finished VO through the Gemini Files API,
+listens to the whole recording, matches it against the supplied script, and
+returns timestamped semantic scenes. The result is validated for the exact scene
+count, chronological order, and complete audio coverage before any existing scene
+is replaced. The remote VO file is deleted immediately after planning. Gemini's
+free tier can be used when it is available for the selected account/model.
+
+**Gemini Text Smart** and **Local Free** remain available as estimated-timing
+fallbacks. They distribute time without listening to the VO, so they should not
+be used for final synchronization. Caption cards can be limited to one, two,
+three, or four lines and have an adjustable words-per-line target. Preview and
+FFmpeg output use the same grouping. `app/transcription.py` also contains an
+optional local Faster-Whisper adapter:
 
 ```bash
 python -m pip install -e ".[transcription]"
 ```
 
-Automatic word-level alignment and an audio waveform remain planned precision-sync
-upgrades. The current visual editor stays dependency-free so it installs reliably
-on modest PCs.
+The current visual editor stays dependency-free so it installs reliably on modest PCs.
 
 ## Windows
 

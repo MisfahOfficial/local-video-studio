@@ -62,7 +62,7 @@
           </div>
           <div class="form-grid">
             <label>Channel theme<select id="themeSelect"></select></label>
-            <label>Visual planning<select id="plannerSelect"><option value="local">Local Free</option><option value="gemini">Gemini Smart</option></select></label>
+            <label>Visual planning<select id="plannerSelect"><option value="precision" selected>Gemini Precision Sync (VO + script)</option><option value="gemini">Gemini Text Smart (estimated timing)</option><option value="local">Local Free (estimated timing)</option></select></label>
             <label>Target images<input id="imageCountInput" type="number" min="1" max="3000" value="715"></label>
             <label>Average scene seconds<input id="sceneSecondsInput" type="number" min="2" max="60" step="0.5" value="12.5"></label>
             <label>Duration in minutes<input id="durationInput" type="number" min="0" step="0.1" value="149"></label>
@@ -73,6 +73,11 @@
           <div class="action-row">
             <button class="button primary" id="createPlanButton" type="button">Create visual plan</button>
             <span class="hint">You can review every prompt before any paid image is generated.</span>
+          </div>
+          <div class="planning-progress panel" id="planningProgress" hidden role="status" aria-live="polite">
+            <div class="planning-progress-heading"><strong id="planningStage">Preparing voice-over…</strong><span id="planningElapsed">00:00</span></div>
+            <div class="planning-progress-track" aria-hidden="true"><span></span></div>
+            <small id="planningDetail">The audio is being measured against the script. Keep this window open.</small>
           </div>
         </section>
 
@@ -168,6 +173,7 @@
                 <button class="player-button play" id="previewPlayButton" type="button" aria-label="Play">▶</button>
                 <button class="player-button" id="previewForwardButton" type="button" aria-label="Next scene">▶|</button>
                 <input id="previewScrubber" type="range" min="0" max="1" step="0.01" value="0" aria-label="Preview playhead">
+                <span class="preview-load-state" id="previewLoadState" aria-live="polite">Ready</span>
                 <button class="player-button" id="previewFullscreenButton" type="button" aria-label="Fullscreen">⛶</button>
               </div>
             </section>

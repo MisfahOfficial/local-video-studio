@@ -17,10 +17,12 @@ from . import __version__
 from .config import SettingsStore
 from .database import Database
 from .generation import GenerationManager
+from .gemini_audio_planner import GeminiAudioScenePlanner
 from .gemini_analyzer import GeminiSceneEnhancer
 from .fonts import FontError, FontManager
 from .paths import AppPaths
 from .scene_planner import RuleBasedScenePlanner, estimate_generation_count, validate_plan_inputs
+from .providers.base import ProviderError
 from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
@@ -337,17 +339,43 @@ class StudioApplication:
         if not 2 <= seconds_per_scene <= 60:
             raise ApiError("Average scene seconds must be between 2 and 60")
         settings = self.settings.load()
-        drafts = self.planner.plan(
-            script,
-            theme_id=theme_id,
-            duration_seconds=duration,
-            target_scene_count=image_count,
-            seconds_per_scene=seconds_per_scene,
-        )
-        if str(body.get("planner", "local")) == "gemini":
-            drafts = GeminiSceneEnhancer(settings.gemini_api_key, settings.gemini_model).enhance(
-                drafts, get_theme(theme_id)
-            )
+        planner_mode = str(body.get("planner", "local"))
+        timing_source = "estimated"
+        try:
+            if planner_mode == "precision":
+                voiceover_path = Path(str(project.get("voiceover_path") or ""))
+                voiceover_duration = float(project.get("duration_seconds") or 0)
+                if not voiceover_path.is_file():
+                    raise ApiError("Upload the finished voice-over before using Gemini Precision Sync.")
+                if voiceover_duration <= 0:
+                    raise ApiError("The voice-over duration could not be measured. Re-upload it before using Precision Sync.")
+                precision_count = image_count or max(1, round(voiceover_duration / max(2.0, seconds_per_scene)))
+                duration = voiceover_duration
+                drafts = GeminiAudioScenePlanner(
+                    settings.gemini_api_key, settings.gemini_model
+                ).plan(
+                    script=script,
+                    voiceover_path=voiceover_path,
+                    duration_seconds=duration,
+                    target_scene_count=precision_count,
+                    theme=get_theme(theme_id),
+                )
+                timing_source = "gemini_audio"
+            else:
+                drafts = self.planner.plan(
+                    script,
+                    theme_id=theme_id,
+                    duration_seconds=duration,
+                    target_scene_count=image_count,
+                    seconds_per_scene=seconds_per_scene,
+                )
+                if planner_mode == "gemini":
+                    drafts = GeminiSceneEnhancer(settings.gemini_api_key, settings.gemini_model).enhance(
+                        drafts, get_theme(theme_id)
+                    )
+                    timing_source = "estimated_gemini_text"
+        except ProviderError as error:
+            raise ApiError(str(error), HTTPStatus.BAD_GATEWAY) from error
 
         generation_count = estimate_generation_count(drafts)
         warnings = validate_plan_inputs(
@@ -373,6 +401,7 @@ class StudioApplication:
             "generation_count": generation_count,
             "estimated_cost": estimated_cost,
             "warnings": warnings,
+            "timing_source": timing_source,
         }
 
 

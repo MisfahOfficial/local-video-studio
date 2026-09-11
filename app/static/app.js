@@ -1,6 +1,7 @@
 const state = {
   themes: [], motions: [], settings: {}, projects: [], current: null,
   scenes: [], timelineClips: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
+  planningTimer: null, planningStartedAt: 0, previewClockFrame: null,
   selectedSceneIds: new Set(), planWarnings: [], activeTimelineSceneId: null, activeTimelineClipId: null,
   previewTime: 0, manualPreviewFrame: null, manualPreviewStartedAt: 0, draggedClipId: null,
   editTool: "select", snapEnabled: true, trimSession: null, trimFrame: null,
@@ -36,6 +37,53 @@ function clock(seconds) {
   return `${hours ? String(hours).padStart(2, "0") + ":" : ""}${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
+function timecode(seconds, fps = 30) {
+  const safe = Math.max(0, Number(seconds || 0));
+  const whole = Math.floor(safe);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  const frames = Math.min(fps - 1, Math.floor((safe - whole) * fps));
+  return [hours, minutes, secs, frames].map(value => String(value).padStart(2, "0")).join(":");
+}
+
+function startPlanningProgress(mode) {
+  clearInterval(state.planningTimer);
+  state.planningStartedAt = performance.now();
+  const panel = $("#planningProgress");
+  panel.hidden = false;
+  panel.classList.remove("error");
+  const update = () => {
+    const elapsed = (performance.now() - state.planningStartedAt) / 1000;
+    $("#planningElapsed").textContent = clock(elapsed);
+    if (mode !== "precision") {
+      $("#planningStage").textContent = mode === "gemini" ? "Directing visual prompts…" : "Building the local scene plan…";
+      $("#planningDetail").textContent = "Scene order, prompts and timing are being prepared.";
+      return;
+    }
+    let stage = "Securely uploading the voice-over…";
+    let detail = "The VO is sent only to Gemini for this plan and removed after processing.";
+    if (elapsed >= 8) { stage = "Listening and matching the script…"; detail = "Gemini is locating spoken phrases, pauses and topic changes in the real audio."; }
+    if (elapsed >= 30) { stage = "Choosing accurate scene boundaries…"; detail = "The plan is being cut at semantic changes instead of equal word estimates."; }
+    if (elapsed >= 75) { stage = "Finishing image direction…"; detail = "Specific subjects, emotions and chronological visual instructions are being validated."; }
+    $("#planningStage").textContent = stage;
+    $("#planningDetail").textContent = detail;
+  };
+  update();
+  state.planningTimer = setInterval(update, 250);
+}
+
+function finishPlanningProgress(message = "", error = false) {
+  clearInterval(state.planningTimer);
+  state.planningTimer = null;
+  const panel = $("#planningProgress");
+  if (!message) { panel.hidden = true; return; }
+  panel.hidden = false;
+  panel.classList.toggle("error", error);
+  $("#planningStage").textContent = message;
+  $("#planningDetail").textContent = error ? "The existing scenes were not replaced." : "The timestamped visual plan is ready for review.";
+}
+
 let toastTimer;
 function toast(message, error = false) {
   const element = $("#toast");
@@ -58,7 +106,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.5.0"}`;
+    $("#appVersion").textContent = `v${health.version || "0.6.0"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -203,15 +251,17 @@ async function uploadVoiceover(file) {
 async function createPlan() {
   if (!state.current) return;
   const button = $("#createPlanButton");
+  const planner = $("#plannerSelect").value;
   button.disabled = true;
-  button.textContent = "Directing scenes…";
+  button.textContent = planner === "precision" ? "Syncing VO and scenes…" : "Directing scenes…";
+  startPlanningProgress(planner);
   try {
     const result = await api(`/api/projects/${state.current.id}/plan`, {
       method: "POST",
       body: JSON.stringify({
         script: $("#scriptInput").value,
         theme_id: $("#themeSelect").value,
-        planner: $("#plannerSelect").value,
+        planner,
         image_count: Number($("#imageCountInput").value || 0),
         seconds_per_scene: Number($("#sceneSecondsInput").value || 12.5),
         duration_seconds: Number($("#durationInput").value || 0) * 60,
@@ -219,12 +269,13 @@ async function createPlan() {
     });
     state.selectedSceneIds.clear();
     state.planWarnings = result.warnings || [];
-    toast(`${result.scenes.length} scenes created · ${result.generation_count} planned image options`);
+    finishPlanningProgress(result.timing_source === "gemini_audio" ? "Precision Sync complete" : "Visual plan complete");
+    toast(`${result.scenes.length} scenes created · ${result.timing_source === "gemini_audio" ? "VO-synced" : "estimated timing"}`);
     await refreshProjects();
     await openProject(state.current.id);
     renderPlanWarnings();
     activateTab("scenes");
-  } catch (error) { toast(error.message, true); }
+  } catch (error) { finishPlanningProgress(error.message, true); toast(error.message, true); }
   finally { button.disabled = false; button.textContent = "Create visual plan"; }
 }
 
@@ -535,15 +586,44 @@ function configurePreviewAudio() {
   const audio = $("#previewAudio");
   const source = state.current?.voiceover_media_url || "";
   if (source && audio.getAttribute("src") !== source) {
+    setPreviewLoadState("Loading VO…", "loading");
     audio.src = source;
     audio.load();
   } else if (!source && audio.getAttribute("src")) {
     audio.removeAttribute("src");
     audio.load();
+    setPreviewLoadState("No VO", "");
+  } else if (!source) {
+    setPreviewLoadState("No VO", "");
   }
   const duration = timelineDuration();
   $("#previewScrubber").max = duration;
-  $("#previewTotalTime").textContent = clock(duration);
+  $("#previewTotalTime").textContent = timecode(duration);
+  updatePreviewSeekVisual(state.previewTime, duration);
+}
+
+function setPreviewLoadState(message, status = "") {
+  const element = $("#previewLoadState");
+  element.textContent = message;
+  element.classList.toggle("loading", status === "loading");
+  element.classList.toggle("error", status === "error");
+}
+
+function updatePreviewSeekVisual(time, duration = timelineDuration()) {
+  const scrubber = $("#previewScrubber");
+  const safeDuration = Math.max(0.01, Number(duration || 0));
+  const played = Math.max(0, Math.min(100, Number(time || 0) / safeDuration * 100));
+  scrubber.style.setProperty("--seek-progress", `${played}%`);
+  scrubber.setAttribute("aria-valuetext", `${timecode(time)} of ${timecode(safeDuration)}`);
+}
+
+function updatePreviewBuffered() {
+  const audio = $("#previewAudio");
+  const duration = timelineDuration();
+  let buffered = 0;
+  if (audio.buffered?.length) buffered = audio.buffered.end(audio.buffered.length - 1);
+  const percent = Math.max(0, Math.min(100, Math.max(buffered, state.previewTime) / Math.max(0.01, duration) * 100));
+  $("#previewScrubber").style.setProperty("--seek-buffered", `${percent}%`);
 }
 
 function activeCaptionSceneAt(time) {
@@ -640,7 +720,8 @@ function updatePreviewAt(time, selectScene = true) {
   const duration = timelineDuration();
   state.previewTime = Math.max(0, Math.min(Number(time || 0), duration));
   $("#previewScrubber").value = state.previewTime;
-  $("#previewCurrentTime").textContent = clock(state.previewTime);
+  $("#previewCurrentTime").textContent = timecode(state.previewTime);
+  updatePreviewSeekVisual(state.previewTime, duration);
   const zoom = Number($("#timelineZoom").value || 8);
   $("#timelinePlayhead").style.left = `calc(var(--track-label-width) + ${state.previewTime * zoom}px)`;
   const videoClip = activeVideoClipAt(state.previewTime);
@@ -749,7 +830,7 @@ function renderTimeline() {
   $("#timelineRuler").innerHTML = marks.join("");
   $("#timelineSummary").textContent = state.timelineClips.length ? `${state.timelineClips.length} clips · ${clock(videoTrackDuration())}` : "No clips yet";
   $("#previewScrubber").max = duration;
-  $("#previewTotalTime").textContent = clock(duration);
+  $("#previewTotalTime").textContent = timecode(duration);
   fillTimelineInspector(sceneForClip(selectedClip), selectedClip);
   renderMediaBin();
   updateTimelineControls();
@@ -1003,12 +1084,25 @@ function showInspector(name) {
 function pausePreview() {
   cancelAnimationFrame(state.manualPreviewFrame);
   state.manualPreviewFrame = null;
+  cancelAnimationFrame(state.previewClockFrame);
+  state.previewClockFrame = null;
   const audio = $("#previewAudio");
   if (!audio.paused) audio.pause();
   const video = $("#previewVideo");
   if (!video.paused) video.pause();
   state.isPreviewPlaying = false;
   $("#previewPlayButton").textContent = "▶";
+}
+
+function startAudioPreviewClock() {
+  cancelAnimationFrame(state.previewClockFrame);
+  const audio = $("#previewAudio");
+  const tick = () => {
+    if (audio.paused || audio.ended) { state.previewClockFrame = null; return; }
+    updatePreviewAt(audio.currentTime);
+    state.previewClockFrame = requestAnimationFrame(tick);
+  };
+  state.previewClockFrame = requestAnimationFrame(tick);
 }
 
 function startManualPreview() {
@@ -1029,9 +1123,12 @@ async function togglePreview() {
   if (audio.getAttribute("src")) {
     if (audio.paused) {
       if (state.previewTime >= timelineDuration() - 0.05) audio.currentTime = 0;
+      else if (Math.abs(audio.currentTime - state.previewTime) > 0.05) audio.currentTime = state.previewTime;
+      setPreviewLoadState(audio.readyState >= 3 ? "Playing" : "Loading…", audio.readyState >= 3 ? "" : "loading");
       await audio.play();
       state.isPreviewPlaying = true;
       $("#previewPlayButton").textContent = "❚❚";
+      startAudioPreviewClock();
     } else {
       audio.pause();
       state.isPreviewPlaying = false;
@@ -1446,14 +1543,51 @@ $("#previewScrubber").addEventListener("input", event => {
   if (audio.getAttribute("src")) audio.currentTime = value;
   updatePreviewAt(value);
 });
-$("#previewAudio").addEventListener("timeupdate", event => updatePreviewAt(event.target.currentTime));
-$("#previewAudio").addEventListener("play", () => { state.isPreviewPlaying = true; $("#previewPlayButton").textContent = "❚❚"; });
+$("#previewAudio").addEventListener("loadedmetadata", event => {
+  const duration = timelineDuration();
+  $("#previewScrubber").max = duration;
+  $("#previewTotalTime").textContent = timecode(duration);
+  updatePreviewSeekVisual(state.previewTime, duration);
+  updatePreviewBuffered();
+  setPreviewLoadState("Ready");
+  if (Number.isFinite(event.target.duration) && event.target.duration > 0 && Math.abs(event.target.duration - Number(state.current?.duration_seconds || 0)) > 0.25) {
+    $("#previewTotalTime").title = `Audio metadata: ${timecode(event.target.duration)}`;
+  }
+});
+$("#previewAudio").addEventListener("durationchange", () => {
+  $("#previewTotalTime").textContent = timecode(timelineDuration());
+  updatePreviewSeekVisual(state.previewTime);
+});
+$("#previewAudio").addEventListener("progress", updatePreviewBuffered);
+$("#previewAudio").addEventListener("timeupdate", event => {
+  if (!state.previewClockFrame) updatePreviewAt(event.target.currentTime);
+});
+$("#previewAudio").addEventListener("loadstart", () => setPreviewLoadState("Loading VO…", "loading"));
+$("#previewAudio").addEventListener("waiting", () => setPreviewLoadState("Buffering…", "loading"));
+$("#previewAudio").addEventListener("stalled", () => setPreviewLoadState("Waiting…", "loading"));
+$("#previewAudio").addEventListener("canplay", () => setPreviewLoadState("Ready"));
+$("#previewAudio").addEventListener("seeked", () => setPreviewLoadState(state.isPreviewPlaying ? "Playing" : "Ready"));
+$("#previewAudio").addEventListener("error", () => setPreviewLoadState("VO error", "error"));
+$("#previewAudio").addEventListener("play", () => {
+  state.isPreviewPlaying = true;
+  $("#previewPlayButton").textContent = "❚❚";
+  setPreviewLoadState("Playing");
+  startAudioPreviewClock();
+});
 $("#previewAudio").addEventListener("pause", () => {
+  cancelAnimationFrame(state.previewClockFrame);
+  state.previewClockFrame = null;
   state.isPreviewPlaying = false;
   if (!$("#previewVideo").paused) $("#previewVideo").pause();
   $("#previewPlayButton").textContent = "▶";
+  if (!$("#previewAudio").ended) setPreviewLoadState("Ready");
 });
-$("#previewAudio").addEventListener("ended", () => { state.isPreviewPlaying = false; $("#previewPlayButton").textContent = "▶"; updatePreviewAt(0); });
+$("#previewAudio").addEventListener("ended", event => {
+  state.isPreviewPlaying = false;
+  $("#previewPlayButton").textContent = "▶";
+  setPreviewLoadState("Ended");
+  updatePreviewAt(Math.min(timelineDuration(), Number(event.target.duration || timelineDuration())));
+});
 $("#saveCaptionStyleButton").addEventListener("click", () => saveCaptionStyle().catch(error => toast(error.message, true)));
 $$("[data-inspector-tab]").forEach(button => button.addEventListener("click", () => showInspector(button.dataset.inspectorTab)));
 $$("[data-style-toggle]").forEach(button => button.addEventListener("click", () => {
