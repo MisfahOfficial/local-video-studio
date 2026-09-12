@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.2
+# Local Video Studio v0.6.3
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -49,6 +49,11 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.6.3 keeps Precision Sync moving when a valid visual uses different words
+from the narration. Instead of rejecting the whole plan, questionable visual subjects
+are automatically re-anchored to the exact timed narration, and every precision image
+prompt includes its spoken context.
 
 Version 0.6.2 treats the measured voice-over as the master clock. The editor shows
 separate visual and VO durations, offers one-click timeline fitting, automatically

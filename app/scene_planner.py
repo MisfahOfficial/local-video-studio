@@ -164,7 +164,13 @@ def _era_hint(text: str) -> str:
     return f"historical period anchored to {years[0]}" if years else "period details inferred from the surrounding chapter"
 
 
-def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: int) -> str:
+def _compose_prompt(
+    narration: str,
+    emotion: Emotion,
+    theme_id: str,
+    position: int,
+    spoken_context: str | None = None,
+) -> str:
     theme = get_theme(theme_id)
     shot = "establishing wide shot" if position % 5 == 1 else "observational medium shot"
     if emotion in {Emotion.SUSPENSE, Emotion.REVEAL}:
@@ -175,8 +181,14 @@ def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: i
         shot = "quiet environmental composition with purposeful negative space"
 
     subject = _visual_subject(narration)
+    spoken_anchor = _visual_subject(spoken_context or "")
+    context_direction = (
+        f"Exact spoken moment that this image must directly illustrate: {spoken_anchor}. "
+        if spoken_anchor and spoken_anchor.casefold() != subject.casefold() else ""
+    )
     return (
         f"Primary visible subject and action: {subject}. "
+        f"{context_direction}"
         f"{_era_hint(narration)}. {EMOTION_DIRECTION[emotion]}. {shot}. "
         f"{theme.visual_style}. Palette: {theme.palette}. Camera: {theme.camera_language}. "
         "Show the named subject clearly in one coherent moment; do not substitute a generic person, room, or object. "

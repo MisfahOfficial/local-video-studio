@@ -461,7 +461,7 @@ class GeminiAudioScenePlanner:
         window_end: float,
         batch_number: int,
     ) -> None:
-        """Reject plans whose timestamps or pictured subject do not match the spoken passage."""
+        """Reject bad timing, but safely re-anchor a questionable visual to the narration."""
         previous_start = window_start
         for local_position, item in enumerate(planned, start=1):
             try:
@@ -498,10 +498,11 @@ class GeminiAudioScenePlanner:
             narration_subjects = cls._tokens(item.get("narration"), significant=True)
             visual_subjects = cls._tokens(item.get("visual_subject"), significant=True)
             if len(narration_subjects) >= 2 and not narration_subjects.intersection(visual_subjects):
-                raise ProviderError(
-                    f"Gemini returned an unrelated image subject for scene {local_position} of planning batch "
-                    f"{batch_number}. Nothing was replaced; retry Precision Sync."
-                )
+                # A lexical mismatch is not reliable proof of a semantic mismatch:
+                # a good visual can use synonyms. Do not discard a complete plan.
+                # Falling back to the exact timed narration is deterministic and
+                # guarantees that image generation stays attached to the VO.
+                item["visual_subject"] = str(item.get("narration") or "").strip()
 
     @staticmethod
     def _build_drafts(
@@ -562,7 +563,9 @@ class GeminiAudioScenePlanner:
                     emotion=emotion,
                     narrative_role=role,
                     importance=_importance(role, emotion),
-                    prompt=_compose_prompt(subject, emotion, theme.id, index),
+                    prompt=_compose_prompt(
+                        subject, emotion, theme.id, index, spoken_context=narration
+                    ),
                     negative_prompt=theme.negative_prompt,
                     model_role="photoreal",
                     candidate_count=1,
@@ -594,6 +597,7 @@ class GeminiAudioScenePlanner:
             "- narration must be the exact contiguous words spoken in that time range and must stay in source order.\n\n"
             "VISUAL RULES\n"
             "- visual_subject must describe the literal, specific subject/action/object the viewer should see in 10-35 words.\n"
+            "- Reuse at least one concrete noun or named phrase from narration in visual_subject, then add composition details.\n"
             "- Include named foods, people, place, era and action when the narration supplies them. Avoid generic filler.\n"
             "- Do not invent brands, facts, ingredients, locations or historical details absent from the script.\n"
             "- Give adjacent scenes visibly different compositions while keeping the channel style consistent.\n"

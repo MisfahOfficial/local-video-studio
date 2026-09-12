@@ -135,6 +135,7 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         self.assertEqual(scenes[-1].end_seconds, 10.0)
         self.assertEqual(scenes[0].end_seconds, scenes[1].start_seconds)
         self.assertIn("lunch-counter cook", scenes[0].prompt)
+        self.assertIn("Exact spoken moment", scenes[0].prompt)
         self.assertNotIn("Visualize this narration", scenes[0].prompt)
         self.assertEqual(client.deleted, ["files/test-vo"])
         self.assertIn("Never distribute time evenly", client.created["prompt"])
@@ -166,15 +167,15 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderError, "wrong spoken passage"):
             GeminiAudioScenePlanner._validate_batch_alignment(wrong, transcript, 0.0, 10.0, 1)
 
-    def test_unrelated_image_subject_is_rejected(self) -> None:
+    def test_unrelated_image_subject_is_reanchored_to_timed_narration(self) -> None:
         transcript = [
             {"start_seconds": 0.0, "end_seconds": 4.8, "text": "The old lunch counter opened before sunrise."},
             {"start_seconds": 4.9, "end_seconds": 10.0, "text": "Then the first steaming bowl reached the counter."},
         ]
         wrong = sample_items()
         wrong[0] = {**wrong[0], "visual_subject": "A rocket orbiting a bright alien planet"}
-        with self.assertRaisesRegex(ProviderError, "unrelated image subject"):
-            GeminiAudioScenePlanner._validate_batch_alignment(wrong, transcript, 0.0, 10.0, 1)
+        GeminiAudioScenePlanner._validate_batch_alignment(wrong, transcript, 0.0, 10.0, 1)
+        self.assertEqual(wrong[0]["visual_subject"], wrong[0]["narration"])
 
 
 if __name__ == "__main__":
