@@ -234,6 +234,7 @@ class StudioApplication:
             "project": project,
             "scenes": scenes,
             "timeline_clips": self.db.list_timeline_clips(project_id),
+            "timeline_sync": self.db.timeline_sync_status(project_id),
             "assets": assets,
             "warnings": warnings,
         }
@@ -669,6 +670,21 @@ def build_handler(application: StudioApplication):
                     raise ApiError(str(error)) from error
                 self._json({"timeline_clips": restored})
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/timeline/fit-voiceover", path)
+            if match:
+                project_id = match.group(1)
+                project = application.db.get_project(project_id)
+                if not project:
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                try:
+                    clips = application.db.fit_timeline_to_duration(
+                        project_id, float(project.get("duration_seconds") or 0)
+                    )
+                    sync = application.db.timeline_sync_status(project_id)
+                except (KeyError, ValueError, TypeError) as error:
+                    raise ApiError(str(error)) from error
+                self._json({"timeline_clips": clips, "timeline_sync": sync})
+                return
             match = re.fullmatch(r"/api/timeline-clips/([a-zA-Z0-9_-]+)/split", path)
             if match:
                 try:
@@ -719,8 +735,24 @@ def build_handler(application: StudioApplication):
                 options = normalize_render_options(supplied)
                 style = options["caption_style"]
                 application.db.update_project(project_id, caption_style=style)
+                sync = application.db.timeline_sync_status(project_id)
+                auto_fitted = False
+                if project.get("voiceover_path") and sync["status"] != "synced":
+                    try:
+                        application.db.fit_timeline_to_duration(
+                            project_id, float(project.get("duration_seconds") or 0)
+                        )
+                    except (KeyError, ValueError, TypeError) as error:
+                        raise ApiError(f"Cannot synchronize visuals to the voice-over: {error}") from error
+                    sync = application.db.timeline_sync_status(project_id)
+                    auto_fitted = True
                 job_id = application.rendering.start(project_id, options)
-                self._json({"render_job_id": job_id}, HTTPStatus.ACCEPTED)
+                self._json({
+                    "render_job_id": job_id,
+                    "timeline_clips": application.db.list_timeline_clips(project_id),
+                    "timeline_sync": sync,
+                    "auto_fitted": auto_fitted,
+                }, HTTPStatus.ACCEPTED)
                 return
             match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/asset", path)
             if match:

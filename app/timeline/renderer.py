@@ -12,6 +12,7 @@ from typing import Any, Callable
 from ..config import SettingsStore
 from ..database import Database
 from ..paths import AppPaths
+from ..transcription import probe_duration
 from .actions import MotionRegistry, build_default_motion_registry
 
 
@@ -406,6 +407,17 @@ class RenderManager:
             if not project:
                 raise RuntimeError("Project not found")
             settings = self.settings_store.load()
+            voiceover_duration = float(project.get("duration_seconds") or 0)
+            voiceover_path = Path(str(project.get("voiceover_path") or ""))
+            if voiceover_path.is_file():
+                measured_duration = probe_duration(voiceover_path, settings.ffprobe_path)
+                if measured_duration > 0:
+                    voiceover_duration = measured_duration
+                    if abs(measured_duration - float(project.get("duration_seconds") or 0)) > 0.05:
+                        project = self.db.update_project(project_id, duration_seconds=measured_duration)
+                sync = self.db.timeline_sync_status(project_id)
+                if sync["status"] != "synced":
+                    self.db.fit_timeline_to_duration(project_id, voiceover_duration)
             renderer = FFmpegRenderer(settings.ffmpeg_path)
             output = renderer.render(
                 project=project,
@@ -425,6 +437,12 @@ class RenderManager:
                 audio_bitrate_kbps=int(options.get("audio_bitrate_kbps", 192)),
                 progress=lambda value: self._update(job_id, progress=value),
             )
+            rendered_duration = probe_duration(output, settings.ffprobe_path)
+            if voiceover_path.is_file() and rendered_duration + 0.25 < voiceover_duration:
+                raise RuntimeError(
+                    f"Export verification failed: video is {rendered_duration:.2f}s but the voice-over is "
+                    f"{voiceover_duration:.2f}s. The incomplete export was not marked complete."
+                )
             self._update(job_id, status="complete", progress=1.0, output_path=str(output))
             self.db.update_project(project_id, status="rendered")
         except Exception as error:

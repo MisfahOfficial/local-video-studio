@@ -247,6 +247,10 @@
               <strong id="timelineSummary">No scenes yet</strong>
               <label>Zoom <input id="timelineZoom" type="range" min="2" max="30" step="1" value="8"></label>
             </div>
+            <div class="timeline-sync-banner" id="timelineSyncBanner" hidden>
+              <div><strong id="timelineSyncTitle">Visuals need synchronization</strong><span id="timelineSyncMessage"></span></div>
+              <button class="button primary small" id="fitTimelineButton" type="button">Fit visuals to VO</button>
+            </div>
             <div class="timeline-scroll" id="timelineScroll">
               <div class="timeline-canvas" id="timelineCanvas">
                 <div class="timeline-ruler-row"><div class="track-label">Time</div><div class="timeline-ruler" id="timelineRuler"></div></div>

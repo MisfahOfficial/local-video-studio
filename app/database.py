@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -419,6 +420,77 @@ class Database:
                 "SELECT * FROM timeline_clips WHERE project_id = ? ORDER BY position", (project_id,)
             ).fetchall()
         return [self._dict(row) or {} for row in rows]
+
+    def timeline_sync_status(self, project_id: str, tolerance: float = 0.05) -> dict[str, Any]:
+        """Describe whether the visual track covers the measured voice-over."""
+        project = self.get_project(project_id)
+        if not project:
+            raise KeyError("Project not found")
+        clips = self.list_timeline_clips(project_id)
+        video_duration = max((float(clip["end_seconds"]) for clip in clips), default=0.0)
+        voiceover_duration = (
+            float(project.get("duration_seconds") or 0)
+            if project.get("voiceover_path") else 0.0
+        )
+        contiguous = bool(clips)
+        cursor = 0.0
+        for clip in clips:
+            start = float(clip["start_seconds"])
+            end = float(clip["end_seconds"])
+            if abs(start - cursor) > tolerance or end <= start:
+                contiguous = False
+            cursor = end
+        difference = voiceover_duration - video_duration
+        if not clips:
+            status = "missing"
+        elif voiceover_duration <= 0:
+            status = "no_voiceover"
+        elif not contiguous:
+            status = "gapped"
+        elif difference > tolerance:
+            status = "short"
+        elif difference < -tolerance:
+            status = "long"
+        else:
+            status = "synced"
+        return {
+            "status": status,
+            "complete": status in {"synced", "no_voiceover"},
+            "video_duration": round(video_duration, 3),
+            "voiceover_duration": round(voiceover_duration, 3),
+            "difference_seconds": round(difference, 3),
+            "contiguous": contiguous,
+        }
+
+    def fit_timeline_to_duration(self, project_id: str, target_duration: float) -> list[dict[str, Any]]:
+        """Fit a gapless visual track to a master duration without changing clip order."""
+        clips = self.list_timeline_clips(project_id)
+        if not clips:
+            raise ValueError("Create the visual plan before fitting it to the voice-over")
+        target = float(target_duration)
+        minimum = 0.25
+        if not math.isfinite(target) or target <= 0:
+            raise ValueError("The voice-over duration is not available")
+        if target + 1e-9 < len(clips) * minimum:
+            raise ValueError(
+                f"The {target:.2f}s voice-over is too short for {len(clips)} clips at the 0.25s minimum"
+            )
+
+        original = [max(minimum, float(clip["end_seconds"]) - float(clip["start_seconds"])) for clip in clips]
+        remaining = target - len(clips) * minimum
+        weights = [max(0.0, duration - minimum) for duration in original]
+        weight_total = sum(weights)
+        if weight_total <= 1e-9:
+            weights = [1.0] * len(clips)
+            weight_total = float(len(clips))
+        durations = [minimum + remaining * weight / weight_total for weight in weights]
+        durations[-1] += target - sum(durations)
+        for clip, duration in zip(clips, durations, strict=True):
+            clip["start_seconds"] = 0.0
+            clip["end_seconds"] = duration
+        with self.connection() as db:
+            self._retime_timeline(db, project_id, clips)
+        return self.list_timeline_clips(project_id)
 
     def get_timeline_clip(self, clip_id: str) -> dict[str, Any] | None:
         with self.connection() as db:

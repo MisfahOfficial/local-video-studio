@@ -7,6 +7,7 @@ const state = {
   editTool: "select", snapEnabled: true, trimSession: null, trimFrame: null,
   timelineUndo: [], timelineRedo: [], isPreviewPlaying: false,
   exportProjectId: null, lastRenderOutputPath: "",
+  timelineSync: null,
   captionDrafts: {},
   fonts: [], captionFlags: { bold: true, italic: false, underline: false }, captionCase: "normal", captionAlignment: "center",
 };
@@ -106,7 +107,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.6.1"}`;
+    $("#appVersion").textContent = `v${health.version || "0.6.2"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -150,6 +151,7 @@ async function openProject(projectId, keepTab = false) {
   state.current = payload.project;
   state.scenes = payload.scenes;
   state.timelineClips = payload.timeline_clips || [];
+  state.timelineSync = payload.timeline_sync || null;
   state.assets = payload.assets;
   state.planWarnings = payload.warnings || [];
   if (projectChanged) {
@@ -446,6 +448,22 @@ function videoTrackDuration() {
   return state.timelineClips.length
     ? Math.max(...state.timelineClips.map(clip => Number(clip.end_seconds || 0)))
     : 0;
+}
+
+function voiceoverDuration() {
+  return state.current?.voiceover_path ? Number(state.current.duration_seconds || 0) : 0;
+}
+
+function timelineSyncDetails() {
+  const video = videoTrackDuration();
+  const voice = voiceoverDuration();
+  const difference = voice - video;
+  let status = "no_voiceover";
+  if (voice > 0 && !state.timelineClips.length) status = "missing";
+  else if (voice > 0 && difference > 0.05) status = "short";
+  else if (voice > 0 && difference < -0.05) status = "long";
+  else if (voice > 0) status = "synced";
+  return { status, video_duration: video, voiceover_duration: voice, difference_seconds: difference };
 }
 
 function timelineDuration() {
@@ -820,7 +838,8 @@ function renderTimeline() {
     const left = Number(scene.start_seconds) * zoom;
     return `<button class="caption-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" type="button" style="left:${left}px;width:${width}px" data-scene-id="${scene.id}">${escapeHtml(scene.caption_text || scene.narration)}</button>`;
   }).join("");
-  $("#audioTrack").innerHTML = state.current?.voiceover_path ? `<div class="audio-wave" style="left:0;width:${Math.max(18, duration * zoom)}px"></div>` : `<span class="library-help">No voice-over attached</span>`;
+  const voiceDuration = voiceoverDuration();
+  $("#audioTrack").innerHTML = state.current?.voiceover_path ? `<div class="audio-wave" style="left:0;width:${Math.max(18, voiceDuration * zoom)}px"></div>` : `<span class="library-help">No voice-over attached</span>`;
   const step = rulerStep(zoom);
   const marks = [];
   for (let second = 0; second <= duration; second += step) {
@@ -828,7 +847,18 @@ function renderTimeline() {
     if (step * zoom >= 80) marks.push(`<span class="ruler-mark minor" style="left:${(second + step / 2) * zoom}px"></span>`);
   }
   $("#timelineRuler").innerHTML = marks.join("");
-  $("#timelineSummary").textContent = state.timelineClips.length ? `${state.timelineClips.length} clips · ${clock(videoTrackDuration())}` : "No clips yet";
+  const sync = timelineSyncDetails();
+  $("#timelineSummary").textContent = state.timelineClips.length
+    ? `${state.timelineClips.length} clips · Video ${clock(sync.video_duration)}${sync.voiceover_duration ? ` · VO ${clock(sync.voiceover_duration)}` : ""}`
+    : "No clips yet";
+  const syncBanner = $("#timelineSyncBanner");
+  const needsFit = ["short", "long"].includes(sync.status);
+  syncBanner.hidden = !needsFit;
+  if (needsFit) {
+    const difference = Math.abs(sync.difference_seconds);
+    $("#timelineSyncTitle").textContent = sync.status === "short" ? "Visual track ends before the voice-over" : "Visual track is longer than the voice-over";
+    $("#timelineSyncMessage").textContent = `${clock(difference)} difference. Fit the clips to the measured VO before export.`;
+  }
   $("#previewScrubber").max = duration;
   $("#previewTotalTime").textContent = timecode(duration);
   fillTimelineInspector(sceneForClip(selectedClip), selectedClip);
@@ -1315,6 +1345,29 @@ async function endClipTrim() {
   }
 }
 
+async function fitTimelineToVoiceover() {
+  if (!state.current) return;
+  const before = timelineSnapshot();
+  const button = $("#fitTimelineButton");
+  button.disabled = true;
+  button.textContent = "Fitting…";
+  try {
+    const result = await api(`/api/projects/${state.current.id}/timeline/fit-voiceover`, {
+      method: "POST", body: "{}",
+    });
+    rememberTimeline(before);
+    state.timelineClips = result.timeline_clips;
+    state.timelineSync = result.timeline_sync;
+    renderTimeline();
+    toast(`Visual track now ends with the VO at ${clock(result.timeline_sync.voiceover_duration)}`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Fit visuals to VO";
+  }
+}
+
 async function startRender() {
   if (!state.current) return;
   const [width, height] = exportDimensions();
@@ -1324,7 +1377,7 @@ async function startRender() {
   button.disabled = true;
   button.textContent = "Starting export…";
   try {
-    await api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
+    const result = await api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
       width, height,
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
       output_name: outputName,
@@ -1334,7 +1387,10 @@ async function startRender() {
       audio_bitrate_kbps: Number($("#exportAudioBitrate").value),
       caption_style: captionStyleFromInputs(),
     }) });
-    toast("Local render started");
+    if (result.timeline_clips) state.timelineClips = result.timeline_clips;
+    state.timelineSync = result.timeline_sync || state.timelineSync;
+    renderTimeline();
+    toast(result.auto_fitted ? "Visuals fitted to the VO; local render started" : "Local render started");
     clearInterval(state.renderTimer);
     state.renderTimer = setInterval(() => refreshRenderStatus().catch(error => toast(error.message, true)), 2500);
     await refreshRenderStatus();
@@ -1624,6 +1680,7 @@ $$("[data-editor-tool]").forEach(button => button.addEventListener("click", () =
   if (tool === "media") renderMediaBin();
 }));
 $("#renderButton").addEventListener("click", startRender);
+$("#fitTimelineButton").addEventListener("click", fitTimelineToVoiceover);
 $("#browseExportDirectory").addEventListener("click", () => browseExportDirectory().catch(error => toast(error.message, true)));
 $("#exportPreset").addEventListener("change", applyExportPreset);
 $("#exportResolution").addEventListener("change", () => updateExportFields(true));

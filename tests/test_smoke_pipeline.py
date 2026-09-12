@@ -12,6 +12,7 @@ from app.domain import GenerationRequest
 from app.providers.mock import MockImageProvider
 from app.scene_planner import RuleBasedScenePlanner
 from app.timeline.renderer import FFmpegRenderer
+from app.transcription import probe_duration
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for the render smoke test")
@@ -78,6 +79,7 @@ class SmokePipelineTests(unittest.TestCase):
             self.assertTrue(output.is_file())
             self.assertEqual(output.name, "My Test Export.mp4")
             self.assertGreater(output.stat().st_size, 1_000)
+            self.assertGreaterEqual(probe_duration(output), 1.9)
             self.assertTrue((root / "project" / "captions.srt").is_file())
             self.assertTrue((root / "project" / "captions.ass").is_file())
 

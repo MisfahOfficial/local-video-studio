@@ -197,6 +197,34 @@ class DatabaseTests(unittest.TestCase):
         restored = self.db.replace_timeline_clips(project["id"], split)
         self.assertEqual([clip["id"] for clip in restored], [clip["id"] for clip in split])
 
+    def test_timeline_detects_and_fits_visual_track_to_voiceover(self) -> None:
+        project = self.db.create_project("VO master clock", "us_nostalgia")
+        project = self.db.update_project(
+            project["id"], voiceover_path="/tmp/voiceover.mp3", duration_seconds=18.0
+        )
+        drafts = RuleBasedScenePlanner().plan(
+            "First the kitchen opened. Then the recipe returned. Finally everyone gathered.",
+            theme_id="us_nostalgia", duration_seconds=18, target_scene_count=3,
+        )
+        self.db.replace_scenes(project["id"], drafts)
+        clips = self.db.list_timeline_clips(project["id"])
+        shortened = self.db.set_timeline_clip_duration(clips[0]["id"], 2.0)
+        original_durations = [clip["end_seconds"] - clip["start_seconds"] for clip in shortened]
+        before = self.db.timeline_sync_status(project["id"])
+        self.assertEqual(before["status"], "short")
+
+        fitted = self.db.fit_timeline_to_duration(project["id"], 18.0)
+        after = self.db.timeline_sync_status(project["id"])
+        self.assertEqual(after["status"], "synced")
+        self.assertTrue(after["complete"])
+        self.assertAlmostEqual(fitted[0]["start_seconds"], 0.0)
+        self.assertAlmostEqual(fitted[-1]["end_seconds"], 18.0)
+        for previous, current in zip(fitted, fitted[1:]):
+            self.assertAlmostEqual(previous["end_seconds"], current["start_seconds"])
+        fitted_durations = [clip["end_seconds"] - clip["start_seconds"] for clip in fitted]
+        self.assertLess(fitted_durations[0], fitted_durations[1])
+        self.assertLess(original_durations[0], original_durations[1])
+
 
 if __name__ == "__main__":
     unittest.main()

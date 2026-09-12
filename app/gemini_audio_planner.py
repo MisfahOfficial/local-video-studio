@@ -5,6 +5,7 @@ import json
 import math
 import mimetypes
 import random
+import re
 import time
 import urllib.parse
 from pathlib import Path
@@ -323,6 +324,13 @@ class GeminiAudioScenePlanner:
                     f"{batch['count']}. Nothing was replaced; please retry."
                 )
             planned.sort(key=lambda item: int(item.get("position") or 0))
+            self._validate_batch_alignment(
+                planned,
+                batch["transcript"],
+                float(batch["window_start"]),
+                float(batch["window_end"]),
+                int(batch["number"]),
+            )
             for offset, item in enumerate(planned):
                 item["position"] = batch["start_position"] + offset
             items.extend(planned)
@@ -430,6 +438,70 @@ class GeminiAudioScenePlanner:
                 if isinstance(value, list):
                     return value
         raise ProviderError(f"Gemini returned no timestamped scene plan: {response}")
+
+    @staticmethod
+    def _tokens(value: Any, *, significant: bool = False) -> set[str]:
+        tokens = set(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+        if not significant:
+            return tokens
+        ignored = {
+            "the", "and", "that", "this", "with", "from", "into", "onto", "were", "was", "are", "is",
+            "for", "but", "then", "than", "when", "where", "while", "before", "after", "through", "their",
+            "there", "they", "them", "his", "her", "its", "our", "your", "you", "one", "two", "first",
+            "last", "old", "new", "scene", "image", "shot", "view", "showing", "visible", "person", "people",
+        }
+        return {token for token in tokens if len(token) >= 3 and token not in ignored}
+
+    @classmethod
+    def _validate_batch_alignment(
+        cls,
+        planned: list[dict[str, Any]],
+        transcript: list[dict[str, Any]],
+        window_start: float,
+        window_end: float,
+        batch_number: int,
+    ) -> None:
+        """Reject plans whose timestamps or pictured subject do not match the spoken passage."""
+        previous_start = window_start
+        for local_position, item in enumerate(planned, start=1):
+            try:
+                start = float(item["start_seconds"])
+                end = float(item["end_seconds"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ProviderError(
+                    f"Gemini returned invalid timing in planning batch {batch_number}, scene {local_position}."
+                ) from error
+            if (
+                not math.isfinite(start) or not math.isfinite(end) or end <= start
+                or start < window_start - 1.0 or end > window_end + 1.0
+                or start + 0.25 < previous_start
+            ):
+                raise ProviderError(
+                    f"Gemini placed scene {local_position} of planning batch {batch_number} outside its spoken audio window. "
+                    "Nothing was replaced; retry Precision Sync."
+                )
+            previous_start = start
+            spoken = " ".join(
+                str(segment.get("text") or "") for segment in transcript
+                if float(segment.get("end_seconds") or 0) >= start - 0.6
+                and float(segment.get("start_seconds") or 0) <= end + 0.6
+            )
+            narration_tokens = cls._tokens(item.get("narration"))
+            spoken_tokens = cls._tokens(spoken)
+            comparable = min(len(narration_tokens), len(spoken_tokens))
+            overlap = len(narration_tokens & spoken_tokens) / comparable if comparable else 0.0
+            if comparable >= 4 and overlap < 0.35:
+                raise ProviderError(
+                    f"Gemini assigned scene {local_position} of planning batch {batch_number} to the wrong spoken passage. "
+                    "Nothing was replaced; retry Precision Sync."
+                )
+            narration_subjects = cls._tokens(item.get("narration"), significant=True)
+            visual_subjects = cls._tokens(item.get("visual_subject"), significant=True)
+            if len(narration_subjects) >= 2 and not narration_subjects.intersection(visual_subjects):
+                raise ProviderError(
+                    f"Gemini returned an unrelated image subject for scene {local_position} of planning batch "
+                    f"{batch_number}. Nothing was replaced; retry Precision Sync."
+                )
 
     @staticmethod
     def _build_drafts(

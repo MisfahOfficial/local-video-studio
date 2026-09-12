@@ -8,6 +8,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from app.database import Database
 from app.paths import AppPaths
 from app.server import ApiError, create_server, normalize_render_options
 
@@ -44,7 +45,7 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
-                self.assertEqual(health["version"], "0.6.1")
+                self.assertEqual(health["version"], "0.6.2")
                 self.assertEqual(health["schema_version"], 4)
                 font_request = urllib.request.Request(
                     f"{base}/api/fonts/upload", data=b"\x00\x01\x00\x00font-data", method="POST",
@@ -114,6 +115,17 @@ class ServerTests(unittest.TestCase):
                     f"{base}/api/timeline-clips/{split['new_clip_id']}/delete", method="POST", payload={},
                 )
                 self.assertEqual(len(deleted["timeline_clips"]), 2)
+                Database(paths.database).update_project(
+                    project["id"], voiceover_path="/tmp/test-voiceover.mp3", duration_seconds=10.0
+                )
+                unsynced = self._request(f"{base}/api/projects/{project['id']}")["timeline_sync"]
+                self.assertEqual(unsynced["status"], "short")
+                fitted = self._request(
+                    f"{base}/api/projects/{project['id']}/timeline/fit-voiceover",
+                    method="POST", payload={},
+                )
+                self.assertEqual(fitted["timeline_sync"]["status"], "synced")
+                self.assertAlmostEqual(fitted["timeline_clips"][-1]["end_seconds"], 10.0)
 
                 upload_request = urllib.request.Request(
                     f"{base}/api/scenes/{first_scene['id']}/asset",
@@ -155,6 +167,7 @@ class ServerTests(unittest.TestCase):
                 self.assertIn("Gemini Precision Sync", page)
                 self.assertIn("planningProgress", page)
                 self.assertIn("previewLoadState", page)
+                self.assertIn("fitTimelineButton", page)
             finally:
                 server.shutdown()
                 server.server_close()
