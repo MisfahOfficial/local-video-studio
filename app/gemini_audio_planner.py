@@ -832,28 +832,34 @@ class GeminiAudioScenePlanner:
             )
 
         ordered = sorted(items, key=lambda item: int(item.get("position") or 0))
-        raw_ranges: list[tuple[float, float]] = []
+        raw_ranges: list[tuple[float | None, float | None]] = []
         for expected, item in enumerate(ordered, start=1):
             try:
                 start = float(item["start_seconds"])
                 end = float(item["end_seconds"])
-            except (KeyError, TypeError, ValueError) as error:
-                raise ProviderError(f"Gemini returned invalid timing for scene {expected}.") from error
-            if not math.isfinite(start) or not math.isfinite(end) or end <= start:
-                raise ProviderError(f"Gemini returned an invalid time range for scene {expected}.")
+            except (KeyError, TypeError, ValueError):
+                start = end = math.nan
             if not str(item.get("narration") or "").strip() or not str(item.get("visual_subject") or "").strip():
                 raise ProviderError(f"Gemini returned an incomplete description for scene {expected}.")
-            raw_ranges.append((start, end))
-
-        if raw_ranges[0][0] > max(5.0, duration * 0.02) or raw_ranges[-1][1] < duration - max(5.0, duration * 0.02):
-            raise ProviderError("Gemini did not cover the complete voice-over. Nothing was replaced; please retry.")
-        if any(raw_ranges[index][0] + 1 < raw_ranges[index - 1][0] for index in range(1, target)):
-            raise ProviderError("Gemini returned scene timestamps out of order. Nothing was replaced; please retry.")
+            raw_ranges.append((
+                start if math.isfinite(start) else None,
+                end if math.isfinite(end) else None,
+            ))
 
         boundaries = [0.0]
         minimum = min(0.25, duration / max(1, target * 4))
         for index in range(target - 1):
-            proposed = (raw_ranges[index][1] + raw_ranges[index + 1][0]) / 2
+            candidates = [raw_ranges[index][1], raw_ranges[index + 1][0]]
+            usable = [value for value in candidates if value is not None]
+            # Gemini occasionally emits a zero-width/reversed range or a
+            # non-finite timestamp even after its narration has been safely
+            # matched to the transcript. Reconstruct the cut from the usable
+            # neighboring timestamps; proportional timing is a final fallback.
+            proposed = (
+                sum(usable) / len(usable)
+                if usable
+                else duration * (index + 1) / target
+            )
             earliest = boundaries[-1] + minimum
             latest = duration - minimum * (target - index - 1)
             boundaries.append(min(latest, max(earliest, proposed)))

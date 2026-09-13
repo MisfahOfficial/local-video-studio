@@ -43,7 +43,7 @@ def verified_ssl_context() -> ssl.SSLContext:
 
 
 def _request_headers(headers: dict[str, str]) -> dict[str, str]:
-    prepared = {"Content-Type": "application/json", "User-Agent": "LocalVideoStudio/0.6.6", **headers}
+    prepared = {"Content-Type": "application/json", "User-Agent": "LocalVideoStudio/0.6.7", **headers}
     for name, value in prepared.items():
         try:
             name.encode("ascii")
@@ -94,7 +94,7 @@ def post_json(url: str, payload: Any, headers: dict[str, str], timeout: int = 12
 
 def download_bytes(url: str, timeout: int = 120, max_bytes: int = 80 * 1024 * 1024) -> bytes:
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "LocalVideoStudio/0.6.6"})
+        request = urllib.request.Request(url, headers={"User-Agent": "LocalVideoStudio/0.6.7"})
         with urllib.request.urlopen(request, timeout=timeout, context=verified_ssl_context()) as response:
             length = response.headers.get("Content-Length")
             if length and int(length) > max_bytes:

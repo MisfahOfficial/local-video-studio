@@ -254,6 +254,25 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         self.assertIn("TIMED VO TRANSCRIPT", client.created["prompt"])
         self.assertEqual(client.transcribed["mime_type"], "audio/mpeg")
 
+    def test_invalid_provider_range_is_repaired_without_discarding_the_plan(self) -> None:
+        items = sample_items()
+        items[0] = {**items[0], "end_seconds": float("nan")}
+        items[1] = {**items[1], "start_seconds": 7.0, "end_seconds": 6.0}
+
+        scenes = GeminiAudioScenePlanner._build_drafts(
+            items,
+            duration=10.0,
+            target=2,
+            theme=get_theme("us_nostalgia"),
+        )
+
+        self.assertEqual(len(scenes), 2)
+        self.assertEqual(scenes[0].start_seconds, 0.0)
+        self.assertEqual(scenes[-1].end_seconds, 10.0)
+        self.assertGreater(scenes[0].end_seconds, scenes[0].start_seconds)
+        self.assertGreater(scenes[1].end_seconds, scenes[1].start_seconds)
+        self.assertEqual(scenes[0].end_seconds, scenes[1].start_seconds)
+
     def test_auto_pacing_supplies_fixed_sentence_safe_scene_guides(self) -> None:
         client = FakeGeminiAudioClient(sample_items())
         with tempfile.TemporaryDirectory() as temporary:
