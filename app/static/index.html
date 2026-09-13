@@ -168,6 +168,7 @@
                 <span class="time accent-time" id="previewCurrentTime">00:00</span>
                 <span class="time-divider">/</span>
                 <span class="time" id="previewTotalTime">00:00</span>
+                <button class="player-button" id="previewMuteButton" type="button" aria-label="Mute voice-over" aria-pressed="false" title="Mute voice-over">🔊</button>
                 <button class="player-button" id="previewBackButton" type="button" aria-label="Previous scene">|◀</button>
                 <button class="player-button play" id="previewPlayButton" type="button" aria-label="Play">▶</button>
                 <button class="player-button" id="previewForwardButton" type="button" aria-label="Next scene">▶|</button>
@@ -253,9 +254,9 @@
             <div class="timeline-scroll" id="timelineScroll">
               <div class="timeline-canvas" id="timelineCanvas">
                 <div class="timeline-ruler-row"><div class="track-label">Time</div><div class="timeline-ruler" id="timelineRuler"></div></div>
-                <div class="track-row"><div class="track-label"><strong>▣ Video</strong><span>◉</span></div><div id="timelineList" class="timeline-track video-track"></div></div>
-                <div class="track-row"><div class="track-label"><strong>CC Captions</strong><span>◉</span></div><div id="captionTrack" class="timeline-track caption-track"></div></div>
-                <div class="track-row"><div class="track-label"><strong>♫ Voice-over</strong><span>◉</span></div><div id="audioTrack" class="timeline-track audio-track"></div></div>
+                <div class="track-row"><div class="track-label"><strong>CC Captions</strong><div class="track-controls"><button class="track-control" id="captionVisibilityButton" type="button" aria-label="Hide captions" aria-pressed="true" title="Hide captions">◉</button></div></div><div id="captionTrack" class="timeline-track caption-track"></div></div>
+                <div class="track-row"><div class="track-label"><strong>▣ Video</strong><div class="track-controls"><button class="track-control" id="videoVisibilityButton" type="button" aria-label="Hide visuals" aria-pressed="true" title="Hide visuals">◉</button></div></div><div id="timelineList" class="timeline-track video-track"></div></div>
+                <div class="track-row"><div class="track-label"><strong>♫ Voice-over</strong><div class="track-controls"><button class="track-control" id="audioMuteButton" type="button" aria-label="Mute voice-over" aria-pressed="false" title="Mute voice-over">🔊</button></div></div><div id="audioTrack" class="timeline-track audio-track"></div></div>
                 <div class="timeline-playhead" id="timelinePlayhead"><span></span></div>
               </div>
             </div>

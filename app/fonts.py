@@ -74,7 +74,7 @@ class FontManager:
         self._reject_private_address(hostname)
         filename = Path(urllib.parse.unquote(parsed.path)).name
         safe_name = self._safe_filename(filename)
-        request = urllib.request.Request(url, headers={"User-Agent": "LocalVideoStudio/0.6.8"})
+        request = urllib.request.Request(url, headers={"User-Agent": "LocalVideoStudio/0.6.9"})
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 final = urllib.parse.urlparse(response.geturl())

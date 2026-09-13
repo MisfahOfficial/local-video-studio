@@ -9,6 +9,8 @@ const state = {
   exportProjectId: null, lastRenderOutputPath: "",
   timelineSync: null,
   captionDrafts: {},
+  trackState: { captionsVisible: true, visualsVisible: true, audioMuted: false },
+  captionDrag: null,
   fonts: [], captionFlags: { bold: true, italic: false, underline: false }, captionCase: "normal", captionAlignment: "center",
 };
 
@@ -107,7 +109,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.6.8"}`;
+    $("#appVersion").textContent = `v${health.version || "0.6.9"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -115,6 +117,7 @@ async function boot() {
     loadFontOptions();
     renderProjects();
     fillSettings();
+    updateTrackControls();
     if (state.projects.length) await openProject(state.projects[0].id);
   } catch (error) {
     toast(error.message, true);
@@ -593,15 +596,120 @@ function updateCaptionPreviewStyle() {
   caption.style.opacity = style.opacity;
   caption.classList.remove("position-top", "position-middle", "position-bottom");
   caption.classList.add(`position-${style.position}`);
-  const middleOffset = style.position === "middle" ? "translateY(-50%) " : "";
-  caption.style.transform = `${middleOffset}translate(${style.position_x}%, ${style.position_y}%) scale(${style.scale / 100}) rotate(${style.rotation}deg)`;
+  const baseX = { left: 8, center: 50, right: 92 }[style.alignment] ?? 50;
+  const baseY = { top: 10, middle: 50, bottom: 90 }[style.position] ?? 90;
+  const anchorX = { left: 0, center: -50, right: -100 }[style.alignment] ?? -50;
+  const anchorY = { top: 0, middle: -50, bottom: -100 }[style.position] ?? -100;
+  caption.style.left = `calc(${baseX}% + ${style.position_x / 2}%)`;
+  caption.style.right = "auto";
+  caption.style.top = `calc(${baseY}% + ${style.position_y / 2}%)`;
+  caption.style.bottom = "auto";
+  caption.style.transform = `translate(${anchorX}%, ${anchorY}%) scale(${style.scale / 100}) rotate(${style.rotation}deg)`;
   $("#captionScaleValue").textContent = `${Math.round(style.scale)}%`;
   $("#captionOpacityValue").textContent = `${Math.round(style.opacity * 100)}%`;
   $("#captionWordsPerLineValue").textContent = style.words_per_line;
 }
 
+function updateTrackControls() {
+  const captionsVisible = state.trackState.captionsVisible;
+  const visualsVisible = state.trackState.visualsVisible;
+  const audioMuted = state.trackState.audioMuted;
+  const captionButton = $("#captionVisibilityButton");
+  const videoButton = $("#videoVisibilityButton");
+  const audioButtons = [$("#audioMuteButton"), $("#previewMuteButton")];
+
+  captionButton.textContent = captionsVisible ? "◉" : "○";
+  captionButton.title = captionsVisible ? "Hide captions" : "Show captions";
+  captionButton.setAttribute("aria-label", captionButton.title);
+  captionButton.setAttribute("aria-pressed", String(captionsVisible));
+  captionButton.classList.toggle("is-off", !captionsVisible);
+
+  videoButton.textContent = visualsVisible ? "◉" : "○";
+  videoButton.title = visualsVisible ? "Hide visuals" : "Show visuals";
+  videoButton.setAttribute("aria-label", videoButton.title);
+  videoButton.setAttribute("aria-pressed", String(visualsVisible));
+  videoButton.classList.toggle("is-off", !visualsVisible);
+
+  audioButtons.forEach(button => {
+    button.textContent = audioMuted ? "🔇" : "🔊";
+    button.title = audioMuted ? "Unmute voice-over" : "Mute voice-over";
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-pressed", String(audioMuted));
+    button.classList.toggle("is-off", audioMuted);
+  });
+
+  $("#captionTrack").classList.toggle("track-disabled", !captionsVisible);
+  $("#timelineList").classList.toggle("track-disabled", !visualsVisible);
+  $("#audioTrack").classList.toggle("track-disabled", audioMuted);
+  $("#previewAudio").muted = audioMuted;
+}
+
+function toggleCaptionVisibility() {
+  state.trackState.captionsVisible = !state.trackState.captionsVisible;
+  updateTrackControls();
+  updatePreviewAt(state.previewTime, false);
+  toast(`Captions ${state.trackState.captionsVisible ? "shown" : "hidden"} in the editor`);
+}
+
+function toggleVisualVisibility() {
+  state.trackState.visualsVisible = !state.trackState.visualsVisible;
+  updateTrackControls();
+  updatePreviewAt(state.previewTime, false);
+  toast(`Visuals ${state.trackState.visualsVisible ? "shown" : "hidden"} in the editor`);
+}
+
+function toggleAudioMute() {
+  state.trackState.audioMuted = !state.trackState.audioMuted;
+  updateTrackControls();
+  toast(`Voice-over ${state.trackState.audioMuted ? "muted" : "unmuted"}`);
+}
+
+function beginCaptionDrag(event) {
+  const caption = $("#previewCaption");
+  if (event.button !== 0 || caption.hidden || !state.trackState.captionsVisible) return;
+  const stageBounds = $("#previewStage").getBoundingClientRect();
+  event.preventDefault();
+  event.stopPropagation();
+  caption.setPointerCapture?.(event.pointerId);
+  state.captionDrag = {
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startPositionX: Number($("#captionPositionX").value || 0),
+    startPositionY: Number($("#captionPositionY").value || 0),
+    stageWidth: Math.max(1, stageBounds.width),
+    stageHeight: Math.max(1, stageBounds.height),
+  };
+  caption.classList.add("dragging");
+  $("#autosaveStatus").textContent = "Moving caption…";
+}
+
+function moveCaptionDrag(event) {
+  const drag = state.captionDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  const positionX = Math.max(-100, Math.min(100, drag.startPositionX + (event.clientX - drag.startClientX) / drag.stageWidth * 200));
+  const positionY = Math.max(-100, Math.min(100, drag.startPositionY + (event.clientY - drag.startClientY) / drag.stageHeight * 200));
+  $("#captionPositionX").value = positionX.toFixed(1);
+  $("#captionPositionY").value = positionY.toFixed(1);
+  updateCaptionPreviewStyle();
+}
+
+async function endCaptionDrag(event) {
+  const drag = state.captionDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const caption = $("#previewCaption");
+  if (caption.hasPointerCapture?.(event.pointerId)) caption.releasePointerCapture(event.pointerId);
+  caption.classList.remove("dragging");
+  state.captionDrag = null;
+  await saveCaptionStyle(true);
+  $("#autosaveStatus").textContent = "Caption position saved";
+  toast("Caption position saved");
+}
+
 function configurePreviewAudio() {
   const audio = $("#previewAudio");
+  audio.muted = state.trackState.audioMuted;
   const source = state.current?.voiceover_media_url || "";
   if (source && audio.getAttribute("src") !== source) {
     setPreviewLoadState("Loading VO…", "loading");
@@ -758,17 +866,18 @@ function updatePreviewAt(time, selectScene = true) {
   const image = $("#previewImage");
   const video = $("#previewVideo");
   const empty = $("#previewEmpty");
+  const visualsVisible = state.trackState.visualsVisible;
   image.hidden = true;
   video.hidden = true;
-  empty.hidden = Boolean(asset);
-  if (asset?.media_kind === "video") {
+  empty.hidden = Boolean(asset) || !visualsVisible;
+  if (visualsVisible && asset?.media_kind === "video") {
     video.hidden = false;
     if (video.getAttribute("src") !== asset.media_url) { video.src = asset.media_url; video.load(); }
     const rawLocalTime = Math.max(0, Number(activeClip?.source_in_seconds || 0) + state.previewTime - Number(activeClip?.start_seconds || 0));
     const localTime = Number.isFinite(video.duration) && video.duration > 0 ? rawLocalTime % video.duration : rawLocalTime;
     if (video.readyState >= 1 && Math.abs(video.currentTime - localTime) > 0.35) video.currentTime = localTime;
     if (state.isPreviewPlaying && video.paused) video.play().catch(() => {});
-  } else if (asset) {
+  } else if (visualsVisible && asset) {
     if (!video.paused) video.pause();
     image.hidden = false;
     if (image.getAttribute("src") !== asset.media_url) image.src = asset.media_url;
@@ -777,9 +886,9 @@ function updatePreviewAt(time, selectScene = true) {
   const caption = $("#previewCaption");
   const captionScene = activeCaptionSceneAt(state.previewTime);
   caption.textContent = captionTextAt(captionScene, state.previewTime);
-  caption.hidden = !caption.textContent;
+  caption.hidden = !caption.textContent || !state.trackState.captionsVisible;
   updateCaptionPreviewStyle();
-  if (active && asset) {
+  if (active && asset && visualsVisible) {
     const clipStart = Number(activeClip?.start_seconds || 0);
     const sceneDuration = Math.max(0.1, Number(activeClip?.end_seconds || 0.1) - clipStart);
     const progress = Math.max(0, Math.min(1, (state.previewTime - clipStart) / sceneDuration));
@@ -862,6 +971,7 @@ function renderTimeline() {
   }
   $("#previewScrubber").max = duration;
   $("#previewTotalTime").textContent = timecode(duration);
+  updateTrackControls();
   fillTimelineInspector(sceneForClip(selectedClip), selectedClip);
   renderMediaBin();
   updateTimelineControls();
@@ -958,7 +1068,7 @@ async function uploadReplacementMedia(file) {
   }
 }
 
-async function saveCaptionStyle() {
+async function saveCaptionStyle(quiet = false) {
   const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
   if (scene && $("#timelineCaption").value.trim() !== (scene.caption_text ?? scene.narration ?? "")) {
     const updated = await api(`/api/scenes/${scene.id}`, {
@@ -973,7 +1083,7 @@ async function saveCaptionStyle() {
   state.current.caption_style = result.caption_style;
   renderTimeline();
   $("#autosaveStatus").textContent = "Caption preset saved";
-  toast("Caption and style saved for this project");
+  if (!quiet) toast("Caption and style saved for this project");
 }
 
 const CAPTION_PRESETS = {
@@ -1500,6 +1610,14 @@ $("#timelineList").addEventListener("pointerdown", beginClipTrim);
 window.addEventListener("pointermove", moveClipTrim);
 window.addEventListener("pointerup", () => endClipTrim().catch(error => toast(error.message, true)));
 window.addEventListener("pointercancel", () => endClipTrim().catch(error => toast(error.message, true)));
+$("#previewCaption").addEventListener("pointerdown", beginCaptionDrag);
+window.addEventListener("pointermove", moveCaptionDrag);
+window.addEventListener("pointerup", event => endCaptionDrag(event).catch(error => toast(error.message, true)));
+window.addEventListener("pointercancel", event => endCaptionDrag(event).catch(error => toast(error.message, true)));
+$("#captionVisibilityButton").addEventListener("click", toggleCaptionVisibility);
+$("#videoVisibilityButton").addEventListener("click", toggleVisualVisibility);
+$("#audioMuteButton").addEventListener("click", toggleAudioMute);
+$("#previewMuteButton").addEventListener("click", toggleAudioMute);
 $("#captionTrack").addEventListener("click", event => {
   const clip = event.target.closest(".caption-clip");
   if (clip) { selectTimelineScene(clip.dataset.sceneId); showInspector("text"); }
@@ -1705,6 +1823,9 @@ document.addEventListener("keydown", event => {
   }
   if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "b") {
     event.preventDefault(); $("#timelineRazorTool").click();
+  }
+  if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "m") {
+    event.preventDefault(); toggleAudioMute();
   }
   if ((event.key === "Backspace" || event.key === "Delete") && state.activeTimelineClipId) {
     event.preventDefault(); deleteTimelineClip().catch(error => toast(error.message, true));

@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.8
+# Local Video Studio v0.6.9
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -24,7 +24,8 @@ Extra candidates and premium models are opt-in on individual scenes.
 - Script, duration, voice-over, and target-image validation warnings
 - Candidate review and manual image selection
 - CapCut-inspired three-panel editor with a media bin, separate real-time preview, and inspector
-- Synchronized video, caption, and voice-over tracks with a ruler, zoom, seeking, and persistent clip reordering
+- Premiere-style caption, video, and voice-over track order with a ruler, zoom, seeking, and persistent clip reordering
+- Direct caption dragging in the preview plus non-destructive visual/caption visibility and voice-over mute controls
 - Real trim handles, playhead splitting, deletion, magnetic gap closing, and timeline undo/redo
 - Visible player controls plus Space-bar play/pause and one-second keyboard seeking
 - Smooth frame timecode, a full-width draggable seek bar, buffering state, and loaded-audio progress
@@ -50,6 +51,11 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.6.9 makes captions directly draggable in the player and saves the new
+position to the project. Caption and visual tracks now have show/hide controls,
+voice-over can be muted from either the player or timeline, and tracks are ordered
+Captions, Video, then Voice-over to match professional editing layouts.
 
 Version 0.6.8 fixes fast, unsynchronized ending scenes caused by a stale or
 incorrect voice-over duration. macOS can now fall back to `afinfo` when FFprobe is

@@ -138,10 +138,9 @@ input[type="file"] { padding: 8px; }
 .preview-stage { position: relative; overflow: hidden; aspect-ratio: 16/9; display: grid; place-items: center; border-radius: 10px; background: #040507; border: 1px solid var(--border); }
 .preview-stage img, .preview-stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: center; }
 .preview-empty { max-width: 330px; padding: 20px; color: var(--muted); text-align: center; line-height: 1.5; }
-.preview-caption { position: absolute; z-index: 3; left: 7%; right: 7%; width: fit-content; max-width: 86%; margin: auto; padding: .16em .38em; color: #fff; background: rgba(0,0,0,.72); border-radius: .18em; font-weight: 800; line-height: 1.25; text-align: center; text-wrap: balance; white-space: pre-wrap; }
-.preview-caption.position-top { top: 8%; }
-.preview-caption.position-middle { top: 50%; transform: translateY(-50%); }
-.preview-caption.position-bottom { bottom: 8%; }
+.preview-caption { position: absolute; z-index: 3; left: 50%; top: 90%; width: max-content; max-width: 86%; margin: 0; padding: .16em .38em; color: #fff; background: rgba(0,0,0,.72); border-radius: .18em; font-weight: 800; line-height: 1.25; text-align: center; text-wrap: balance; white-space: pre-wrap; cursor: grab; touch-action: none; user-select: none; will-change: left, top, transform; }
+.preview-caption:hover { outline: 1px dashed rgba(255,255,255,.72); outline-offset: 4px; }
+.preview-caption.dragging { cursor: grabbing; outline: 2px solid var(--accent); outline-offset: 5px; }
 .preview-scene-badge { position: absolute; z-index: 4; top: 10px; left: 10px; padding: 5px 8px; border-radius: 6px; background: rgba(0,0,0,.68); color: white; font-size: 11px; }
 .preview-controls { display: grid; grid-template-columns: auto auto minmax(120px, 1fr) auto; align-items: center; gap: 10px; margin-top: 11px; }
 .preview-controls input { margin: 0; padding: 0; accent-color: var(--accent); }
@@ -225,14 +224,15 @@ body.editor-mode .studio-editor.active { display: flex; flex-direction: column; 
 .player-panel .preview-stage { width: auto; height: 100%; max-width: 100%; max-height: 100%; aspect-ratio: 16/9; }
 .player-panel .preview-controls {
   min-height: 74px; display: grid;
-  grid-template-columns: auto auto auto 1fr auto auto auto auto auto;
-  grid-template-areas: "current divider total spacer back play forward load full" "seek seek seek seek seek seek seek seek seek";
+  grid-template-columns: auto auto auto 1fr auto auto auto auto auto auto;
+  grid-template-areas: "current divider total spacer mute back play forward load full" "seek seek seek seek seek seek seek seek seek seek";
   align-items: center; column-gap: 7px; row-gap: 2px; margin: 0; padding: 7px 13px 8px;
   border-top: 1px solid #222934;
 }
 #previewCurrentTime { grid-area: current; }
 .player-panel .time-divider { grid-area: divider; }
 #previewTotalTime { grid-area: total; }
+#previewMuteButton { grid-area: mute; }
 #previewBackButton { grid-area: back; }
 #previewPlayButton { grid-area: play; }
 #previewForwardButton { grid-area: forward; }
@@ -320,6 +320,11 @@ body.editor-mode .studio-editor.active { display: flex; flex-direction: column; 
 .track-row { min-height: 62px; border-top: 1px solid #272e38; }
 .track-label { position: sticky; left: 0; z-index: 3; min-width: var(--track-label-width); display: flex; align-items: center; justify-content: space-between; gap: 5px; padding: 0 10px; border-right: 1px solid #303844; background: #151920; color: var(--muted); font-size: 10px; }
 .track-label strong { color: #d8dde3; font-size: 10px; }
+.track-controls { display: flex; align-items: center; gap: 3px; }
+.track-control { width: 27px; height: 27px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #a8b1bd; font-size: 12px; line-height: 1; }
+.track-control:hover { border-color: #4a5563; background: #252b34; color: #fff; }
+.track-control.is-off { color: #59616d; }
+.timeline-track.track-disabled > * { opacity: .3; filter: grayscale(.75); }
 .timeline-ruler { position: relative; overflow: hidden; }
 .ruler-mark { position: absolute; inset: 0 auto 0 0; border-left: 1px solid #3a424e; color: #87909d; font-size: 9px; padding: 4px 0 0 4px; }
 .ruler-mark.minor { height: 8px; top: auto; color: transparent; border-color: #292f38; }
@@ -410,8 +415,8 @@ dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
   .player-panel { min-height: 420px; }
   .timeline-inspector { max-height: 680px; border-left: 0; border-top: 1px solid var(--border); }
   .player-panel .preview-controls {
-    grid-template-columns: auto auto auto 1fr auto auto auto auto;
-    grid-template-areas: "current divider total spacer back play forward full" "seek seek seek seek seek seek seek seek";
+    grid-template-columns: auto auto auto 1fr auto auto auto auto auto;
+    grid-template-areas: "current divider total spacer mute back play forward full" "seek seek seek seek seek seek seek seek seek";
   }
   .player-panel .preview-load-state { display: none; }
   .export-dialog-layout { grid-template-columns: 1fr; }

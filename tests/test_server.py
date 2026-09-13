@@ -45,7 +45,7 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
-                self.assertEqual(health["version"], "0.6.8")
+                self.assertEqual(health["version"], "0.6.9")
                 self.assertEqual(health["schema_version"], 4)
                 font_request = urllib.request.Request(
                     f"{base}/api/fonts/upload", data=b"\x00\x01\x00\x00font-data", method="POST",
