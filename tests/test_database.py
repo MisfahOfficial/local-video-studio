@@ -249,6 +249,7 @@ class DatabaseTests(unittest.TestCase):
         fitted = self.db.fit_timeline_to_duration(project["id"], 18.0)
         repaired_scenes = self.db.list_scenes(project["id"])
 
+        self.assertAlmostEqual(fitted[0]["end_seconds"], 8.5)
         self.assertTrue(all(clip["end_seconds"] - clip["start_seconds"] > 2 for clip in fitted))
         self.assertEqual(
             [(scene["start_seconds"], scene["end_seconds"]) for scene in repaired_scenes],

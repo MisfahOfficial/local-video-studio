@@ -497,25 +497,34 @@ class Database:
             if one_clip_per_scene else 1
             for clip in clips
         ]
-        # If even one normal sentence was compressed to an implausibly fast
-        # rate, the provider timing is not a safe weighting source. Rebuild all
-        # durations from narration length so late scenes do not flash by.
-        unreadable_timing = one_clip_per_scene and any(
-            words > 2 and (duration <= 0.5 or words / duration > 6.0)
-            for words, duration in zip(word_counts, original, strict=True)
-        )
-        remaining = target - len(clips) * minimum
-        weights = (
-            [float(words) for words in word_counts]
-            if unreadable_timing
-            else [max(0.0, duration - minimum) for duration in original]
-        )
-        weight_total = sum(weights)
-        if weight_total <= 1e-9:
-            weights = [1.0] * len(clips)
-            weight_total = float(len(clips))
-        durations = [minimum + remaining * weight / weight_total for weight in weights]
-        durations[-1] += target - sum(durations)
+        # Preserve credible Gemini anchors, then rebuild only the compressed
+        # tail from narration length so ending scenes do not flash by.
+        unreadable_index = next((
+            index
+            for index, (words, duration) in enumerate(zip(word_counts, original, strict=True))
+            if one_clip_per_scene and words > 2 and (duration <= 0.5 or words / duration > 4.5)
+        ), None)
+
+        def distribute(total: float, weights: list[float]) -> list[float]:
+            remaining = total - len(weights) * minimum
+            weight_total = sum(weights)
+            if weight_total <= 1e-9:
+                weights = [1.0] * len(weights)
+                weight_total = float(len(weights))
+            result = [minimum + remaining * weight / weight_total for weight in weights]
+            result[-1] += total - sum(result)
+            return result
+
+        if unreadable_index is not None:
+            prefix = original[:unreadable_index]
+            suffix_total = target - sum(prefix)
+            suffix_weights = [float(words) for words in word_counts[unreadable_index:]]
+            if suffix_total + 1e-9 >= len(suffix_weights) * minimum:
+                durations = prefix + distribute(suffix_total, suffix_weights)
+            else:
+                durations = distribute(target, [float(words) for words in word_counts])
+        else:
+            durations = distribute(target, [max(0.0, duration - minimum) for duration in original])
         for clip, duration in zip(clips, durations, strict=True):
             clip["start_seconds"] = 0.0
             clip["end_seconds"] = duration
