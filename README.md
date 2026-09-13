@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.5
+# Local Video Studio v0.6.6
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -50,6 +50,10 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.6.6 fixes editable installation by explicitly packaging only the Python
+application and its browser assets, so development folders are no longer mistaken
+for additional top-level packages by setuptools.
 
 Version 0.6.5 adds automatic pacing when **Target images** is left blank. Main
 scenes are kept to 5 seconds through minute 20, 8 seconds through minute 40, and
