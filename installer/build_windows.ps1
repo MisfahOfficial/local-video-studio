@@ -6,7 +6,7 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw "Python 3.11 or newer is required."
 }
 
-python -m pip install --upgrade pyinstaller
+python -m pip install --upgrade pyinstaller certifi
 python -m PyInstaller `
     --noconfirm `
     --clean `

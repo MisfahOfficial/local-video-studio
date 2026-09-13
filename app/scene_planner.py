@@ -71,21 +71,12 @@ def _word_count(text: str) -> int:
     return max(1, len(re.findall(r"\b[\w'-]+\b", text)))
 
 
-def _split_longest(units: list[str], desired: int) -> list[str]:
-    result = units[:]
-    while len(result) < desired:
-        candidate_index = max(range(len(result)), key=lambda index: _word_count(result[index]))
-        words = result[candidate_index].split()
-        if len(words) < 4:
-            break
-        middle = len(words) // 2
-        result[candidate_index:candidate_index + 1] = [" ".join(words[:middle]), " ".join(words[middle:])]
-    return result
-
-
 def _group_units(units: list[str], desired: int) -> list[str]:
     if desired <= 0 or len(units) <= desired:
-        return _split_longest(units, desired) if desired > len(units) else units
+        # Never manufacture extra visuals by cutting an unfinished sentence in
+        # half. The caller reports when a requested image target cannot be met
+        # with the complete semantic units available in the script.
+        return units
 
     total_words = sum(_word_count(unit) for unit in units)
     groups: list[str] = []
@@ -164,7 +155,13 @@ def _era_hint(text: str) -> str:
     return f"historical period anchored to {years[0]}" if years else "period details inferred from the surrounding chapter"
 
 
-def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: int) -> str:
+def _compose_prompt(
+    narration: str,
+    emotion: Emotion,
+    theme_id: str,
+    position: int,
+    spoken_context: str | None = None,
+) -> str:
     theme = get_theme(theme_id)
     shot = "establishing wide shot" if position % 5 == 1 else "observational medium shot"
     if emotion in {Emotion.SUSPENSE, Emotion.REVEAL}:
@@ -175,11 +172,19 @@ def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: i
         shot = "quiet environmental composition with purposeful negative space"
 
     subject = _visual_subject(narration)
+    spoken_anchor = _visual_subject(spoken_context or "")
+    context_direction = (
+        f"Exact spoken moment that this image must directly illustrate: {spoken_anchor}. "
+        if spoken_anchor and spoken_anchor.casefold() != subject.casefold() else ""
+    )
     return (
-        f"Visualize this narration without adding unsupported facts: {subject}. "
+        f"Primary visible subject and action: {subject}. "
+        f"{context_direction}"
         f"{_era_hint(narration)}. {EMOTION_DIRECTION[emotion]}. {shot}. "
         f"{theme.visual_style}. Palette: {theme.palette}. Camera: {theme.camera_language}. "
-        "One coherent moment, realistic proportions, clean cinematic 16:9 composition, no captions inside the image."
+        "Show the named subject clearly in one coherent moment; do not substitute a generic person, room, or object. "
+        "Historically credible materials, realistic proportions, layered depth, clean cinematic 16:9 composition, "
+        "no captions, logos, collages, split screens, or watermarks inside the image."
     )
 
 

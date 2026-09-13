@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -16,16 +17,16 @@ def utc_now() -> str:
 
 
 class Database:
-    LATEST_SCHEMA_VERSION = 2
+    LATEST_SCHEMA_VERSION = 4
 
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self._requires_v2_upgrade():
+        if self._requires_upgrade():
             self._backup_before_upgrade()
         self.migrate()
 
-    def _requires_v2_upgrade(self) -> bool:
+    def _requires_upgrade(self) -> bool:
         if not self.path.is_file() or self.path.stat().st_size == 0:
             return False
         try:
@@ -33,8 +34,11 @@ class Database:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
                 if "projects" not in tables:
                     return False
-                columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
-                return "default_provider" not in columns
+                project_columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
+                scene_columns = {row[1] for row in db.execute("PRAGMA table_info(scenes)")} if "scenes" in tables else set()
+                return "default_provider" not in project_columns or "caption_style" not in project_columns or (
+                    scene_columns and "caption_text" not in scene_columns
+                ) or "timeline_clips" not in tables
         except sqlite3.DatabaseError:
             return False
 
@@ -42,7 +46,7 @@ class Database:
         backup_dir = self.path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        backup_path = backup_dir / f"studio-pre-v2-{timestamp}.sqlite3"
+        backup_path = backup_dir / f"studio-pre-v4-{timestamp}.sqlite3"
         with sqlite3.connect(self.path) as source, sqlite3.connect(backup_path) as destination:
             source.backup(destination)
 
@@ -81,6 +85,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'draft',
                     estimated_cost REAL NOT NULL DEFAULT 0,
                     actual_cost REAL NOT NULL DEFAULT 0,
+                    caption_style TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -92,6 +97,7 @@ class Database:
                     start_seconds REAL NOT NULL,
                     end_seconds REAL NOT NULL,
                     narration TEXT NOT NULL,
+                    caption_text TEXT NOT NULL DEFAULT '',
                     visual_subject TEXT NOT NULL,
                     emotion TEXT NOT NULL,
                     narrative_role TEXT NOT NULL,
@@ -152,9 +158,23 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS timeline_clips (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL,
+                    start_seconds REAL NOT NULL,
+                    end_seconds REAL NOT NULL,
+                    source_in_seconds REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(project_id, position)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_scenes_project ON scenes(project_id, position);
                 CREATE INDEX IF NOT EXISTS idx_assets_scene ON assets(scene_id, candidate_index);
                 CREATE INDEX IF NOT EXISTS idx_generation_jobs_project ON generation_jobs(project_id, status);
+                CREATE INDEX IF NOT EXISTS idx_timeline_clips_project ON timeline_clips(project_id, position);
                 """
             )
             db.execute(
@@ -177,6 +197,36 @@ class Database:
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)",
                 (utc_now(),),
             )
+            project_columns = {row[1] for row in db.execute("PRAGMA table_info(projects)")}
+            if "caption_style" not in project_columns:
+                db.execute("ALTER TABLE projects ADD COLUMN caption_style TEXT NOT NULL DEFAULT '{}'")
+            scene_columns = {row[1] for row in db.execute("PRAGMA table_info(scenes)")}
+            if "caption_text" not in scene_columns:
+                db.execute("ALTER TABLE scenes ADD COLUMN caption_text TEXT NOT NULL DEFAULT ''")
+            db.execute("UPDATE scenes SET caption_text = narration WHERE caption_text = ''")
+            db.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)",
+                (utc_now(),),
+            )
+            # v4 separates visual edits from script/caption timing. Existing
+            # scenes become magnetic main-track clips without changing any data.
+            now = utc_now()
+            db.execute(
+                """
+                INSERT OR IGNORE INTO timeline_clips (
+                    id, project_id, scene_id, position, start_seconds, end_seconds,
+                    source_in_seconds, created_at, updated_at
+                )
+                SELECT 'clip-' || id, project_id, id, position, start_seconds,
+                       end_seconds, 0, ?, ?
+                FROM scenes
+                """,
+                (now, now),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?)",
+                (now,),
+            )
 
     def schema_version(self) -> int:
         with self.connection() as db:
@@ -188,7 +238,7 @@ class Database:
         if row is None:
             return None
         data = dict(row)
-        for key in ("timeline_actions", "metadata", "settings"):
+        for key in ("timeline_actions", "metadata", "settings", "caption_style"):
             if key in data and isinstance(data[key], str):
                 try:
                     data[key] = json.loads(data[key])
@@ -220,9 +270,11 @@ class Database:
         allowed = {
             "name", "theme_id", "script", "voiceover_path", "duration_seconds", "target_scene_count",
             "requested_scene_count", "status", "estimated_cost", "actual_cost", "default_provider", "default_model_role",
-            "default_candidate_count", "default_motion", "default_transition"
+            "default_candidate_count", "default_motion", "default_transition", "caption_style"
         }
         values = {key: value for key, value in changes.items() if key in allowed}
+        if "caption_style" in values:
+            values["caption_style"] = json.dumps(values["caption_style"])
         if values:
             values["updated_at"] = utc_now()
             assignments = ", ".join(f"{key} = ?" for key in values)
@@ -248,14 +300,14 @@ class Database:
                 db.execute(
                     """
                     INSERT INTO scenes (
-                        id, project_id, position, start_seconds, end_seconds, narration, visual_subject,
+                        id, project_id, position, start_seconds, end_seconds, narration, caption_text, visual_subject,
                         emotion, narrative_role, importance, prompt, negative_prompt, media_kind,
                         provider, model_role, candidate_count, timeline_actions, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(uuid.uuid4()), project_id, data["position"], data["start_seconds"], data["end_seconds"],
-                        data["narration"], data["visual_subject"], data["emotion"], data["narrative_role"],
+                        data["narration"], data["narration"], data["visual_subject"], data["emotion"], data["narrative_role"],
                         data["importance"], data["prompt"], data["negative_prompt"], data["media_kind"],
                         project["default_provider"], project["default_model_role"],
                         int(project["default_candidate_count"]),
@@ -265,6 +317,18 @@ class Database:
                         ]), now, now,
                     ),
                 )
+            db.execute(
+                """
+                INSERT INTO timeline_clips (
+                    id, project_id, scene_id, position, start_seconds, end_seconds,
+                    source_in_seconds, created_at, updated_at
+                )
+                SELECT 'clip-' || id, project_id, id, position, start_seconds,
+                       end_seconds, 0, ?, ?
+                FROM scenes WHERE project_id = ?
+                """,
+                (now, now, project_id),
+            )
             db.execute(
                 "UPDATE projects SET target_scene_count = ?, status = 'planned', updated_at = ? WHERE id = ?",
                 (len(drafts), now, project_id),
@@ -285,7 +349,7 @@ class Database:
 
     def update_scene(self, scene_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         allowed = {
-            "start_seconds", "end_seconds", "narration", "visual_subject", "emotion", "narrative_role",
+            "start_seconds", "end_seconds", "narration", "caption_text", "visual_subject", "emotion", "narrative_role",
             "importance", "prompt", "negative_prompt", "media_kind", "provider", "model_role",
             "candidate_count", "timeline_actions", "generation_status", "selected_asset_id"
         }
@@ -301,6 +365,284 @@ class Database:
         if not scene:
             raise KeyError("Scene not found")
         return scene
+
+    def set_scene_duration(self, scene_id: str, duration_seconds: float) -> list[dict[str, Any]]:
+        scene = self.get_scene(scene_id)
+        if not scene:
+            raise KeyError("Scene not found")
+        duration = float(duration_seconds)
+        if not 0.5 <= duration <= 600:
+            raise ValueError("Scene duration must be between 0.5 and 600 seconds")
+        scenes = self.list_scenes(str(scene["project_id"]))
+        cursor = 0.0
+        now = utc_now()
+        with self.connection() as db:
+            for item in scenes:
+                item_duration = duration if item["id"] == scene_id else max(
+                    0.5, float(item["end_seconds"]) - float(item["start_seconds"])
+                )
+                db.execute(
+                    "UPDATE scenes SET start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                    (cursor, cursor + item_duration, now, item["id"]),
+                )
+                cursor += item_duration
+            db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, scene["project_id"]))
+        return self.list_scenes(str(scene["project_id"]))
+
+    def reorder_scenes(self, project_id: str, ordered_scene_ids: list[str]) -> list[dict[str, Any]]:
+        scenes = self.list_scenes(project_id)
+        current_ids = [str(scene["id"]) for scene in scenes]
+        if len(ordered_scene_ids) != len(current_ids) or set(ordered_scene_ids) != set(current_ids):
+            raise ValueError("The reordered timeline must contain every project scene exactly once")
+        by_id = {str(scene["id"]): scene for scene in scenes}
+        cursor = 0.0
+        now = utc_now()
+        with self.connection() as db:
+            for temporary_position, scene_id in enumerate(ordered_scene_ids, start=1):
+                db.execute(
+                    "UPDATE scenes SET position = ?, updated_at = ? WHERE id = ?",
+                    (-temporary_position, now, scene_id),
+                )
+            for position, scene_id in enumerate(ordered_scene_ids, start=1):
+                scene = by_id[scene_id]
+                duration = max(0.5, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+                db.execute(
+                    "UPDATE scenes SET position = ?, start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                    (position, cursor, cursor + duration, now, scene_id),
+                )
+                cursor += duration
+            db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
+        return self.list_scenes(project_id)
+
+    def list_timeline_clips(self, project_id: str) -> list[dict[str, Any]]:
+        with self.connection() as db:
+            rows = db.execute(
+                "SELECT * FROM timeline_clips WHERE project_id = ? ORDER BY position", (project_id,)
+            ).fetchall()
+        return [self._dict(row) or {} for row in rows]
+
+    def timeline_sync_status(self, project_id: str, tolerance: float = 0.05) -> dict[str, Any]:
+        """Describe whether the visual track covers the measured voice-over."""
+        project = self.get_project(project_id)
+        if not project:
+            raise KeyError("Project not found")
+        clips = self.list_timeline_clips(project_id)
+        video_duration = max((float(clip["end_seconds"]) for clip in clips), default=0.0)
+        voiceover_duration = (
+            float(project.get("duration_seconds") or 0)
+            if project.get("voiceover_path") else 0.0
+        )
+        contiguous = bool(clips)
+        cursor = 0.0
+        for clip in clips:
+            start = float(clip["start_seconds"])
+            end = float(clip["end_seconds"])
+            if abs(start - cursor) > tolerance or end <= start:
+                contiguous = False
+            cursor = end
+        difference = voiceover_duration - video_duration
+        if not clips:
+            status = "missing"
+        elif voiceover_duration <= 0:
+            status = "no_voiceover"
+        elif not contiguous:
+            status = "gapped"
+        elif difference > tolerance:
+            status = "short"
+        elif difference < -tolerance:
+            status = "long"
+        else:
+            status = "synced"
+        return {
+            "status": status,
+            "complete": status in {"synced", "no_voiceover"},
+            "video_duration": round(video_duration, 3),
+            "voiceover_duration": round(voiceover_duration, 3),
+            "difference_seconds": round(difference, 3),
+            "contiguous": contiguous,
+        }
+
+    def fit_timeline_to_duration(self, project_id: str, target_duration: float) -> list[dict[str, Any]]:
+        """Fit a gapless visual track to a master duration without changing clip order."""
+        clips = self.list_timeline_clips(project_id)
+        if not clips:
+            raise ValueError("Create the visual plan before fitting it to the voice-over")
+        target = float(target_duration)
+        minimum = 0.25
+        if not math.isfinite(target) or target <= 0:
+            raise ValueError("The voice-over duration is not available")
+        if target + 1e-9 < len(clips) * minimum:
+            raise ValueError(
+                f"The {target:.2f}s voice-over is too short for {len(clips)} clips at the 0.25s minimum"
+            )
+
+        original = [max(minimum, float(clip["end_seconds"]) - float(clip["start_seconds"])) for clip in clips]
+        remaining = target - len(clips) * minimum
+        weights = [max(0.0, duration - minimum) for duration in original]
+        weight_total = sum(weights)
+        if weight_total <= 1e-9:
+            weights = [1.0] * len(clips)
+            weight_total = float(len(clips))
+        durations = [minimum + remaining * weight / weight_total for weight in weights]
+        durations[-1] += target - sum(durations)
+        for clip, duration in zip(clips, durations, strict=True):
+            clip["start_seconds"] = 0.0
+            clip["end_seconds"] = duration
+        with self.connection() as db:
+            self._retime_timeline(db, project_id, clips)
+        return self.list_timeline_clips(project_id)
+
+    def get_timeline_clip(self, clip_id: str) -> dict[str, Any] | None:
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM timeline_clips WHERE id = ?", (clip_id,)).fetchone()
+        return self._dict(row)
+
+    @staticmethod
+    def _retime_timeline(db: sqlite3.Connection, project_id: str, clips: list[dict[str, Any]]) -> None:
+        now = utc_now()
+        # Temporary negative positions avoid the UNIQUE(project_id, position)
+        # constraint while clips are reordered.
+        for index, clip in enumerate(clips, start=1):
+            db.execute(
+                "UPDATE timeline_clips SET position = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+                (-index, now, clip["id"], project_id),
+            )
+        cursor = 0.0
+        for position, clip in enumerate(clips, start=1):
+            duration = max(0.25, float(clip["end_seconds"]) - float(clip["start_seconds"]))
+            db.execute(
+                """
+                UPDATE timeline_clips
+                SET position = ?, start_seconds = ?, end_seconds = ?, updated_at = ?
+                WHERE id = ? AND project_id = ?
+                """,
+                (position, cursor, cursor + duration, now, clip["id"], project_id),
+            )
+            cursor += duration
+        db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
+
+    def reorder_timeline_clips(self, project_id: str, ordered_clip_ids: list[str]) -> list[dict[str, Any]]:
+        clips = self.list_timeline_clips(project_id)
+        current_ids = [str(clip["id"]) for clip in clips]
+        if len(ordered_clip_ids) != len(current_ids) or set(ordered_clip_ids) != set(current_ids):
+            raise ValueError("The reordered timeline must contain every video clip exactly once")
+        by_id = {str(clip["id"]): clip for clip in clips}
+        ordered = [by_id[clip_id] for clip_id in ordered_clip_ids]
+        with self.connection() as db:
+            self._retime_timeline(db, project_id, ordered)
+        return self.list_timeline_clips(project_id)
+
+    def set_timeline_clip_duration(
+        self, clip_id: str, duration_seconds: float, source_in_seconds: float | None = None
+    ) -> list[dict[str, Any]]:
+        clip = self.get_timeline_clip(clip_id)
+        if not clip:
+            raise KeyError("Timeline clip not found")
+        duration = float(duration_seconds)
+        if not 0.25 <= duration <= 3600:
+            raise ValueError("Clip duration must be between 0.25 and 3600 seconds")
+        source_in = float(clip["source_in_seconds"] if source_in_seconds is None else source_in_seconds)
+        if not 0 <= source_in <= 86_400:
+            raise ValueError("Clip source start must be between 0 and 86400 seconds")
+        clips = self.list_timeline_clips(str(clip["project_id"]))
+        for item in clips:
+            if item["id"] == clip_id:
+                item["end_seconds"] = float(item["start_seconds"]) + duration
+                item["source_in_seconds"] = source_in
+                break
+        with self.connection() as db:
+            db.execute(
+                "UPDATE timeline_clips SET source_in_seconds = ? WHERE id = ?", (source_in, clip_id)
+            )
+            self._retime_timeline(db, str(clip["project_id"]), clips)
+        return self.list_timeline_clips(str(clip["project_id"]))
+
+    def split_timeline_clip(self, clip_id: str, offset_seconds: float) -> tuple[list[dict[str, Any]], str]:
+        clip = self.get_timeline_clip(clip_id)
+        if not clip:
+            raise KeyError("Timeline clip not found")
+        duration = float(clip["end_seconds"]) - float(clip["start_seconds"])
+        offset = float(offset_seconds)
+        if offset < 0.25 or duration - offset < 0.25:
+            raise ValueError("Split must leave at least 0.25 seconds on both sides")
+        clips = self.list_timeline_clips(str(clip["project_id"]))
+        new_id = str(uuid.uuid4())
+        new_clip = {
+            **clip,
+            "id": new_id,
+            "start_seconds": 0.0,
+            "end_seconds": duration - offset,
+            "source_in_seconds": float(clip["source_in_seconds"]) + offset,
+        }
+        for index, item in enumerate(clips):
+            if item["id"] == clip_id:
+                item["end_seconds"] = float(item["start_seconds"]) + offset
+                clips.insert(index + 1, new_clip)
+                break
+        now = utc_now()
+        with self.connection() as db:
+            db.execute(
+                """
+                INSERT INTO timeline_clips (
+                    id, project_id, scene_id, position, start_seconds, end_seconds,
+                    source_in_seconds, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
+                """,
+                (
+                    new_id, clip["project_id"], clip["scene_id"], -(len(clips) + 1),
+                    duration - offset, new_clip["source_in_seconds"], now, now,
+                ),
+            )
+            self._retime_timeline(db, str(clip["project_id"]), clips)
+        return self.list_timeline_clips(str(clip["project_id"])), new_id
+
+    def delete_timeline_clip(self, clip_id: str) -> list[dict[str, Any]]:
+        clip = self.get_timeline_clip(clip_id)
+        if not clip:
+            raise KeyError("Timeline clip not found")
+        clips = self.list_timeline_clips(str(clip["project_id"]))
+        if len(clips) <= 1:
+            raise ValueError("A timeline must keep at least one video clip")
+        remaining = [item for item in clips if item["id"] != clip_id]
+        with self.connection() as db:
+            db.execute("DELETE FROM timeline_clips WHERE id = ?", (clip_id,))
+            self._retime_timeline(db, str(clip["project_id"]), remaining)
+        return self.list_timeline_clips(str(clip["project_id"]))
+
+    def replace_timeline_clips(self, project_id: str, clips: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not clips:
+            raise ValueError("A timeline must keep at least one video clip")
+        scene_ids = {str(scene["id"]) for scene in self.list_scenes(project_id)}
+        normalized: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in clips:
+            clip_id = str(item.get("id") or "")
+            scene_id = str(item.get("scene_id") or "")
+            if not clip_id or clip_id in seen_ids or scene_id not in scene_ids:
+                raise ValueError("Timeline snapshot contains an invalid clip")
+            duration = float(item.get("end_seconds", 0)) - float(item.get("start_seconds", 0))
+            source_in = float(item.get("source_in_seconds", 0))
+            if not 0.25 <= duration <= 3600 or not 0 <= source_in <= 86_400:
+                raise ValueError("Timeline snapshot contains invalid timing")
+            seen_ids.add(clip_id)
+            normalized.append({**item, "id": clip_id, "scene_id": scene_id})
+        now = utc_now()
+        with self.connection() as db:
+            db.execute("DELETE FROM timeline_clips WHERE project_id = ?", (project_id,))
+            for index, clip in enumerate(normalized, start=1):
+                duration = float(clip["end_seconds"]) - float(clip["start_seconds"])
+                db.execute(
+                    """
+                    INSERT INTO timeline_clips (
+                        id, project_id, scene_id, position, start_seconds, end_seconds,
+                        source_in_seconds, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
+                    """,
+                    (clip["id"], project_id, clip["scene_id"], -index, duration,
+                     float(clip.get("source_in_seconds", 0)), now, now),
+                )
+            self._retime_timeline(db, project_id, normalized)
+        return self.list_timeline_clips(project_id)
 
     def bulk_update_scenes(self, project_id: str, scene_ids: list[str] | None,
                            changes: dict[str, Any]) -> list[dict[str, Any]]:
@@ -369,6 +711,14 @@ class Database:
         with self.connection() as db:
             rows = db.execute(query, params).fetchall()
         return [self._dict(row) or {} for row in rows]
+
+    def next_asset_candidate_index(self, scene_id: str) -> int:
+        with self.connection() as db:
+            row = db.execute(
+                "SELECT COALESCE(MAX(candidate_index), -1) + 1 FROM assets WHERE scene_id = ?",
+                (scene_id,),
+            ).fetchone()
+        return int(row[0]) if row else 0
 
     def add_asset(self, *, project_id: str, scene_id: str, candidate_index: int, media_kind: str,
                   provider: str, model: str, local_path: str, remote_url: str | None,

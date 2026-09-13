@@ -14,7 +14,7 @@ Local application server
    │                       ├── Together images
    │                       └── Offline test images
    ├── Timeline renderer ── motion/effect registry ── FFmpeg
-   └── SQLite repository ── projects / scenes / assets / jobs
+   └── SQLite repository ── projects / scenes / timeline clips / assets / jobs
 ```
 
 ## Stable boundaries
@@ -22,9 +22,10 @@ Local application server
 | Boundary | Contract | Implementations |
 |---|---|---|
 | Media generation | `MediaProvider.generate(GenerationRequest)` | Runware, Together, mock |
-| Media type | `MediaKind` | `IMAGE` now; `VIDEO` is already represented |
+| Media type | `MediaKind` | Generated images plus imported images/videos |
 | Scene direction | `SceneDraft` | Free rule planner, optional Gemini enhancer |
 | Timeline behavior | `TimelineAction(type, params)` | Motion and transition actions |
+| Main video track | `timeline_clips` rows | Order, duration, source-in, split/restore |
 | Motion rendering | `MotionRegistry` | Static, push, pull, left/right pan |
 | Persistence | `Database` methods | SQLite tables and migrations |
 | User interface | HTTP JSON routes | Framework-free browser application |
@@ -49,21 +50,25 @@ Local application server
 ```text
 application-data/
 ├── backups/
-│   └── studio-pre-v2-<timestamp>.sqlite3
+│   └── studio-pre-v4-<timestamp>.sqlite3
 ├── settings.json
 ├── studio.sqlite3
 └── projects/<project-id>/
     ├── voiceover.<ext>
     ├── assets/
+    │   └── imports/
     ├── captions.srt
     ├── cache/clips/
     └── renders/
 ```
 
 The UI never needs to know how a provider authenticates, and the renderer never
-needs to know which provider produced an asset. A future video asset follows the
-same scene/asset selection flow and is looped or trimmed by the renderer based on
-its `media_kind`.
+needs to know which provider produced an asset. Imported videos use the same
+scene/asset selection flow and are looped or trimmed by the renderer based on
+their `media_kind`. The independent `timeline_clips` table lets one scene asset
+appear in multiple split clips and keeps visual reordering/trimming separate from
+the fixed voice-over and caption timings. Byte-range media serving keeps long voice-over preview seeking
+responsive without loading the entire file into memory.
 
 ## Design decisions
 

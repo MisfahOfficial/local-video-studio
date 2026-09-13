@@ -11,6 +11,12 @@ if [[ ! -d .venv ]]; then
 fi
 
 source .venv/bin/activate
+
+if ! python -c "import certifi" >/dev/null 2>&1; then
+  echo "Installing secure certificate support..."
+  python -m pip install --disable-pip-version-check --quiet "certifi>=2024.8.30"
+fi
+
 echo "Starting Local Video Studio..."
 echo "Keep this window open while you use the tool. Press Control-C here to stop it."
 python run.py
