@@ -225,6 +225,47 @@ class DatabaseTests(unittest.TestCase):
         self.assertLess(fitted_durations[0], fitted_durations[1])
         self.assertLess(original_durations[0], original_durations[1])
 
+    def test_fit_repairs_flashing_tail_and_keeps_scene_captions_synchronized(self) -> None:
+        project = self.db.create_project("Compressed ending", "us_nostalgia")
+        drafts = RuleBasedScenePlanner().plan(
+            "A measured opening sentence has several words. "
+            "This important ending sentence must remain readable. "
+            "The final call to action also needs enough time.",
+            theme_id="us_nostalgia", duration_seconds=9, target_scene_count=3,
+        )
+        scenes = self.db.replace_scenes(project["id"], drafts)
+        with self.db.connection() as db:
+            ranges = ((0.0, 8.5), (8.5, 8.75), (8.75, 9.0))
+            for scene, (start, end) in zip(scenes, ranges, strict=True):
+                db.execute(
+                    "UPDATE scenes SET start_seconds = ?, end_seconds = ? WHERE id = ?",
+                    (start, end, scene["id"]),
+                )
+                db.execute(
+                    "UPDATE timeline_clips SET start_seconds = ?, end_seconds = ? WHERE scene_id = ?",
+                    (start, end, scene["id"]),
+                )
+
+        fitted = self.db.fit_timeline_to_duration(project["id"], 18.0)
+        repaired_scenes = self.db.list_scenes(project["id"])
+
+        self.assertTrue(all(clip["end_seconds"] - clip["start_seconds"] > 2 for clip in fitted))
+        self.assertEqual(
+            [(scene["start_seconds"], scene["end_seconds"]) for scene in repaired_scenes],
+            [(clip["start_seconds"], clip["end_seconds"]) for clip in fitted],
+        )
+        self.assertEqual(self.db.get_project(project["id"])["duration_seconds"], 18.0)
+
+    def test_planned_pop_motion_is_preserved_in_saved_scenes(self) -> None:
+        project = self.db.create_project("Pop insert", "us_nostalgia")
+        drafts = RuleBasedScenePlanner().plan(
+            "Look!", theme_id="us_nostalgia", duration_seconds=1.5, target_scene_count=1,
+        )
+
+        scenes = self.db.replace_scenes(project["id"], drafts)
+
+        self.assertEqual(scenes[0]["timeline_actions"][0]["params"]["preset"], "pop_in")
+
 
 if __name__ == "__main__":
     unittest.main()

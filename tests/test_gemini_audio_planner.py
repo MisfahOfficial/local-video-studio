@@ -293,6 +293,25 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         self.assertIn("AUTO-PACED SCENE GUIDE", client.created["prompt"])
         self.assertIn("maximum of 5 seconds through minute 20", client.created["prompt"])
 
+    def test_spoken_timestamps_extend_a_stale_short_voiceover_duration(self) -> None:
+        client = FakeGeminiAudioClient(sample_items())
+        with tempfile.TemporaryDirectory() as temporary:
+            voiceover = Path(temporary) / "voice.mp3"
+            voiceover.write_bytes(b"test-audio")
+            scenes = GeminiAudioScenePlanner("key", "gemini-3.7-flash", client=client).plan(
+                script=(
+                    "The old lunch counter opened before sunrise. "
+                    "Then the first steaming bowl reached the counter."
+                ),
+                voiceover_path=voiceover,
+                duration_seconds=5.0,
+                target_scene_count=None,
+                theme=get_theme("us_nostalgia"),
+            )
+
+        self.assertGreater(scenes[-1].end_seconds, 8.0)
+        self.assertTrue(all(scene.end_seconds > scene.start_seconds for scene in scenes))
+
     def test_auto_pacing_isolates_a_two_second_pop_insert(self) -> None:
         transcript = [
             {"start_seconds": 0.0, "end_seconds": 4.0, "text": "The workshop opened before dawn."},

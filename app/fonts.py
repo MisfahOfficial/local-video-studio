@@ -25,26 +25,30 @@ class FontManager:
         "raw.githubusercontent.com",
         "objects.githubusercontent.com",
     }
-    SYSTEM_FONTS = ("Arial", "Helvetica", "Verdana", "Georgia")
+    SYSTEM_FONTS = (
+        "Arial", "Helvetica", "Verdana", "Georgia", "Impact",
+        "Poppins", "Montserrat", "Amsi Pro",
+    )
 
     def __init__(self, root: Path):
         self.directory = root / "fonts"
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def list_fonts(self) -> list[dict[str, str | bool]]:
-        fonts = [
-            {"family": family, "filename": "", "url": "", "custom": False}
+        fonts = {
+            family.casefold(): {"family": family, "filename": "", "url": "", "custom": False}
             for family in self.SYSTEM_FONTS
-        ]
+        }
         for path in sorted(self.directory.iterdir(), key=lambda item: item.name.casefold()):
             if path.is_file() and path.suffix.lower() in self.SUFFIXES:
-                fonts.append({
-                    "family": self.family_from_file(path),
+                family = self.family_from_file(path)
+                fonts[family.casefold()] = {
+                    "family": family,
                     "filename": path.name,
                     "url": f"/fonts/{urllib.parse.quote(path.name)}",
                     "custom": True,
-                })
-        return fonts
+                }
+        return list(fonts.values())
 
     def save_upload(self, filename: str, stream: BinaryIO, length: int) -> dict[str, str | bool]:
         safe_name = self._safe_filename(filename)
@@ -70,7 +74,7 @@ class FontManager:
         self._reject_private_address(hostname)
         filename = Path(urllib.parse.unquote(parsed.path)).name
         safe_name = self._safe_filename(filename)
-        request = urllib.request.Request(url, headers={"User-Agent": "LocalVideoStudio/0.4"})
+        request = urllib.request.Request(url, headers={"User-Agent": "LocalVideoStudio/0.6.8"})
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 final = urllib.parse.urlparse(response.geturl())

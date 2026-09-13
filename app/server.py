@@ -357,6 +357,7 @@ class StudioApplication:
                     target_scene_count=image_count,
                     theme=get_theme(theme_id),
                 )
+                duration = drafts[-1].end_seconds
                 timing_source = "gemini_audio"
             else:
                 drafts = self.planner.plan(

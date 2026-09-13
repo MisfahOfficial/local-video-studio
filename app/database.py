@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -297,6 +298,16 @@ class Database:
             db.execute("DELETE FROM scenes WHERE project_id = ?", (project_id,))
             for draft in drafts:
                 data = draft.to_dict()
+                planned_actions = data["timeline_actions"]
+                is_pop_insert = any(
+                    action.get("type") == "motion"
+                    and action.get("params", {}).get("preset") == "pop_in"
+                    for action in planned_actions
+                )
+                timeline_actions = planned_actions if is_pop_insert else [
+                    {"type": "motion", "params": {"preset": project["default_motion"], "strength": 0.55}},
+                    {"type": "transition", "params": {"preset": project["default_transition"], "duration": 0.32}},
+                ]
                 db.execute(
                     """
                     INSERT INTO scenes (
@@ -311,10 +322,7 @@ class Database:
                         data["importance"], data["prompt"], data["negative_prompt"], data["media_kind"],
                         project["default_provider"], project["default_model_role"],
                         int(project["default_candidate_count"]),
-                        json.dumps([
-                            {"type": "motion", "params": {"preset": project["default_motion"], "strength": 0.55}},
-                            {"type": "transition", "params": {"preset": project["default_transition"], "duration": 0.32}},
-                        ]), now, now,
+                        json.dumps(timeline_actions), now, now,
                     ),
                 )
             db.execute(
@@ -477,8 +485,31 @@ class Database:
             )
 
         original = [max(minimum, float(clip["end_seconds"]) - float(clip["start_seconds"])) for clip in clips]
+        scenes = self.list_scenes(project_id)
+        scene_by_id = {str(scene["id"]): scene for scene in scenes}
+        one_clip_per_scene = (
+            len(clips) == len(scenes)
+            and len({str(clip["scene_id"]) for clip in clips}) == len(scenes)
+            and all(str(clip["scene_id"]) in scene_by_id for clip in clips)
+        )
+        word_counts = [
+            max(1, len(re.findall(r"\b[\w'-]+\b", str(scene_by_id[str(clip["scene_id"])].get("narration") or ""))))
+            if one_clip_per_scene else 1
+            for clip in clips
+        ]
+        # If even one normal sentence was compressed to an implausibly fast
+        # rate, the provider timing is not a safe weighting source. Rebuild all
+        # durations from narration length so late scenes do not flash by.
+        unreadable_timing = one_clip_per_scene and any(
+            words > 2 and (duration <= 0.5 or words / duration > 6.0)
+            for words, duration in zip(word_counts, original, strict=True)
+        )
         remaining = target - len(clips) * minimum
-        weights = [max(0.0, duration - minimum) for duration in original]
+        weights = (
+            [float(words) for words in word_counts]
+            if unreadable_timing
+            else [max(0.0, duration - minimum) for duration in original]
+        )
         weight_total = sum(weights)
         if weight_total <= 1e-9:
             weights = [1.0] * len(clips)
@@ -490,6 +521,19 @@ class Database:
             clip["end_seconds"] = duration
         with self.connection() as db:
             self._retime_timeline(db, project_id, clips)
+            if one_clip_per_scene:
+                cursor = 0.0
+                now = utc_now()
+                for clip, duration in zip(clips, durations, strict=True):
+                    db.execute(
+                        "UPDATE scenes SET start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                        (cursor, cursor + duration, now, str(clip["scene_id"])),
+                    )
+                    cursor += duration
+            db.execute(
+                "UPDATE projects SET duration_seconds = ?, updated_at = ? WHERE id = ?",
+                (target, utc_now(), project_id),
+            )
         return self.list_timeline_clips(project_id)
 
     def get_timeline_clip(self, clip_id: str) -> dict[str, Any] | None:

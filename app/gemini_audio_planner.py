@@ -310,6 +310,13 @@ class GeminiAudioScenePlanner:
                 self.client.delete_file(str(remote_file.get("name") or ""))
 
         timed_transcript = self._extract_timed_transcript(transcription, script=script)
+        # A measured container duration is normally the master clock, but a
+        # broken local probe or stale project value must never truncate spoken
+        # timestamps and squeeze the remaining scenes against the endpoint.
+        duration_seconds = max(
+            duration_seconds,
+            max(float(segment["end_seconds"]) for segment in timed_transcript),
+        )
         scene_guides = None
         if target_scene_count is None:
             scene_guides = self._adaptive_scene_guides(timed_transcript, duration_seconds)
