@@ -63,8 +63,7 @@
           <div class="form-grid">
             <label>Channel theme<select id="themeSelect"></select></label>
             <label>Visual planning<select id="plannerSelect"><option value="precision" selected>Gemini Precision Sync (VO + script)</option><option value="gemini">Gemini Text Smart (estimated timing)</option><option value="local">Local Free (estimated timing)</option></select></label>
-            <label>Target images<input id="imageCountInput" type="number" min="1" max="3000" value="715"></label>
-            <label>Average scene seconds<input id="sceneSecondsInput" type="number" min="2" max="60" step="0.5" value="12.5"></label>
+            <label>Target images (optional)<input id="imageCountInput" type="number" min="1" max="3000" placeholder="Auto pacing"></label>
             <label>Duration in minutes<input id="durationInput" type="number" min="0" step="0.1" value="149"></label>
             <label>Voice-over<input id="voiceoverInput" type="file" accept="audio/*,video/*"></label>
           </div>
@@ -72,7 +71,7 @@
           <label class="script-field">Complete script<textarea id="scriptInput" rows="18" placeholder="Paste the complete narration script here…"></textarea></label>
           <div class="action-row">
             <button class="button primary" id="createPlanButton" type="button">Create visual plan</button>
-            <span class="hint">You can review every prompt before any paid image is generated.</span>
+            <span class="hint">Leave Target images blank for automatic 5s / 8s / 10s pacing. You can review every prompt before generation.</span>
           </div>
           <div class="planning-progress panel" id="planningProgress" hidden role="status" aria-live="polite">
             <div class="planning-progress-heading"><strong id="planningStage">Preparing voice-over…</strong><span id="planningElapsed">00:00</span></div>

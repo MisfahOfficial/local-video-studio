@@ -20,7 +20,7 @@ from app.timeline.renderer import (
 class TimelineTests(unittest.TestCase):
     def test_default_motion_presets_build_filters(self) -> None:
         registry = build_default_motion_registry()
-        expected = {"static", "slow_push", "detail_push", "slow_pull", "pan_left", "pan_right"}
+        expected = {"static", "slow_push", "detail_push", "pop_in", "slow_pull", "pan_left", "pan_right"}
         self.assertEqual(set(registry.names()), expected)
         for name in expected:
             self.assertIn("fps=12", registry.build(name, 320, 180, 12, 1.0))

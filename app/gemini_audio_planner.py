@@ -16,7 +16,13 @@ from typing import Any, Protocol
 from .domain import Emotion, NarrativeRole, SceneDraft
 from .providers.base import ProviderError
 from .providers.http import request_json, verified_ssl_context
-from .scene_planner import _compose_prompt, _importance, _timeline_actions
+from .scene_planner import (
+    _compose_prompt,
+    _importance,
+    _is_pop_insert,
+    _timeline_actions,
+    scene_duration_limit,
+)
 from .themes import ThemePreset
 
 
@@ -284,10 +290,10 @@ class GeminiAudioScenePlanner:
         script: str,
         voiceover_path: Path,
         duration_seconds: float,
-        target_scene_count: int,
+        target_scene_count: int | None,
         theme: ThemePreset,
     ) -> list[SceneDraft]:
-        if target_scene_count < 1:
+        if target_scene_count is not None and target_scene_count < 1:
             raise ProviderError("Precision Sync needs a target image count of at least 1.")
         if duration_seconds <= 0:
             raise ProviderError("The voice-over duration could not be measured. Re-upload the VO and try again.")
@@ -304,8 +310,17 @@ class GeminiAudioScenePlanner:
                 self.client.delete_file(str(remote_file.get("name") or ""))
 
         timed_transcript = self._extract_timed_transcript(transcription, script=script)
+        scene_guides = None
+        if target_scene_count is None:
+            scene_guides = self._adaptive_scene_guides(timed_transcript, duration_seconds)
+            target_scene_count = len(scene_guides)
         items: list[dict[str, Any]] = []
-        for batch in self._planning_batches(timed_transcript, duration_seconds, target_scene_count):
+        for batch in self._planning_batches(
+            timed_transcript,
+            duration_seconds,
+            target_scene_count,
+            scene_guides=scene_guides,
+        ):
             response = self.client.create_scene_plan(
                 model=self.model,
                 prompt=self._prompt(
@@ -317,6 +332,7 @@ class GeminiAudioScenePlanner:
                     window_end=batch["window_end"],
                     start_position=batch["start_position"],
                     count=batch["count"],
+                    scene_guides=batch.get("scene_guides"),
                 ),
             )
             planned = self._extract_items(response)
@@ -326,13 +342,20 @@ class GeminiAudioScenePlanner:
                     f"{batch['count']}. Nothing was replaced; please retry."
                 )
             planned.sort(key=lambda item: int(item.get("position") or 0))
-            self._validate_batch_alignment(
-                planned,
-                batch["transcript"],
-                float(batch["window_start"]),
-                float(batch["window_end"]),
-                int(batch["number"]),
-            )
+            if batch.get("scene_guides"):
+                self._validate_guided_alignment(
+                    planned,
+                    batch["scene_guides"],
+                    int(batch["number"]),
+                )
+            else:
+                self._validate_batch_alignment(
+                    planned,
+                    batch["transcript"],
+                    float(batch["window_start"]),
+                    float(batch["window_end"]),
+                    int(batch["number"]),
+                )
             for offset, item in enumerate(planned):
                 item["position"] = batch["start_position"] + offset
             items.extend(planned)
@@ -340,10 +363,27 @@ class GeminiAudioScenePlanner:
 
     @staticmethod
     def _planning_batches(
-        transcript: list[dict[str, Any]], duration: float, target: int, max_scenes: int = 80
+        transcript: list[dict[str, Any]], duration: float, target: int, max_scenes: int = 80,
+        scene_guides: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         if not transcript:
             raise ProviderError("Precision Sync received an empty timed transcript.")
+        if scene_guides:
+            batches: list[dict[str, Any]] = []
+            for batch_number, guide_start in enumerate(range(0, len(scene_guides), max_scenes), start=1):
+                guides = scene_guides[guide_start:guide_start + max_scenes]
+                segment_start = int(guides[0]["segment_start"])
+                segment_end = int(guides[-1]["segment_end"])
+                batches.append({
+                    "number": batch_number,
+                    "start_position": int(guides[0]["position"]),
+                    "count": len(guides),
+                    "window_start": float(guides[0]["start_seconds"]),
+                    "window_end": float(guides[-1]["end_seconds"]),
+                    "transcript": transcript[segment_start:segment_end],
+                    "scene_guides": guides,
+                })
+            return batches
         if target > len(transcript):
             raise ProviderError(
                 f"Precision Sync found {len(transcript)} complete spoken sentences or pauses, but {target} images were "
@@ -399,6 +439,76 @@ class GeminiAudioScenePlanner:
             segment_cursor = segment_end
             window_start = window_end
         return batches
+
+    @staticmethod
+    def _adaptive_scene_guides(
+        transcript: list[dict[str, Any]], duration: float
+    ) -> list[dict[str, Any]]:
+        """Create sentence-safe scene slots using the automatic pacing curve."""
+        if not transcript:
+            raise ProviderError("Precision Sync received an empty timed transcript.")
+
+        groups: list[tuple[int, int, bool]] = []
+        group_start: int | None = None
+        for index, segment in enumerate(transcript):
+            segment_start = float(segment["start_seconds"])
+            segment_end = float(segment["end_seconds"])
+            pop_insert = _is_pop_insert(str(segment.get("text") or ""), segment_end - segment_start)
+
+            if pop_insert:
+                if group_start is not None:
+                    groups.append((group_start, index, False))
+                    group_start = None
+                groups.append((index, index + 1, True))
+                continue
+
+            if group_start is None:
+                group_start = index
+                continue
+
+            start_time = 0.0 if not groups and group_start == 0 else float(transcript[group_start]["start_seconds"])
+            if segment_end - start_time > scene_duration_limit(start_time):
+                groups.append((group_start, index, False))
+                group_start = index
+
+        if group_start is not None:
+            groups.append((group_start, len(transcript), False))
+
+        boundaries = [0.0]
+        for index in range(1, len(groups)):
+            left_start, left_end, left_pop = groups[index - 1]
+            right_start, _, right_pop = groups[index]
+            left_time = float(transcript[left_end - 1]["end_seconds"])
+            right_time = float(transcript[right_start]["start_seconds"])
+            if left_pop and not right_pop:
+                boundary = left_time
+            else:
+                # Start ordinary and pop-in scenes on their first spoken word.
+                # This assigns the preceding pause to the previous visual and
+                # keeps the new scene inside its strict pacing limit.
+                boundary = right_time
+            boundaries.append(max(boundaries[-1], min(duration, boundary)))
+        boundaries.append(duration)
+
+        guides: list[dict[str, Any]] = []
+        for position, (group, start, end) in enumerate(
+            zip(groups, boundaries, boundaries[1:]), start=1
+        ):
+            segment_start, segment_end, pop_insert = group
+            narration = " ".join(
+                str(segment.get("text") or "").strip()
+                for segment in transcript[segment_start:segment_end]
+            ).strip()
+            guides.append({
+                "position": position,
+                "start_seconds": round(start, 3),
+                "end_seconds": round(end, 3),
+                "narration": narration,
+                "pop_insert": pop_insert and end - start <= 2.1,
+                "segment_start": segment_start,
+                "segment_end": segment_end,
+            })
+        return guides
 
     @staticmethod
     def _offset_seconds(value: Any) -> float:
@@ -669,6 +779,46 @@ class GeminiAudioScenePlanner:
                 # guarantees that image generation stays attached to the VO.
                 item["visual_subject"] = spoken
 
+    @classmethod
+    def _validate_guided_alignment(
+        cls,
+        planned: list[dict[str, Any]],
+        guides: list[dict[str, Any]],
+        batch_number: int,
+    ) -> None:
+        """Keep Gemini's visual direction but enforce the automatic timing guide."""
+        if len(planned) != len(guides):
+            raise ProviderError(
+                f"Gemini returned the wrong number of auto-paced scenes in planning batch {batch_number}."
+            )
+        for local_position, (item, guide) in enumerate(zip(planned, guides), start=1):
+            spoken = str(guide.get("narration") or "").strip()
+            narration_tokens = cls._tokens(item.get("narration"))
+            spoken_tokens = cls._tokens(spoken)
+            comparable = min(len(narration_tokens), len(spoken_tokens))
+            shared_tokens = len(narration_tokens & spoken_tokens)
+            overlap = shared_tokens / comparable if comparable else 0.0
+            if comparable >= 4 and overlap < 0.35:
+                raise ProviderError(
+                    f"Gemini assigned auto-paced scene {local_position} of planning batch {batch_number} to the "
+                    "wrong spoken passage. Nothing was replaced; retry Precision Sync."
+                )
+            if len(spoken_tokens) >= 4 and shared_tokens / len(spoken_tokens) < 0.65:
+                raise ProviderError(
+                    f"Gemini returned an incomplete spoken sentence for auto-paced scene {local_position} of planning "
+                    f"batch {batch_number}. Nothing was replaced; retry Precision Sync."
+                )
+
+            item["start_seconds"] = float(guide["start_seconds"])
+            item["end_seconds"] = float(guide["end_seconds"])
+            item["narration"] = spoken
+            item["_pop_insert"] = bool(guide.get("pop_insert"))
+
+            narration_subjects = cls._tokens(spoken, significant=True)
+            visual_subjects = cls._tokens(item.get("visual_subject"), significant=True)
+            if len(narration_subjects) >= 2 and not narration_subjects.intersection(visual_subjects):
+                item["visual_subject"] = spoken
+
     @staticmethod
     def _build_drafts(
         items: list[dict[str, Any]],
@@ -718,6 +868,9 @@ class GeminiAudioScenePlanner:
                 raise ProviderError(f"Gemini returned invalid direction for scene {index}.") from error
             narration = str(item["narration"]).strip()
             subject = str(item["visual_subject"]).strip()
+            pop_insert = bool(item.get("_pop_insert")) or _is_pop_insert(
+                narration, boundaries[index] - boundaries[index - 1]
+            )
             drafts.append(
                 SceneDraft(
                     position=index,
@@ -729,12 +882,17 @@ class GeminiAudioScenePlanner:
                     narrative_role=role,
                     importance=_importance(role, emotion),
                     prompt=_compose_prompt(
-                        subject, emotion, theme.id, index, spoken_context=narration
+                        subject,
+                        emotion,
+                        theme.id,
+                        index,
+                        spoken_context=narration,
+                        pop_insert=pop_insert,
                     ),
                     negative_prompt=theme.negative_prompt,
                     model_role="photoreal",
                     candidate_count=1,
-                    timeline_actions=_timeline_actions(emotion),
+                    timeline_actions=_timeline_actions(emotion, pop_insert=pop_insert),
                 )
             )
         return drafts
@@ -744,11 +902,28 @@ class GeminiAudioScenePlanner:
         *, script: str, duration: float, theme: ThemePreset,
         timed_transcript: list[dict[str, Any]], window_start: float,
         window_end: float, start_position: int, count: int,
+        scene_guides: list[dict[str, Any]] | None = None,
     ) -> str:
         end_position = start_position + count - 1
         script_excerpt = GeminiAudioScenePlanner._script_excerpt(
             script, window_start, window_end, duration
         )
+        guide_text = ""
+        if scene_guides:
+            public_guides = [
+                {
+                    "position": guide["position"],
+                    "start_seconds": guide["start_seconds"],
+                    "end_seconds": guide["end_seconds"],
+                    "narration": guide["narration"],
+                    "pop_insert": guide["pop_insert"],
+                }
+                for guide in scene_guides
+            ]
+            guide_text = (
+                "\nAUTO-PACED SCENE GUIDE (copy each position, time range and narration exactly; direct only the visual):\n"
+                f"{json.dumps(public_guides, ensure_ascii=False, separators=(',', ':'))}\n"
+            )
         return (
             "You are planning an image-led documentary using a transcript measured from the real voice-over with word-level "
             "timestamps. Read the complete supplied time window and authoritative script excerpt before deciding any boundary. Return "
@@ -764,6 +939,12 @@ class GeminiAudioScenePlanner:
             "- start_seconds and end_seconds are decimal seconds measured from the audio.\n"
             "- narration must concatenate the complete transcript entries assigned to that scene, using the exact contiguous "
             "words in source order.\n\n"
+            "AUTO PACING\n"
+            "- When an AUTO-PACED SCENE GUIDE is supplied, copy its timing and narration exactly.\n"
+            "- Main scenes use a maximum of 5 seconds through minute 20, 8 seconds through minute 40, and 10 seconds "
+            "after minute 40 whenever complete-sentence boundaries allow.\n"
+            "- A pop_insert is a self-contained object/detail beat of at most 2 seconds. Direct it as a bold centered item "
+            "that can pop into the existing visual rhythm; do not turn it into an unrelated new topic.\n\n"
             "VISUAL RULES\n"
             "- visual_subject must describe the literal, specific subject/action/object the viewer should see in 10-35 words.\n"
             "- Reuse at least one concrete noun or named phrase from narration in visual_subject, then add composition details.\n"
@@ -774,6 +955,7 @@ class GeminiAudioScenePlanner:
             f"REQUESTED SCENES IN THIS BATCH: {count}\nPOSITION RANGE: {start_position}-{end_position}\n"
             f"AUDIO WINDOW: {window_start:.3f}-{window_end:.3f} seconds\nFULL AUDIO DURATION: {duration:.3f} seconds\n"
             f"CHANNEL STYLE: {theme.visual_style}\nPALETTE: {theme.palette}\nCAMERA: {theme.camera_language}\n\n"
+            f"{guide_text}"
             "AUTHORITATIVE SCRIPT EXCERPT (use for exact wording and factual details):\n"
             f"{script_excerpt}\n\nTIMED VO TRANSCRIPT FOR THIS WINDOW (use these measured boundaries):\n"
             f"{json.dumps(timed_transcript, ensure_ascii=False, separators=(',', ':'))}"

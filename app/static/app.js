@@ -107,7 +107,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.6.4"}`;
+    $("#appVersion").textContent = `v${health.version || "0.6.5"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -183,7 +183,7 @@ async function openProject(projectId, keepTab = false) {
   $("#themeSelect").value = state.current.theme_id;
   $("#scriptInput").value = state.current.script || "";
   $("#durationInput").value = state.current.duration_seconds ? (state.current.duration_seconds / 60).toFixed(2) : 149;
-  $("#imageCountInput").value = state.current.requested_scene_count || state.current.target_scene_count || 715;
+  $("#imageCountInput").value = state.current.requested_scene_count || "";
   $("#voiceoverStatus").textContent = state.current.voiceover_path ? `Voice-over ready · ${clock(state.current.duration_seconds)}` : "No voice-over uploaded";
   updateMetrics();
   renderProjects();
@@ -265,14 +265,14 @@ async function createPlan() {
         theme_id: $("#themeSelect").value,
         planner,
         image_count: Number($("#imageCountInput").value || 0),
-        seconds_per_scene: Number($("#sceneSecondsInput").value || 12.5),
         duration_seconds: Number($("#durationInput").value || 0) * 60,
       }),
     });
     state.selectedSceneIds.clear();
     state.planWarnings = result.warnings || [];
     finishPlanningProgress(result.timing_source === "gemini_audio" ? "Precision Sync complete" : "Visual plan complete");
-    toast(`${result.scenes.length} scenes created · ${result.timing_source === "gemini_audio" ? "VO-synced" : "estimated timing"}`);
+    const pacing = result.auto_pacing ? "auto-paced" : "manual target";
+    toast(`${result.scenes.length} scenes created · ${result.timing_source === "gemini_audio" ? "VO-synced" : "estimated timing"} · ${pacing}`);
     await refreshProjects();
     await openProject(state.current.id);
     renderPlanWarnings();
@@ -723,6 +723,7 @@ function applyPreviewMotion(scene, progress, clip = null) {
   let transform = "scale(1)";
   if (preset === "slow_push") transform = `scale(${1 + 0.08 * progress})`;
   if (preset === "detail_push") transform = `scale(${1 + 0.12 * progress})`;
+  if (preset === "pop_in") transform = `scale(${1 + 0.10 * Math.sin(Math.PI * Math.min(1, progress / 0.30))})`;
   if (preset === "slow_pull") transform = `scale(${1.08 - 0.08 * progress})`;
   if (preset === "pan_left") transform = `scale(1.08) translateX(${4 - 8 * progress}%)`;
   if (preset === "pan_right") transform = `scale(1.08) translateX(${-4 + 8 * progress}%)`;

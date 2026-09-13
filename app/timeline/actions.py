@@ -48,6 +48,14 @@ def build_default_motion_registry() -> MotionRegistry:
         ),
     )
     registry.register(
+        "pop_in",
+        lambda w, h, fps, d: (
+            f"{_base_scale(w, h)},zoompan=z='1+0.10*sin(PI*min(on,{max(1, round(fps*0.35))})/"
+            f"{max(1, round(fps*0.35))})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d={max(1, round(fps*d))}:s={w}x{h}:fps={fps}"
+        ),
+    )
+    registry.register(
         "slow_pull",
         lambda w, h, fps, d: (
             f"{_base_scale(w, h)},zoompan=z='if(eq(on,1),1.08,max(1.0,zoom-0.0007))':"
@@ -69,4 +77,3 @@ def build_default_motion_registry() -> MotionRegistry:
         ),
     )
     return registry
-

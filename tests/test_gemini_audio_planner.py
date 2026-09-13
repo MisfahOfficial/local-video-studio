@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from app.gemini_audio_planner import GeminiAudioScenePlanner, GeminiFilesClient
 from app.providers.base import ProviderError
+from app.scene_planner import scene_duration_limit
 from app.themes import get_theme
 
 
@@ -252,6 +253,61 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         self.assertIn("Never distribute time evenly", client.created["prompt"])
         self.assertIn("TIMED VO TRANSCRIPT", client.created["prompt"])
         self.assertEqual(client.transcribed["mime_type"], "audio/mpeg")
+
+    def test_auto_pacing_supplies_fixed_sentence_safe_scene_guides(self) -> None:
+        client = FakeGeminiAudioClient(sample_items())
+        with tempfile.TemporaryDirectory() as temporary:
+            voiceover = Path(temporary) / "voice.mp3"
+            voiceover.write_bytes(b"test-audio")
+            scenes = GeminiAudioScenePlanner("key", "gemini-3.7-flash", client=client).plan(
+                script=(
+                    "The old lunch counter opened before sunrise. "
+                    "Then the first steaming bowl reached the counter."
+                ),
+                voiceover_path=voiceover,
+                duration_seconds=10.0,
+                target_scene_count=None,
+                theme=get_theme("us_nostalgia"),
+            )
+
+        self.assertEqual(len(scenes), 2)
+        self.assertIn("AUTO-PACED SCENE GUIDE", client.created["prompt"])
+        self.assertIn("maximum of 5 seconds through minute 20", client.created["prompt"])
+
+    def test_auto_pacing_isolates_a_two_second_pop_insert(self) -> None:
+        transcript = [
+            {"start_seconds": 0.0, "end_seconds": 4.0, "text": "The workshop opened before dawn."},
+            {"start_seconds": 4.1, "end_seconds": 5.5, "text": "Look!"},
+            {"start_seconds": 5.6, "end_seconds": 10.0, "text": "Every restored object waited on the table."},
+        ]
+
+        guides = GeminiAudioScenePlanner._adaptive_scene_guides(transcript, 10.0)
+
+        self.assertEqual(len(guides), 3)
+        self.assertTrue(guides[1]["pop_insert"])
+        self.assertLessEqual(guides[1]["end_seconds"] - guides[1]["start_seconds"], 2.0)
+
+    def test_auto_pacing_enforces_5_8_10_second_bands(self) -> None:
+        transcript = [
+            {
+                "start_seconds": index * 2.0,
+                "end_seconds": index * 2.0 + 1.8,
+                "text": f"Complete documentary sentence number {index}.",
+            }
+            for index in range(1500)
+        ]
+
+        guides = GeminiAudioScenePlanner._adaptive_scene_guides(transcript, 50 * 60)
+
+        self.assertEqual(len(guides), 510)
+        self.assertTrue(all(
+            guide["end_seconds"] - guide["start_seconds"]
+            <= scene_duration_limit(guide["start_seconds"]) + 0.001
+            for guide in guides
+        ))
+        self.assertEqual(sum(guide["start_seconds"] < 20 * 60 for guide in guides), 300)
+        self.assertEqual(sum(20 * 60 <= guide["start_seconds"] < 40 * 60 for guide in guides), 150)
+        self.assertEqual(sum(guide["start_seconds"] >= 40 * 60 for guide in guides), 60)
 
     def test_wrong_scene_count_is_rejected_without_losing_remote_cleanup(self) -> None:
         client = FakeGeminiAudioClient(sample_items()[:1])

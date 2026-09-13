@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.4
+# Local Video Studio v0.6.5
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -13,6 +13,7 @@ Extra candidates and premium models are opt-in on individual scenes.
 
 - Script-to-scene planning up to the requested count, without empty scenes
 - Gemini Precision Sync that listens to the real VO, matches it to the script, and places semantic scene boundaries
+- Automatic 5s / 8s / 10s pacing with optional two-second pop-in detail beats
 - Automatic retries and stable Gemini model fallback when a planning model is temporarily overloaded
 - Theme, emotion, narrative-role, prompt, and negative-prompt generation
 - Runware image generation with Together as an optional fallback
@@ -49,6 +50,12 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.6.5 adds automatic pacing when **Target images** is left blank. Main
+scenes are kept to 5 seconds through minute 20, 8 seconds through minute 40, and
+10 seconds after minute 40 whenever complete narration boundaries allow. Short,
+self-contained emphasis beats can become two-second object/detail inserts with a
+new pop-in motion. A manual image target remains available as an override.
 
 Version 0.6.4 keeps every Precision Sync visual attached to a complete spoken
 sentence or clearly paused utterance. Long projects are divided only at those safe
@@ -92,7 +99,10 @@ The command accepts `--data-dir`, `--host`, `--port`, and `--no-browser`.
 
 1. Create a project and choose a theme.
 2. Upload the 2:29:00 voice-over and paste the matching script.
-3. Select **Gemini Precision Sync**, enter `715` images, and create the plan. Precision Sync uses the measured VO duration automatically.
+3. Select **Gemini Precision Sync**, leave **Target images** blank for automatic
+   pacing, and create the plan. Precision Sync uses the measured VO duration and
+   chooses the scene count automatically. Enter a number only when you deliberately
+   need a fixed image count.
 4. Review high-importance scenes. Keep one candidate by default; request two or
    three only where a stronger hook or reveal is worth the extra cost.
 5. Click **Generate missing images**. The queue can be paused, resumed, retried,

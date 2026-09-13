@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.scene_planner import RuleBasedScenePlanner, estimate_generation_count, validate_plan_inputs
+from app.scene_planner import (
+    RuleBasedScenePlanner,
+    estimate_generation_count,
+    scene_duration_limit,
+    validate_plan_inputs,
+)
 
 
 class ScenePlannerTests(unittest.TestCase):
@@ -62,6 +67,24 @@ class ScenePlannerTests(unittest.TestCase):
 
         self.assertEqual(len(drafts), 1)
         self.assertEqual(drafts[0].narration, script)
+
+    def test_automatic_pacing_uses_requested_duration_bands(self) -> None:
+        self.assertEqual(scene_duration_limit(0), 5.0)
+        self.assertEqual(scene_duration_limit(20 * 60 - 0.01), 5.0)
+        self.assertEqual(scene_duration_limit(20 * 60), 8.0)
+        self.assertEqual(scene_duration_limit(40 * 60), 10.0)
+
+    def test_short_complete_emphasis_becomes_a_pop_insert(self) -> None:
+        drafts = RuleBasedScenePlanner().plan(
+            "Look! The neighborhood workshop carefully displays every restored object on the long wooden table.",
+            theme_id="us_nostalgia",
+            duration_seconds=12.0,
+        )
+
+        self.assertEqual(drafts[0].narration, "Look!")
+        self.assertLessEqual(drafts[0].duration_seconds, 2.0)
+        self.assertEqual(drafts[0].timeline_actions[0].params["preset"], "pop_in")
+        self.assertIn("Brief pop-in detail image", drafts[0].prompt)
 
 
 if __name__ == "__main__":

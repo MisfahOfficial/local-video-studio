@@ -330,15 +330,12 @@ class StudioApplication:
         try:
             duration = float(body.get("duration_seconds") or project.get("duration_seconds") or 0)
             image_count = int(body.get("image_count") or 0) or None
-            seconds_per_scene = float(body.get("seconds_per_scene") or 12.5)
         except (TypeError, ValueError) as error:
-            raise ApiError("Duration, target images, and scene seconds must be valid numbers") from error
+            raise ApiError("Duration and target images must be valid numbers") from error
         if duration < 0:
             raise ApiError("Duration cannot be negative")
         if image_count is not None and not 1 <= image_count <= 3000:
             raise ApiError("Target images must be between 1 and 3000")
-        if not 2 <= seconds_per_scene <= 60:
-            raise ApiError("Average scene seconds must be between 2 and 60")
         settings = self.settings.load()
         planner_mode = str(body.get("planner", "local"))
         timing_source = "estimated"
@@ -350,7 +347,6 @@ class StudioApplication:
                     raise ApiError("Upload the finished voice-over before using Gemini Precision Sync.")
                 if voiceover_duration <= 0:
                     raise ApiError("The voice-over duration could not be measured. Re-upload it before using Precision Sync.")
-                precision_count = image_count or max(1, round(voiceover_duration / max(2.0, seconds_per_scene)))
                 duration = voiceover_duration
                 drafts = GeminiAudioScenePlanner(
                     settings.gemini_api_key, settings.gemini_model
@@ -358,7 +354,7 @@ class StudioApplication:
                     script=script,
                     voiceover_path=voiceover_path,
                     duration_seconds=duration,
-                    target_scene_count=precision_count,
+                    target_scene_count=image_count,
                     theme=get_theme(theme_id),
                 )
                 timing_source = "gemini_audio"
@@ -368,7 +364,6 @@ class StudioApplication:
                     theme_id=theme_id,
                     duration_seconds=duration,
                     target_scene_count=image_count,
-                    seconds_per_scene=seconds_per_scene,
                 )
                 if planner_mode == "gemini":
                     drafts = GeminiSceneEnhancer(settings.gemini_api_key, settings.gemini_model).enhance(
@@ -392,7 +387,7 @@ class StudioApplication:
             script=script,
             theme_id=theme_id,
             duration_seconds=duration or drafts[-1].end_seconds,
-            requested_scene_count=image_count or len(drafts),
+            requested_scene_count=image_count or 0,
             target_scene_count=len(drafts),
             estimated_cost=estimated_cost,
         )
@@ -403,6 +398,7 @@ class StudioApplication:
             "estimated_cost": estimated_cost,
             "warnings": warnings,
             "timing_source": timing_source,
+            "auto_pacing": image_count is None,
         }
 
 
