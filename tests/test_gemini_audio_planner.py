@@ -106,13 +106,124 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
 
     def test_long_projects_are_split_into_bounded_planning_batches(self) -> None:
-        transcript = [{"start_seconds": 0, "end_seconds": 8940, "text": "complete transcript"}]
+        transcript = [
+            {
+                "start_seconds": index * 8.94,
+                "end_seconds": (index + 1) * 8.94 - 0.2,
+                "text": f"Complete sentence {index + 1}.",
+            }
+            for index in range(1000)
+        ]
         batches = GeminiAudioScenePlanner._planning_batches(transcript, 8940, 715)
         self.assertEqual(sum(batch["count"] for batch in batches), 715)
         self.assertTrue(all(batch["count"] <= 80 for batch in batches))
         self.assertEqual(batches[0]["start_position"], 1)
         self.assertEqual(batches[-1]["start_position"] + batches[-1]["count"] - 1, 715)
         self.assertEqual(batches[-1]["window_end"], 8940)
+        self.assertEqual(sum(len(batch["transcript"]) for batch in batches), len(transcript))
+        self.assertTrue(
+            all(
+                left["transcript"][-1]["text"] != right["transcript"][0]["text"]
+                for left, right in zip(batches, batches[1:])
+            )
+        )
+
+    def test_image_target_cannot_force_mid_sentence_scene_changes(self) -> None:
+        transcript = [
+            {"start_seconds": 0, "end_seconds": 5, "text": "One complete spoken sentence."},
+        ]
+        with self.assertRaisesRegex(ProviderError, "1 complete spoken sentences or pauses, but 2 images"):
+            GeminiAudioScenePlanner._planning_batches(transcript, 5, 2)
+
+    def test_transcript_does_not_split_a_long_unfinished_sentence_by_word_count(self) -> None:
+        words = [f"word{index}" for index in range(45)]
+        annotations = [
+            {
+                "type": "word_info",
+                "text": word + ("." if index == len(words) - 1 else ""),
+                "start_offset": f"{index * 0.2:.1f}s",
+                "end_offset": f"{index * 0.2 + 0.15:.2f}s",
+            }
+            for index, word in enumerate(words)
+        ]
+        response = {"steps": [{"content": [{"annotations": annotations}]}]}
+
+        segments = GeminiAudioScenePlanner._extract_timed_transcript(response)
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("word44.", segments[0]["text"])
+
+    def test_script_punctuation_restores_sentence_boundaries_missing_from_asr(self) -> None:
+        spoken_words = "This is the first sentence This is the second sentence".split()
+        annotations = [
+            {
+                "type": "word_info",
+                "text": word,
+                "start_offset": f"{index * 0.3:.1f}s",
+                "end_offset": f"{index * 0.3 + 0.2:.1f}s",
+            }
+            for index, word in enumerate(spoken_words)
+        ]
+        response = {"steps": [{"content": [{"annotations": annotations}]}]}
+
+        segments = GeminiAudioScenePlanner._extract_timed_transcript(
+            response,
+            script="This is the first sentence. This is the second sentence.",
+        )
+
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0]["text"], "This is the first sentence.")
+        self.assertEqual(segments[1]["text"], "This is the second sentence.")
+
+    def test_mid_sentence_visual_boundary_is_rejected(self) -> None:
+        transcript = [
+            {"start_seconds": 0.0, "end_seconds": 5.0, "text": "The first sentence completes here."},
+            {"start_seconds": 5.1, "end_seconds": 10.0, "text": "The second sentence completes here."},
+        ]
+        planned = sample_items()
+        planned[0] = {**planned[0], "start_seconds": 0.0, "end_seconds": 2.0}
+        planned[1] = {**planned[1], "start_seconds": 2.1, "end_seconds": 10.0}
+        with self.assertRaisesRegex(ProviderError, "before a sentence was complete"):
+            GeminiAudioScenePlanner._validate_batch_alignment(planned, transcript, 0.0, 10.0, 1)
+
+    def test_small_timing_drift_snaps_to_complete_sentence_boundary(self) -> None:
+        transcript = [
+            {"start_seconds": 0.2, "end_seconds": 4.8, "text": "The old lunch counter opened before sunrise."},
+            {"start_seconds": 5.0, "end_seconds": 10.0, "text": "Then the first steaming bowl reached the counter."},
+        ]
+        planned = sample_items()
+        planned[0] = {**planned[0], "end_seconds": 4.6}
+        planned[1] = {**planned[1], "start_seconds": 5.2}
+
+        GeminiAudioScenePlanner._validate_batch_alignment(planned, transcript, 0.0, 10.0, 1)
+
+        self.assertEqual(planned[0]["end_seconds"], 4.9)
+        self.assertEqual(planned[1]["start_seconds"], 4.9)
+        self.assertEqual(planned[0]["narration"], transcript[0]["text"])
+
+    def test_visual_change_anywhere_in_a_long_silent_pause_is_valid(self) -> None:
+        transcript = [
+            {"start_seconds": 0.0, "end_seconds": 4.0, "text": "The first complete sentence ends."},
+            {"start_seconds": 7.0, "end_seconds": 10.0, "text": "The second complete sentence begins."},
+        ]
+        planned = sample_items()
+        planned[0] = {
+            **planned[0],
+            "start_seconds": 0.0,
+            "end_seconds": 4.0,
+            "narration": transcript[0]["text"],
+        }
+        planned[1] = {
+            **planned[1],
+            "start_seconds": 4.0,
+            "end_seconds": 10.0,
+            "narration": transcript[1]["text"],
+        }
+
+        GeminiAudioScenePlanner._validate_batch_alignment(planned, transcript, 0.0, 10.0, 1)
+
+        self.assertEqual(planned[0]["end_seconds"], 5.5)
+        self.assertEqual(planned[1]["start_seconds"], 5.5)
 
     def test_real_audio_ranges_are_normalized_into_gapless_scenes(self) -> None:
         client = FakeGeminiAudioClient(sample_items())
@@ -166,6 +277,23 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         wrong[0] = {**wrong[0], "narration": "A spaceship crossed the distant moon at midnight."}
         with self.assertRaisesRegex(ProviderError, "wrong spoken passage"):
             GeminiAudioScenePlanner._validate_batch_alignment(wrong, transcript, 0.0, 10.0, 1)
+
+    def test_incomplete_sentence_narration_is_rejected(self) -> None:
+        transcript = [
+            {
+                "start_seconds": 0.0,
+                "end_seconds": 5.0,
+                "text": "The neighborhood baker opened the shop before sunrise every winter morning.",
+            }
+        ]
+        incomplete = [{
+            **sample_items()[0],
+            "start_seconds": 0.0,
+            "end_seconds": 5.0,
+            "narration": "The neighborhood baker opened",
+        }]
+        with self.assertRaisesRegex(ProviderError, "incomplete spoken sentence"):
+            GeminiAudioScenePlanner._validate_batch_alignment(incomplete, transcript, 0.0, 5.0, 1)
 
     def test_unrelated_image_subject_is_reanchored_to_timed_narration(self) -> None:
         transcript = [

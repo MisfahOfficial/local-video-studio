@@ -71,21 +71,12 @@ def _word_count(text: str) -> int:
     return max(1, len(re.findall(r"\b[\w'-]+\b", text)))
 
 
-def _split_longest(units: list[str], desired: int) -> list[str]:
-    result = units[:]
-    while len(result) < desired:
-        candidate_index = max(range(len(result)), key=lambda index: _word_count(result[index]))
-        words = result[candidate_index].split()
-        if len(words) < 4:
-            break
-        middle = len(words) // 2
-        result[candidate_index:candidate_index + 1] = [" ".join(words[:middle]), " ".join(words[middle:])]
-    return result
-
-
 def _group_units(units: list[str], desired: int) -> list[str]:
     if desired <= 0 or len(units) <= desired:
-        return _split_longest(units, desired) if desired > len(units) else units
+        # Never manufacture extra visuals by cutting an unfinished sentence in
+        # half. The caller reports when a requested image target cannot be met
+        # with the complete semantic units available in the script.
+        return units
 
     total_words = sum(_word_count(unit) for unit in units)
     groups: list[str] = []

@@ -16,6 +16,11 @@ voice-over duration. Each segment is tagged for emotion and narrative role. The
 final prompt combines the concrete subject, era clues found in the text, emotional
 direction, the selected theme, and a clean 16:9 instruction.
 
+If the requested image count is larger than the number of complete script
+sentences, the local and Gemini Text planners return fewer scenes and show a target
+warning. They do not split an unfinished sentence merely to manufacture another
+visual.
+
 Emotion also selects an initial timeline motion:
 
 | Emotion | Visual direction | Motion |
@@ -35,3 +40,10 @@ but the tool does not automatically spend more money on them.
 For the optional Gemini planner, the same `SceneDraft` contract is returned, so
 switching planners does not change the database, queue, timeline, or interface.
 
+Gemini Precision Sync treats the measured voice-over as the timing authority, but
+it does not let the planning model create arbitrary cuts. Word timestamps are
+grouped into complete sentences or clearly paused utterances, with punctuation from
+the supplied script restored when the transcript omits it. Long planning batches
+start and end only between those units. Every returned visual boundary is checked
+and snapped to the real pause; a plan that changes imagery during an unfinished
+sentence is rejected without replacing the existing scenes.

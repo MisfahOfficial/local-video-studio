@@ -8,6 +8,8 @@ import random
 import re
 import time
 import urllib.parse
+from bisect import bisect_left
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -301,7 +303,7 @@ class GeminiAudioScenePlanner:
             if remote_file:
                 self.client.delete_file(str(remote_file.get("name") or ""))
 
-        timed_transcript = self._extract_timed_transcript(transcription)
+        timed_transcript = self._extract_timed_transcript(transcription, script=script)
         items: list[dict[str, Any]] = []
         for batch in self._planning_batches(timed_transcript, duration_seconds, target_scene_count):
             response = self.client.create_scene_plan(
@@ -340,22 +342,51 @@ class GeminiAudioScenePlanner:
     def _planning_batches(
         transcript: list[dict[str, Any]], duration: float, target: int, max_scenes: int = 80
     ) -> list[dict[str, Any]]:
+        if not transcript:
+            raise ProviderError("Precision Sync received an empty timed transcript.")
+        if target > len(transcript):
+            raise ProviderError(
+                f"Precision Sync found {len(transcript)} complete spoken sentences or pauses, but {target} images were "
+                "requested. Lower the image target so the tool does not change visuals before a sentence is complete."
+            )
+
         batch_count = max(1, math.ceil(target / max_scenes))
         base, extra = divmod(target, batch_count)
         batches: list[dict[str, Any]] = []
         position = 1
-        completed = 0
+        segment_cursor = 0
+        completed_scenes = 0
+        window_start = 0.0
+
+        def separator_after(segment_index: int) -> float:
+            """Return a safe clock boundary after a complete transcript unit."""
+            if segment_index >= len(transcript):
+                return duration
+            left_end = float(transcript[segment_index - 1]["end_seconds"])
+            right_start = float(transcript[segment_index]["start_seconds"])
+            return min(duration, max(0.0, (left_end + right_start) / 2))
+
         for number in range(1, batch_count + 1):
             count = base + (1 if number <= extra else 0)
-            window_start = duration * completed / target
-            completed += count
-            window_end = duration * completed / target
-            selected = [
-                segment for segment in transcript
-                if float(segment["end_seconds"]) >= window_start and float(segment["start_seconds"]) <= window_end
-            ]
-            if not selected:
-                selected = transcript
+            completed_scenes += count
+            remaining_scenes = target - completed_scenes
+
+            if number == batch_count:
+                segment_end = len(transcript)
+            else:
+                # Each requested scene needs at least one complete transcript unit.
+                # Choose the legal unit boundary closest to the proportional audio
+                # time instead of cutting the VO at an arbitrary clock position.
+                minimum_end = segment_cursor + count
+                maximum_end = len(transcript) - remaining_scenes
+                ideal_end = duration * completed_scenes / target
+                segment_end = min(
+                    range(minimum_end, maximum_end + 1),
+                    key=lambda candidate: abs(separator_after(candidate) - ideal_end),
+                )
+
+            selected = transcript[segment_cursor:segment_end]
+            window_end = separator_after(segment_end)
             batches.append({
                 "number": number,
                 "start_position": position,
@@ -365,6 +396,8 @@ class GeminiAudioScenePlanner:
                 "transcript": selected,
             })
             position += count
+            segment_cursor = segment_end
+            window_start = window_end
         return batches
 
     @staticmethod
@@ -378,7 +411,9 @@ class GeminiAudioScenePlanner:
             raise ProviderError(f"Gemini returned an invalid word timestamp: {value}") from error
 
     @classmethod
-    def _extract_timed_transcript(cls, response: dict[str, Any]) -> list[dict[str, Any]]:
+    def _extract_timed_transcript(
+        cls, response: dict[str, Any], *, script: str = ""
+    ) -> list[dict[str, Any]]:
         words: list[dict[str, Any]] = []
         for step in response.get("steps") or []:
             for content in step.get("content") or []:
@@ -397,20 +432,88 @@ class GeminiAudioScenePlanner:
                 "Gemini transcription returned no word timestamps. Nothing was replaced; please retry Precision Sync."
             )
 
+        cls._mark_script_sentence_endings(words, script)
+
         segments: list[dict[str, Any]] = []
         current: list[dict[str, Any]] = []
         for word in words:
             pause = word["start"] - current[-1]["end"] if current else 0
-            if current and (pause >= 0.8 or len(current) >= 36):
+            if current and pause >= 0.8:
                 segments.append(cls._timed_segment(current))
                 current = []
             current.append(word)
-            if len(current) >= 5 and str(word["text"]).endswith((".", "?", "!")):
+            if word.get("script_sentence_end") or re.search(
+                r"[.!?]+[\"'”’)]*$", str(word["text"]).strip()
+            ):
                 segments.append(cls._timed_segment(current))
                 current = []
         if current:
             segments.append(cls._timed_segment(current))
         return segments
+
+    @staticmethod
+    def _mark_script_sentence_endings(words: list[dict[str, Any]], script: str) -> None:
+        """Project authoritative script punctuation onto unpunctuated ASR words."""
+        if not script.strip():
+            return
+
+        script_parts: list[tuple[str, str]] = []
+        for match in re.finditer(r"[\w'-]+(?:[.!?]+[\"'”’)]*)?", script):
+            raw = match.group(0)
+            token = re.sub(r"[\W_]+", "", raw.casefold())
+            if token:
+                script_parts.append((token, raw))
+        transcript_tokens = [
+            re.sub(r"[\W_]+", "", str(word.get("text") or "").casefold())
+            for word in words
+        ]
+        if not script_parts or not any(transcript_tokens):
+            return
+
+        matcher = SequenceMatcher(
+            None,
+            [token for token, _ in script_parts],
+            transcript_tokens,
+            autojunk=True,
+        )
+        script_to_transcript: dict[int, int] = {}
+        for block in matcher.get_matching_blocks():
+            for offset in range(block.size):
+                script_to_transcript[block.a + offset] = block.b + offset
+        if not script_to_transcript:
+            return
+
+        mapped_script_indices = sorted(script_to_transcript)
+        previous_transcript_end = -1
+        for script_index, (_, raw) in enumerate(script_parts):
+            punctuation = re.search(r"([.!?]+)[\"'”’)]*$", raw)
+            if not punctuation:
+                continue
+
+            transcript_index = script_to_transcript.get(script_index)
+            if transcript_index is None:
+                insertion = bisect_left(mapped_script_indices, script_index)
+                estimates: list[tuple[int, int]] = []
+                if insertion:
+                    left_script = mapped_script_indices[insertion - 1]
+                    distance = script_index - left_script
+                    if distance <= 4:
+                        estimates.append((distance, script_to_transcript[left_script] + distance))
+                if insertion < len(mapped_script_indices):
+                    right_script = mapped_script_indices[insertion]
+                    distance = right_script - script_index
+                    if distance <= 4:
+                        estimates.append((distance, script_to_transcript[right_script] - distance))
+                if not estimates:
+                    continue
+                transcript_index = min(estimates)[1]
+
+            transcript_index = min(len(words) - 1, max(previous_transcript_end + 1, transcript_index))
+            words[transcript_index]["script_sentence_end"] = True
+            spoken_word = str(words[transcript_index].get("text") or "").rstrip()
+            if not re.search(r"[.!?]+[\"'”’)]*$", spoken_word):
+                words[transcript_index]["text"] = spoken_word + punctuation.group(1)
+            previous_transcript_end = transcript_index
 
     @staticmethod
     def _timed_segment(words: list[dict[str, Any]]) -> dict[str, Any]:
@@ -461,7 +564,13 @@ class GeminiAudioScenePlanner:
         window_end: float,
         batch_number: int,
     ) -> None:
-        """Reject bad timing, but safely re-anchor a questionable visual to the narration."""
+        """Snap valid plans to complete utterances and reject mid-sentence cuts."""
+        if len(planned) > len(transcript):
+            raise ProviderError(
+                f"Planning batch {batch_number} requested more visual scenes than complete spoken sentences. "
+                "Nothing was replaced; lower the image target and retry Precision Sync."
+            )
+
         previous_start = window_start
         for local_position, item in enumerate(planned, start=1):
             try:
@@ -481,28 +590,84 @@ class GeminiAudioScenePlanner:
                     "Nothing was replaced; retry Precision Sync."
                 )
             previous_start = start
-            spoken = " ".join(
-                str(segment.get("text") or "") for segment in transcript
-                if float(segment.get("end_seconds") or 0) >= start - 0.6
-                and float(segment.get("start_seconds") or 0) <= end + 0.6
+
+        # Legal visual changes are only the gaps between complete transcript
+        # sentences/utterances. Snap small model timing drift to those boundaries,
+        # but never accept a new plan that starts halfway through a sentence.
+        separators = [
+            (
+                float(transcript[index - 1]["end_seconds"])
+                + float(transcript[index]["start_seconds"])
+            ) / 2
+            for index in range(1, len(transcript))
+        ]
+        cut_indices = [0]
+        snapped_boundaries = [window_start]
+        for boundary_index in range(1, len(planned)):
+            proposed = (
+                float(planned[boundary_index - 1]["end_seconds"])
+                + float(planned[boundary_index]["start_seconds"])
+            ) / 2
+            minimum_cut = cut_indices[-1] + 1
+            maximum_cut = len(transcript) - (len(planned) - boundary_index)
+
+            def distance_from_pause(candidate: int) -> float:
+                left_end = float(transcript[candidate - 1]["end_seconds"])
+                right_start = float(transcript[candidate]["start_seconds"])
+                pause_start, pause_end = sorted((left_end, right_start))
+                if pause_start <= proposed <= pause_end:
+                    return 0.0
+                return min(abs(proposed - pause_start), abs(proposed - pause_end))
+
+            cut = min(
+                range(minimum_cut, maximum_cut + 1),
+                key=distance_from_pause,
             )
+            snapped = separators[cut - 1]
+            if distance_from_pause(cut) > 1.0:
+                raise ProviderError(
+                    f"Gemini tried to change the visual before a sentence was complete in planning batch "
+                    f"{batch_number}, scene {boundary_index}. Nothing was replaced; retry Precision Sync."
+                )
+            cut_indices.append(cut)
+            snapped_boundaries.append(snapped)
+        cut_indices.append(len(transcript))
+        snapped_boundaries.append(window_end)
+
+        for local_position, item in enumerate(planned, start=1):
+            first_segment = cut_indices[local_position - 1]
+            last_segment = cut_indices[local_position]
+            spoken = " ".join(
+                str(segment.get("text") or "").strip()
+                for segment in transcript[first_segment:last_segment]
+            ).strip()
             narration_tokens = cls._tokens(item.get("narration"))
             spoken_tokens = cls._tokens(spoken)
             comparable = min(len(narration_tokens), len(spoken_tokens))
-            overlap = len(narration_tokens & spoken_tokens) / comparable if comparable else 0.0
+            shared_tokens = len(narration_tokens & spoken_tokens)
+            overlap = shared_tokens / comparable if comparable else 0.0
             if comparable >= 4 and overlap < 0.35:
                 raise ProviderError(
                     f"Gemini assigned scene {local_position} of planning batch {batch_number} to the wrong spoken passage. "
                     "Nothing was replaced; retry Precision Sync."
                 )
-            narration_subjects = cls._tokens(item.get("narration"), significant=True)
+            if len(spoken_tokens) >= 4 and shared_tokens / len(spoken_tokens) < 0.65:
+                raise ProviderError(
+                    f"Gemini returned an incomplete spoken sentence for scene {local_position} of planning batch "
+                    f"{batch_number}. Nothing was replaced; retry Precision Sync."
+                )
+            item["start_seconds"] = round(snapped_boundaries[local_position - 1], 3)
+            item["end_seconds"] = round(snapped_boundaries[local_position], 3)
+            item["narration"] = spoken
+
+            narration_subjects = cls._tokens(spoken, significant=True)
             visual_subjects = cls._tokens(item.get("visual_subject"), significant=True)
             if len(narration_subjects) >= 2 and not narration_subjects.intersection(visual_subjects):
                 # A lexical mismatch is not reliable proof of a semantic mismatch:
                 # a good visual can use synonyms. Do not discard a complete plan.
                 # Falling back to the exact timed narration is deterministic and
                 # guarantees that image generation stays attached to the VO.
-                item["visual_subject"] = str(item.get("narration") or "").strip()
+                item["visual_subject"] = spoken
 
     @staticmethod
     def _build_drafts(
@@ -592,9 +757,13 @@ class GeminiAudioScenePlanner:
             "- Use the supplied real word timings, pauses, sentence endings and topic changes. Never distribute time evenly.\n"
             f"- Scene {start_position} begins at {window_start:.3f}. Scene {end_position} ends at {window_end:.3f}. "
             "Cover every spoken moment in this window without gaps.\n"
-            "- Put a boundary where the visible subject or action changes. Do not cut in the middle of a spoken phrase.\n"
+            "- Every scene must contain one or more complete TIMED VO TRANSCRIPT entries. A visual may change only between "
+            "entries, after the current sentence or clearly paused utterance is complete.\n"
+            "- Put a boundary where the visible subject or action changes, but never cut in the middle of a sentence or "
+            "start a new visual for an unfinished thought.\n"
             "- start_seconds and end_seconds are decimal seconds measured from the audio.\n"
-            "- narration must be the exact contiguous words spoken in that time range and must stay in source order.\n\n"
+            "- narration must concatenate the complete transcript entries assigned to that scene, using the exact contiguous "
+            "words in source order.\n\n"
             "VISUAL RULES\n"
             "- visual_subject must describe the literal, specific subject/action/object the viewer should see in 10-35 words.\n"
             "- Reuse at least one concrete noun or named phrase from narration in visual_subject, then add composition details.\n"

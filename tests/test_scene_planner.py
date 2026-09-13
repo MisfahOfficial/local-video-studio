@@ -50,6 +50,19 @@ class ScenePlannerTests(unittest.TestCase):
         codes = {warning["code"] for warning in warnings}
         self.assertTrue({"short_script", "duration_too_long", "too_many_images", "target_not_reached"} <= codes)
 
+    def test_image_target_does_not_split_an_unfinished_sentence(self) -> None:
+        script = "A single long sentence keeps explaining the same visible idea without reaching a full stop"
+
+        drafts = RuleBasedScenePlanner().plan(
+            script,
+            theme_id="us_nostalgia",
+            duration_seconds=12.0,
+            target_scene_count=4,
+        )
+
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0].narration, script)
+
 
 if __name__ == "__main__":
     unittest.main()

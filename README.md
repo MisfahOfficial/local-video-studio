@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.3
+# Local Video Studio v0.6.4
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -49,6 +49,15 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.6.4 keeps every Precision Sync visual attached to a complete spoken
+sentence or clearly paused utterance. Long projects are divided only at those safe
+audio boundaries, small Gemini timing drift is snapped back to the real pause, and
+a target that would force mid-sentence visual changes is rejected before it can
+replace the current plan. Script punctuation also restores sentence boundaries when
+the speech transcription omits punctuation. Local Free and Gemini Text Smart also
+stop at the number of complete script sentences instead of cutting a sentence just
+to reach a larger image target.
 
 Version 0.6.3 keeps Precision Sync moving when a valid visual uses different words
 from the narration. Instead of rejecting the whole plan, questionable visual subjects
@@ -113,9 +122,10 @@ spend.
 **Gemini Precision Sync** uploads the finished VO through the Gemini Files API,
 listens to the whole recording, matches it against the supplied script, and
 returns timestamped semantic scenes. The result is validated for the exact scene
-count, chronological order, and complete audio coverage before any existing scene
-is replaced. The remote VO file is deleted immediately after planning. Gemini's
-free tier can be used when it is available for the selected account/model.
+count, chronological order, complete audio coverage, and sentence-safe visual
+boundaries before any existing scene is replaced. The remote VO file is deleted
+immediately after planning. Gemini's free tier can be used when it is available for
+the selected account/model.
 
 **Gemini Text Smart** and **Local Free** remain available as estimated-timing
 fallbacks. They distribute time without listening to the VO, so they should not
