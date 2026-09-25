@@ -216,6 +216,11 @@ class GeminiFilesClient:
             task="scene planning",
         )
 
+    @staticmethod
+    def _is_quota_error(error: ProviderError) -> bool:
+        message = str(error).lower()
+        return "http 429" in message and ("quota" in message or "resource_exhausted" in message)
+
     @classmethod
     def _is_transient_error(cls, error: ProviderError) -> bool:
         message = str(error).lower()
@@ -232,6 +237,7 @@ class GeminiFilesClient:
     ) -> dict[str, Any]:
         last_error: ProviderError | None = None
         attempted_models: list[str] = []
+        quota_models: list[str] = []
         for model_index, candidate in enumerate(models):
             attempted_models.append(candidate)
             attempts = preferred_attempts if model_index == 0 else 1
@@ -251,11 +257,22 @@ class GeminiFilesClient:
                     if not self._is_transient_error(error):
                         raise
                     last_error = error
+                    if self._is_quota_error(error):
+                        # Retrying a model whose quota is used up only burns more
+                        # requests; each model has its own quota, so try the next.
+                        quota_models.append(candidate)
+                        break
                     if attempt + 1 < attempts:
                         delay = min(8.0, 2.0 ** attempt) + random.uniform(0.0, 0.35)
                         time.sleep(delay)
 
         models_text = ", ".join(attempted_models)
+        if quota_models and len(quota_models) == len(attempted_models):
+            raise ProviderError(
+                f"Your Gemini API quota is used up for {models_text}. On the free tier this is a daily limit, "
+                "not a temporary outage: wait for the quota to reset or enable billing for this API key's project. "
+                "Your existing scenes were preserved."
+            ) from last_error
         raise ProviderError(
             f"Gemini {task} is temporarily busy after automatic retries across {models_text}. "
             "Your existing scenes were preserved. Please retry in a few minutes."

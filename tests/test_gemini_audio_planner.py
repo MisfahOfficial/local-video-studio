@@ -96,6 +96,24 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         )
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [1.0, 2.0])
 
+    def test_quota_error_skips_retries_and_reports_quota(self) -> None:
+        quota = ProviderError(
+            'Provider returned HTTP 429: {"error":{"status":"RESOURCE_EXHAUSTED","message":"You exceeded your current quota"}}'
+        )
+        client = GeminiFilesClient("test-key")
+        with (
+            patch("app.gemini_audio_planner.request_json", side_effect=quota) as request,
+            patch("app.gemini_audio_planner.time.sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(ProviderError, "quota is used up"):
+                client.create_scene_plan(model="gemini-3.7-flash", prompt="Plan this scene")
+        attempted_models = [call.kwargs["payload"]["model"] for call in request.call_args_list]
+        self.assertEqual(
+            attempted_models,
+            ["gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"],
+        )
+        sleep.assert_not_called()
+
     def test_non_transient_planning_error_is_not_retried(self) -> None:
         client = GeminiFilesClient("test-key")
         with patch(
