@@ -46,7 +46,8 @@ _STOP = {
 NON_FOOTAGE_TITLE = re.compile(
     r"\b(lyrics?|lyric video|music video|official video|asmr|podcast|reacts?|reaction|prank(ed)?|karaoke|"
     r"trailer|unboxing|live ?stream|#shorts|audiobook|full album|playlist|roblox|minecraft|fortnite|gameplay|"
-    r"let'?s play|video game|walkthrough|animation|animated|cartoon|no music|no talk)\b",
+    r"let'?s play|video game|walkthrough|animation|animated|cartoon|no music|no talk|music|songs?|radio|"
+    r"sing[- ]?along)\b",
     re.IGNORECASE,
 )
 
@@ -206,6 +207,61 @@ def topic_queries(scene: dict[str, Any], topic: str, era: str = "") -> list[str]
     return list(dict.fromkeys(query.strip() for query in queries))
 
 
+# Titles typical of AI-generated slideshow/"ambience" channels; real footage is preferred.
+AI_LIKE_TITLE = re.compile(
+    r"\b(ai|a\.i\.|ai[- ]?generated|ai[- ]?art|midjourney|sora|veo\s?\d?|kling|runway ?ml|stable diffusion|"
+    r"dall-?e|ambience|ambiance|ambient|aesthetic|vibes|cozy|cosy|dreamcore|liminal|lo-?fi|relaxing|sleep|jazz)\b",
+    re.IGNORECASE,
+)
+# Faceless nostalgia narrators publish AI slideshows; their footage is never real.
+NARRATOR_CHANNEL = re.compile(
+    r"nostalgi|vintage life|sleepy|we lived in|forgotten flavou?rs|old american|history with|bedtime|"
+    r"memories|memory lane|retro|recollection|lost pantry|golden age|dreams|yesteryear|bygone|olden|"
+    r"remember when|throwback|time capsule",
+    re.IGNORECASE,
+)
+# Long "25 Forgotten Desserts Grandma Made" / "What Life Was Like" listicles are narrated slideshows.
+LISTICLE_TITLE = re.compile(
+    r"(\b\d{2,3}\s+(forgotten|vintage|classic|old|retro|lost|nostalgic|things|foods?|recipes|desserts|dinners|"
+    r"meals|snacks|treats|dishes)\b)|forgotten|what (life|an? \w+) (was|felt) like|felt like|you could only|"
+    r"grandma (made|brought|used)|nobody (makes|remembers)",
+    re.IGNORECASE,
+)
+AI_DISCLOSURE = re.compile(
+    r"\b(ai[- ]generated|generated (with|by|using) ai|ai (images?|visuals|voice|narration|art)|synthetic (\(ai\) )?voice|"
+    r"artificial intelligence|midjourney|for illustrative purposes|visuali[sz]ations?|recreations?)\b",
+    re.IGNORECASE,
+)
+
+
+ERA = re.compile(r"\b(1[89]\d0s|\d0s|'\d0s|fifties|sixties|seventies|eighties|forties|thirties)\b", re.IGNORECASE)
+NOSTALGIA_WORDS = re.compile(
+    r"\b(forgotten|vanished|lost|grandma'?s?|grandmas|nobody|remember|golden age|back then|used to|"
+    r"life in america|felt like|was like|why did we stop|nostalgi\w*|disappeared|gone forever|hacks)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_ai_slideshow(item: dict[str, Any], blocked_channels: str = "") -> bool:
+    """True for AI-slideshow sources: blocked/narrator channels, long nostalgia listicles, AI disclosures."""
+    title = str(item.get("title") or "")
+    channel = str(item.get("channel") or item.get("uploader") or "")
+    blocked = [name.strip().lower() for name in blocked_channels.split(",") if name.strip()]
+    if channel.lower() in blocked or NARRATOR_CHANNEL.search(channel) or AI_LIKE_TITLE.search(title):
+        return True
+    # "FORGOTTEN Objects in EVERY 1950s Kitchen": era + nostalgia hook is the AI-slideshow formula.
+    if ERA.search(title) and NOSTALGIA_WORDS.search(title):
+        return True
+    duration = float(item.get("duration_seconds") or item.get("duration") or 0)
+    if duration > 1800 and LISTICLE_TITLE.search(title):
+        return True
+    return bool(AI_DISCLOSURE.search(str(item.get("description") or "")))
+
+
+# Whole-video average above this means the source looks like AI imagery.
+SYNTHETIC_THRESHOLD = 0.6
+
+
 # Frames that look like these are never usable B-roll for a topic.
 NEGATIVE_PROMPTS = (
     "a person talking to the camera", "a news anchor in a studio", "a title card with text",
@@ -361,6 +417,7 @@ class FootageVerifier:
         self._frames: dict[str, tuple[list[float], Any]] = {}
         self._lookalikes: dict[str, tuple[str, ...]] = {}
         self._grey: dict[str, Any] = {}
+        self._synthetic: dict[str, float] = {}
 
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames
@@ -383,6 +440,23 @@ class FootageVerifier:
         if video_id not in self._frames:
             self.add_frames(video_id, storyboard_frames(info))
         return self._frames[video_id]
+
+    def synthetic_score(self, video_id: str) -> float:
+        """How much the whole source looks like AI art rather than camera footage (0-1)."""
+        if video_id not in self._synthetic:
+            _times, features = self._frames.get(video_id, ([], []))
+            if len(features):
+                render = self.scorer.probabilities(
+                    features, "a hyperrealistic AI render, overly perfect and saturated",
+                    ("an ordinary real photo", "real camera footage"),
+                )
+                drawing = self.scorer.probabilities(
+                    features, "a drawing, painting or illustration", ("a photograph", "real camera footage"),
+                )
+                self._synthetic[video_id] = max(sum(render) / len(render), sum(drawing) / len(drawing))
+            else:
+                self._synthetic[video_id] = 0.0
+        return self._synthetic[video_id]
 
     def negatives(self, subject: str, scene_text: str) -> tuple[str, ...]:
         if subject and subject not in self._lookalikes:

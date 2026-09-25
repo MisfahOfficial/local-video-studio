@@ -15,8 +15,9 @@ from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
 from .logo_guard import analyse_clip
+from .vintage_still import generate_vintage_still
 from .footage_match import (
-    NON_FOOTAGE_TITLE, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
+    NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
     scene_subjects, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
@@ -207,7 +208,7 @@ class AutoYouTubeManager:
                 ]
             status = {
                 "running": bool(scenes), "total": len(scenes), "completed": 0, "failed": 0,
-                "current_scene": None, "errors": [], "notice": "", "topic": "",
+                "current_scene": None, "errors": [], "notice": "", "topic": "", "generated": [],
             }
             self._statuses[project_id] = status
             if scenes:
@@ -288,7 +289,10 @@ class AutoYouTubeManager:
 
                 def usable(item: dict[str, Any]) -> bool:
                     text = f"{item.get('title')} {item.get('description')}"
-                    return not NON_FOOTAGE_TITLE.search(str(item.get("title") or "")) and mentions_topic(text, core)
+                    title = str(item.get("title") or "")
+                    return (not NON_FOOTAGE_TITLE.search(title)
+                            and not looks_like_ai_slideshow(item, settings.blocked_channels)
+                            and mentions_topic(text, core))
 
                 try:
                     pool: dict[str, dict[str, Any]] = {}
@@ -305,15 +309,23 @@ class AutoYouTubeManager:
                         key=lambda item: (str(item.get("video_id")) not in used, candidate_relevance(item, scene)),
                         reverse=True,
                     )
-                    if not ranked:
-                        raise ProviderError(f'No {empty_label} footage about "{subject or query}" matched this scene')
                     duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
-                    choices = self._choose(service, verifier, ranked[:5], subject, scene_text, duration, used, infos)
+                    if not ranked:
+                        self._fallback_still(project_id, scene, position, scene_text, subject, era, settings)
+                        completed += 1
+                        generated.append(position)
+                        self._update(project_id, completed=completed, generated=list(generated))
+                        continue
+                    choices = self._choose(
+                        service, verifier, ranked[:5], subject, scene_text, duration, used, infos, settings.blocked_channels,
+                    )
                     if not choices:
-                        raise ProviderError(
-                            f'No clip clearly showed "{subject or query}" for this sentence, so nothing was inserted. '
-                            "Pick a clip manually with Source from YouTube."
-                        )
+                        # No real footage passed: an aged period still is better than a wrong clip.
+                        self._fallback_still(project_id, scene, position, scene_text, subject, era, settings)
+                        completed += 1
+                        generated.append(position)
+                        self._update(project_id, completed=completed, generated=list(generated))
+                        continue
                     last_error: Exception | None = None
                     for candidate, start_time, topic_score in choices[:3]:
                         video_id = str(candidate["video_id"])
@@ -374,10 +386,32 @@ class AutoYouTubeManager:
             with self._lock:
                 self._threads.pop(project_id, None)
 
+    def _fallback_still(
+        self, project_id: str, scene: dict[str, Any], position: int, scene_text: str, subject: str, era: str,
+        settings: Any,
+    ) -> None:
+        destination = self.paths.project_dir(project_id) / "assets" / "stills" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
+        try:
+            metadata = generate_vintage_still(settings, scene_text, subject, era, destination)
+        except ProviderError as error:
+            raise ProviderError(
+                f'No real footage of "{subject or scene_text[:40]}" passed the checks and a fallback image '
+                f"could not be made: {error}"
+            ) from error
+        asset = self.db.add_asset(
+            project_id=project_id, scene_id=str(scene["id"]),
+            candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+            media_kind="image", provider="generated", model=str(metadata["model"]),
+            local_path=str(destination), remote_url=None, provider_asset_id=None,
+            cost=float(metadata.get("cost") or 0), metadata=metadata,
+        )
+        self.db.select_asset(str(scene["id"]), str(asset["id"]))
+
     @staticmethod
     def _choose(
         service: YouTubeSourceService, verifier: FootageVerifier | None, candidates: list[dict[str, Any]],
         subject: str, scene_text: str, duration: float, used: dict[str, list[float]], infos: dict[str, dict[str, Any]],
+        blocked_channels: str = "",
     ) -> list[tuple[dict[str, Any], float | None, float | None]]:
         """Candidates whose best moment passed the visual check, best first."""
         if verifier is None:
@@ -406,6 +440,11 @@ class AutoYouTubeManager:
             info = infos.get(video_id)
             if info is None:
                 continue
+            # The full description is only known after inspection (AI voice/image disclosures).
+            if looks_like_ai_slideshow({**candidate, "description": info.get("description")}, blocked_channels):
+                continue
+            if verifier.synthetic_score(video_id) >= SYNTHETIC_THRESHOLD:
+                continue  # looks like AI imagery; prefer real camera footage
             moment = verifier.best_moment(video_id, info, subject, scene_text, duration, avoid=used.get(video_id))
             if moment is None:
                 continue

@@ -55,6 +55,14 @@ stored on the local machine.
 
 Version 0.7.2 editing upgrades:
 
+- **Real footage first.** Auto-source skips AI-slideshow sources: your own channels and
+  any listed in **Settings > Never use footage from**, nostalgia narrator channels,
+  titles that pair an era with a nostalgia hook ("FORGOTTEN Objects in EVERY 1950s
+  Kitchen"), long nostalgia listicles, descriptions that disclose AI voices/images,
+  and sources whose frames look like AI renders or illustrations. Only when no real
+  footage passes does it generate a still with your Runware key (about $0.001), styled
+  as a candid period snapshot and aged locally with faded colour, grain and vignette.
+
 - **7-second visuals.** No scene stays on screen longer than 7 seconds (5 seconds in the
   first 20 minutes). Whisper Sync splits long sentences at a comma or the longest spoken
   pause, so each part gets its own clip.

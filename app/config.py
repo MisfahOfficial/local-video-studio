@@ -14,6 +14,8 @@ class StudioSettings:
     gemini_api_key: str = ""
     youtube_api_key: str = ""
     youtube_license_mode: str = "creative_commons"
+    # Your own channels and others whose footage should never be reused (comma separated).
+    blocked_channels: str = "Vintage Life of USA, Forgotten Flavors of USA, Britain We Lived In, Canada We Lived In"
     runware_default_model: str = "rundiffusion:110@101"
     runware_precise_model: str = "runware:400@2"
     runware_premium_model: str = "alibaba:qwen-image@3.0"

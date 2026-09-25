@@ -467,6 +467,7 @@ async function refreshYouTubeAutoStatus() {
   panel.textContent = result.running
     ? `Finding and visually checking footage${result.topic ? ` of ${result.topic}` : ""} · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
     : `YouTube sourcing finished · ${result.completed || 0} added · ${result.failed || 0} need review`;
+  if (result.generated?.length) panel.textContent += ` · No real footage for scene${result.generated.length === 1 ? "" : "s"} ${result.generated.join(", ")}, so a vintage photo was made`;
   if (result.review?.length) panel.textContent += ` · Please check scene${result.review.length === 1 ? "" : "s"} ${result.review.join(", ")}`;
   if (result.notice) panel.textContent += ` · ${result.notice}`;
   $("#autoSourceYouTubeButton").disabled = Boolean(result.running);
@@ -1803,6 +1804,7 @@ function fillSettings() {
   $("#unitCostInput").value = state.settings.estimated_unit_cost ?? 0.0013;
   $("#budgetInput").value = state.settings.max_project_cost || 3;
   $("#youtubeLicenseMode").value = youtubeFairUse() ? "fair_use" : "creative_commons";
+  $("#blockedChannels").value = state.settings.blocked_channels || "";
   $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"}`;
 }
 
@@ -1815,6 +1817,7 @@ async function saveSettings(event) {
     estimated_unit_cost: Number($("#unitCostInput").value),
     max_project_cost: Number($("#budgetInput").value),
     youtube_license_mode: $("#youtubeLicenseMode").value,
+    blocked_channels: $("#blockedChannels").value.trim(),
   };
   if ($("#runwareKey").value) body.runware_api_key = $("#runwareKey").value;
   if ($("#togetherKey").value) body.together_api_key = $("#togetherKey").value;

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from app.footage_match import (
-    NON_FOOTAGE_TITLE, auto_topic, best_window, core_subject, detect_era, detect_topic, heading_subject,
+    AI_LIKE_TITLE, NON_FOOTAGE_TITLE, auto_topic, looks_like_ai_slideshow, best_window, core_subject, detect_era, detect_topic, heading_subject,
     mentions_topic, scene_keywords, scene_subjects, topic_queries,
 )
 
@@ -78,6 +78,29 @@ class ListVideoTests(unittest.TestCase):
         self.assertTrue(NON_FOOTAGE_TITLE.search("Poor Man's Cookies Soft Spoken ASMR"))
         self.assertIsNone(NON_FOOTAGE_TITLE.search("Old Fashioned Hermit Cookies"))
         self.assertTrue(NON_FOOTAGE_TITLE.search("Roblox Steal Cookies From Grandma"))
+
+    def test_ai_channel_titles(self) -> None:
+        self.assertTrue(AI_LIKE_TITLE.search("Cozy 1950s Holiday Kitchen Ambience | Retro Christmas"))
+        self.assertTrue(AI_LIKE_TITLE.search("Vintage Jazz Playing Softly in Grandma's Cottage Kitchen"))
+        self.assertTrue(AI_LIKE_TITLE.search("1950s America - AI generated"))
+        self.assertIsNone(AI_LIKE_TITLE.search("Poor Man's Cookies From The 1930's"))
+        self.assertIsNone(AI_LIKE_TITLE.search("Chair repair and painting"))
+
+    def test_nostalgia_slideshow_sources_are_skipped(self) -> None:
+        ai = [
+            {"title": "FORGOTTEN Objects in EVERY 1950s Kitchen - Life in America", "channel": "Recollection Road"},
+            {"title": "20 Forgotten Poor Man Desserts 1970s Grandmas Made", "channel": "Someone"},
+            {"title": "Anything", "channel": "Vintage Life of USA"},
+            {"title": "Cookie recipe", "channel": "Kitchen", "description": "Narrated with a synthetic (AI) voice."},
+        ]
+        real = [
+            {"title": "Supermarket Shoppers, 1970s - Film 61577", "channel": "Kinolibrary"},
+            {"title": "We Ate 1950's Recipes For A Week", "channel": "BuzzFeedVideo"},
+            {"title": "POOR MANS OATMEAL COOKIES", "channel": "Alabama Prepper", "duration_seconds": 868},
+        ]
+        blocked = "Vintage Life of USA, Forgotten Flavors of USA"
+        self.assertTrue(all(looks_like_ai_slideshow(item, blocked) for item in ai))
+        self.assertFalse(any(looks_like_ai_slideshow(item, blocked) for item in real))
 
 
 if __name__ == "__main__":
