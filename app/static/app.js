@@ -60,6 +60,11 @@ function startPlanningProgress(mode) {
   const update = () => {
     const elapsed = (performance.now() - state.planningStartedAt) / 1000;
     $("#planningElapsed").textContent = clock(elapsed);
+    if (mode === "whisper") {
+      $("#planningStage").textContent = elapsed < 20 ? "Listening to the voice-over on this computer…" : "Matching every sentence to the spoken audio…";
+      $("#planningDetail").textContent = "Whisper runs locally and free. The first run downloads its speech model once (about 500 MB).";
+      return;
+    }
     if (mode !== "precision") {
       $("#planningStage").textContent = mode === "gemini" ? "Directing visual prompts…" : "Building the local scene plan…";
       $("#planningDetail").textContent = "Scene order, prompts and timing are being prepared.";
@@ -260,7 +265,7 @@ async function createPlan() {
   const button = $("#createPlanButton");
   const planner = $("#plannerSelect").value;
   button.disabled = true;
-  button.textContent = planner === "precision" ? "Syncing VO and scenes…" : "Directing scenes…";
+  button.textContent = planner === "precision" || planner === "whisper" ? "Syncing VO and scenes…" : "Directing scenes…";
   startPlanningProgress(planner);
   try {
     const result = await api(`/api/projects/${state.current.id}/plan`, {
@@ -275,9 +280,10 @@ async function createPlan() {
     });
     state.selectedSceneIds.clear();
     state.planWarnings = result.warnings || [];
-    finishPlanningProgress(result.timing_source === "gemini_audio" ? "Precision Sync complete" : "Visual plan complete");
+    const voSynced = result.timing_source === "gemini_audio" || result.timing_source === "whisper_audio";
+    finishPlanningProgress(result.timing_source === "whisper_audio" ? "Whisper Sync complete" : voSynced ? "Precision Sync complete" : "Visual plan complete");
     const pacing = result.auto_pacing ? "auto-paced" : "manual target";
-    toast(`${result.scenes.length} scenes created · ${result.timing_source === "gemini_audio" ? "VO-synced" : "estimated timing"} · ${pacing}`);
+    toast(`${result.scenes.length} scenes created · ${voSynced ? "VO-synced" : "estimated timing"} · ${pacing}`);
     await refreshProjects();
     await openProject(state.current.id);
     renderPlanWarnings();

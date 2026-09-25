@@ -53,6 +53,14 @@ The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
 
+Version 0.7.2 also adds **Whisper Sync**, now the default visual-planning mode. It
+listens to the uploaded voice-over with Faster-Whisper on this computer (free, no
+API key, no quota), matches every script sentence to its spoken time, and cuts
+between scenes inside the pauses. The first run downloads the Whisper speech model
+(about 500 MB) once; the macOS launcher installs `faster-whisper` automatically.
+Gemini quota errors are now reported as quota errors instead of being retried as
+a busy model.
+
 Version 0.7.2 adds a **YouTube footage source** setting. *Creative Commons only*
 stays the default. *All YouTube videos (fair use)* removes the licence filter, needs
 no YouTube API key, and continues with quota-free `yt-dlp` search when the Data API

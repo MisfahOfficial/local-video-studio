@@ -18,6 +18,7 @@ from .config import SettingsStore
 from .database import Database
 from .generation import GenerationManager
 from .gemini_audio_planner import GeminiAudioScenePlanner
+from .whisper_planner import WhisperScenePlanner
 from .gemini_analyzer import GeminiSceneEnhancer
 from .fonts import FontError, FontManager
 from .paths import AppPaths
@@ -362,6 +363,25 @@ class StudioApplication:
                 )
                 duration = drafts[-1].end_seconds
                 timing_source = "gemini_audio"
+            elif planner_mode == "whisper":
+                voiceover_path = Path(str(project.get("voiceover_path") or ""))
+                voiceover_duration = float(project.get("duration_seconds") or 0)
+                if not voiceover_path.is_file():
+                    raise ApiError("Upload the finished voice-over before using Whisper Sync.")
+                if voiceover_duration <= 0:
+                    raise ApiError("The voice-over duration could not be measured. Re-upload it before using Whisper Sync.")
+                duration = voiceover_duration
+                try:
+                    drafts = WhisperScenePlanner().plan(
+                        script=script,
+                        voiceover_path=voiceover_path,
+                        duration_seconds=duration,
+                        theme_id=theme_id,
+                        target_scene_count=image_count,
+                    )
+                except (RuntimeError, ValueError) as error:
+                    raise ApiError(str(error)) from error
+                timing_source = "whisper_audio"
             else:
                 drafts = self.planner.plan(
                     script,
