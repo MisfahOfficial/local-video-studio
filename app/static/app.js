@@ -502,7 +502,7 @@ function youtubeSourceLabel() {
 }
 
 function topicStorageKey() {
-  return `footageTopic:${state.current?.id || ""}`;
+  return `footageTopic:v2:${state.current?.id || ""}`;
 }
 
 async function fillFootageTopic() {
@@ -1026,6 +1026,9 @@ function openYouTubeDialog() {
     return;
   }
   $("#youtubeQuery").value = scene.visual_subject || scene.narration || "";
+  api(`/api/scenes/${scene.id}/footage-query?topic=${encodeURIComponent($("#footageTopicInput")?.value.trim() || "")}`)
+    .then(result => { if (result.query) $("#youtubeQuery").value = result.query; })
+    .catch(() => {});
   $("#youtubeSceneContext").textContent = `Scene ${scene.position} · ${clock(scene.start_seconds)}–${clock(scene.end_seconds)} · ${scene.narration}`;
   $("#youtubeModeNote").textContent = youtubeFairUse()
     ? "Fair-use mode searches all YouTube videos. Keep excerpts short and transformative; the tool records the video, channel, licence and exact excerpt time for every clip, and never downloads the source audio."

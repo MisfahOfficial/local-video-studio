@@ -14,7 +14,8 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .footage_match import (
-    ClipScorer, FootageVerifier, detect_topic, mentions_topic, storyboard_frames, topic_queries,
+    NON_FOOTAGE_TITLE, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
+    scene_subjects, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -209,7 +210,7 @@ class AutoYouTubeManager:
             self._statuses[project_id] = status
             if scenes:
                 project = self.db.get_project(project_id) or {}
-                chosen_topic = (topic if topic is not None else detect_topic(
+                chosen_topic = (topic if topic is not None else auto_topic(
                     str(project.get("script") or ""), str(project.get("name") or ""),
                 )).strip()
                 status["topic"] = chosen_topic
@@ -248,7 +249,7 @@ class AutoYouTubeManager:
         verifier: FootageVerifier | None = None
         if ClipScorer.available():
             try:
-                verifier = FootageVerifier(topic)
+                verifier = FootageVerifier()
             except Exception as error:  # a broken model must not stop sourcing
                 self._update(project_id, notice=f"Visual check unavailable: {str(error)[:160]}")
         used: dict[str, list[float]] = {}
@@ -257,6 +258,12 @@ class AutoYouTubeManager:
                 start_time = float((asset.get("metadata") or {}).get("source_start_seconds") or 0)
                 used.setdefault(str(asset.get("provider_asset_id") or ""), []).append(start_time)
         infos: dict[str, dict[str, Any]] = {}
+        project = self.db.get_project(project_id) or {}
+        era = detect_era(str(project.get("script") or ""))
+        # Subjects come from the whole plan so list sections ("POOR MAN'S COOKIES")
+        # carry over to the scenes that follow the heading.
+        all_scenes = self.db.list_scenes(project_id)
+        subject_by_id = dict(zip((str(item["id"]) for item in all_scenes), scene_subjects(all_scenes, topic)))
         completed = failed = 0
         errors: list[dict[str, Any]] = []
         review: list[int] = []
@@ -265,39 +272,41 @@ class AutoYouTubeManager:
                 position = int(scene.get("position") or 0)
                 self._update(project_id, current_scene=position)
                 scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
-                own = topic_queries(scene, topic) if topic else scene_search_queries(scene)
+                subject = subject_by_id.get(str(scene["id"]), topic)
+                core = core_subject(subject)
+                own = topic_queries(scene, subject, era) or scene_search_queries(scene)
                 queries = list(dict.fromkeys(
-                    [query if not topic or mentions_topic(query, topic) else f"{topic} {query}" for query in ai_queries.get(position, [])]
+                    [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in ai_queries.get(position, [])]
                     + own
                 ))
-                query = queries[0] if queries else topic
+                query = queries[0] if queries else subject
+
+                def usable(item: dict[str, Any]) -> bool:
+                    text = f"{item.get('title')} {item.get('description')}"
+                    return not NON_FOOTAGE_TITLE.search(str(item.get("title") or "")) and mentions_topic(text, core)
+
                 try:
                     pool: dict[str, dict[str, Any]] = {}
                     for attempt in queries[:max_attempts]:
                         for item in service.search(attempt, maximum=10):
                             pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
-                        on_topic = [item for item in pool.values() if mentions_topic(f"{item.get('title')} {item.get('description')}", topic)]
-                        if len(on_topic) >= 4 and any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in on_topic):
+                        good = [item for item in pool.values() if usable(item)]
+                        if len(good) >= 4 and any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in good):
                             break
+                    # Off-subject titles (buffalo calves for a musk ox film, lasagna in a
+                    # cookie section) and lyric/ASMR/podcast videos are never used.
                     ranked = sorted(
-                        pool.values(),
-                        key=lambda item: (
-                            mentions_topic(f"{item.get('title')} {item.get('description')}", topic),
-                            str(item.get("video_id")) not in used,
-                            candidate_relevance(item, scene),
-                        ),
+                        (item for item in pool.values() if usable(item)),
+                        key=lambda item: (str(item.get("video_id")) not in used, candidate_relevance(item, scene)),
                         reverse=True,
                     )
-                    if topic:
-                        # Off-topic titles (buffalo calves for a musk ox film) are never used.
-                        ranked = [item for item in ranked if mentions_topic(f"{item.get('title')} {item.get('description')}", topic)]
                     if not ranked:
-                        raise ProviderError(f'No {empty_label} footage about "{topic or query}" matched this scene')
+                        raise ProviderError(f'No {empty_label} footage about "{subject or query}" matched this scene')
                     duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
-                    choices = self._choose(service, verifier, ranked[:5], scene_text, duration, used, infos)
+                    choices = self._choose(service, verifier, ranked[:5], subject, scene_text, duration, used, infos)
                     if not choices:
                         raise ProviderError(
-                            f'No clip clearly showed "{topic or query}" for this sentence, so nothing was inserted. '
+                            f'No clip clearly showed "{subject or query}" for this sentence, so nothing was inserted. '
                             "Pick a clip manually with Source from YouTube."
                         )
                     last_error: Exception | None = None
@@ -323,7 +332,7 @@ class AutoYouTubeManager:
                     metadata.update({
                         "auto_sourced": True,
                         "search_query": str(candidate.get("_query") or query),
-                        "topic": topic,
+                        "topic": subject,
                         "relevance_score": round(candidate_relevance(candidate, scene), 3),
                         "visual_match": None if topic_score is None else round(topic_score, 3),
                         "needs_review": topic_score is not None and topic_score < REVIEW_BELOW,
@@ -352,7 +361,7 @@ class AutoYouTubeManager:
     @staticmethod
     def _choose(
         service: YouTubeSourceService, verifier: FootageVerifier | None, candidates: list[dict[str, Any]],
-        scene_text: str, duration: float, used: dict[str, list[float]], infos: dict[str, dict[str, Any]],
+        subject: str, scene_text: str, duration: float, used: dict[str, list[float]], infos: dict[str, dict[str, Any]],
     ) -> list[tuple[dict[str, Any], float | None, float | None]]:
         """Candidates whose best moment passed the visual check, best first."""
         if verifier is None:
@@ -381,7 +390,7 @@ class AutoYouTubeManager:
             info = infos.get(video_id)
             if info is None:
                 continue
-            moment = verifier.best_moment(video_id, info, scene_text, duration, avoid=used.get(video_id))
+            moment = verifier.best_moment(video_id, info, subject, scene_text, duration, avoid=used.get(video_id))
             if moment is None:
                 continue
             start_time, topic_score, score = moment

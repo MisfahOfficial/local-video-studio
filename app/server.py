@@ -28,7 +28,7 @@ from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
 from .youtube_source import FAIR_USE, YouTubeSourceService, normalize_license_mode
-from .footage_match import detect_topic
+from .footage_match import auto_topic, core_subject, detect_era, scene_subjects, topic_queries
 from .youtube_auto import AutoYouTubeManager
 
 
@@ -530,7 +530,19 @@ def build_handler(application: StudioApplication):
                 project = application.db.get_project(match.group(1))
                 if not project:
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
-                self._json({"topic": detect_topic(str(project.get("script") or ""), str(project.get("name") or ""))})
+                self._json({"topic": auto_topic(str(project.get("script") or ""), str(project.get("name") or ""))})
+                return
+            match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/footage-query", path)
+            if match:
+                scene = application.db.get_scene(match.group(1))
+                if not scene:
+                    raise ApiError("Scene not found", HTTPStatus.NOT_FOUND)
+                project = application.db.get_project(str(scene["project_id"])) or {}
+                topic = str(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("topic", [""])[0])
+                scenes = application.db.list_scenes(str(scene["project_id"]))
+                subjects = dict(zip((str(item["id"]) for item in scenes), scene_subjects(scenes, topic)))
+                queries = topic_queries(scene, subjects.get(str(scene["id"]), ""), detect_era(str(project.get("script") or "")))
+                self._json({"query": queries[0] if queries else str(scene.get("narration") or "")[:120]})
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-status", path)
             if match:

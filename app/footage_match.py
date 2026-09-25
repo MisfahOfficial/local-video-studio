@@ -32,14 +32,33 @@ _STOP = {
     "real", "true", "truth", "fact", "reason", "reasons", "place", "part", "kind", "long", "short", "high", "low",
     "hard", "harsh", "harshest", "best", "worst", "less", "least", "able", "within", "hours", "hour", "minutes",
     "survive", "survived", "survives", "changed", "change", "changes", "happen", "happened", "happens",
+    # Narration verbs and channel talk.
+    "remind", "reminds", "reminded", "subscribe", "subscribed", "answer", "answers", "bring", "bringing",
+    "brought", "back", "forgotten", "fill", "filled", "proved", "prove", "appeared", "require", "required",
+    "didn", "don", "doesn", "wasn", "weren", "isn", "aren", "won", "ll", "ve", "re", "determination",
+    "delicious", "tight", "expensive", "cheap", "every", "everyone", "anyone", "between", "straight",
+    "together", "finished", "staple", "along", "without", "any", "whatever", "left", "using", "used", "meant",
+    "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "twelve", "twenty", "thirty",
+    "forty", "fifty", "hundred", "thousand", "half", "quarter", "cup", "cups", "teaspoon", "tablespoon",
 }
+
+# Titles containing these are talk, music or reaction content, never B-roll.
+NON_FOOTAGE_TITLE = re.compile(
+    r"\b(lyrics?|lyric video|music video|official video|asmr|podcast|reacts?|reaction|prank(ed)?|karaoke|"
+    r"trailer|unboxing|live ?stream|#shorts|audiobook|full album|playlist)\b",
+    re.IGNORECASE,
+)
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r"[a-z][a-z'-]+", text.lower().replace("’", "'"))
+    found = re.findall(r"[a-z][a-z'-]+", text.lower().replace("’", "'"))
+    # "man's" -> "man": possessives must not become "man'" after singularizing.
+    return [word for word in (re.sub(r"'s$|'$", "", item) for item in found) if word]
 
 
 def _singular(word: str) -> str:
+    if word.endswith(("ss", "us", "is", "as")) or word in {"molasses", "series", "species"}:
+        return word  # christmas, molasses, bus: not plurals
     for suffix, replacement in (("ies", "y"), ("oxen", "ox"), ("ves", "f"), ("es", "e"), ("s", "")):
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
             return word[: -len(suffix)] + replacement
@@ -83,28 +102,106 @@ def mentions_topic(text: str, topic: str) -> bool:
     return any(form in normalized or form.replace(" ", "") in squeezed for form in topic_forms(topic))
 
 
+_NUMBERING = re.compile(r"^\s*(?:#?\d+\s*[.):\-]|number\s+\d+\s*[.:\-]?)\s*", re.IGNORECASE)
+
+
+def heading_subject(sentence: str) -> str:
+    """'POOR MAN'S COOKIES' or '2. Vinegar Pie' -> the section's subject; '' for normal sentences."""
+    text = sentence.strip().strip('"\u201c\u201d')
+    numbered = bool(_NUMBERING.match(text))
+    text = _NUMBERING.sub("", text).strip(" .:!-")
+    words = re.findall(r"[A-Za-z][A-Za-z'\u2019-]*", text)
+    if not 1 <= len(words) <= 7:
+        return ""
+    letters = "".join(words)
+    if (letters.isupper() and len(letters) > 3) or (numbered and not sentence.strip().endswith("?")):
+        return text.lower().replace("\u2019", "'")
+    return ""
+
+
+def core_subject(subject: str) -> str:
+    """The filmable thing: 'poor man's cookies' -> 'cookies', 'musk ox' -> 'musk ox'."""
+    subject = subject.lower().replace("\u2019", "'").strip()
+    if "'s " in subject:
+        subject = subject.split("'s ", 1)[1]
+    return subject.strip()
+
+
+def detect_era(script: str) -> str:
+    """Most mentioned decade ('1950s'), or '' when the script names none."""
+    decades = [f"{match[:3]}0s" for match in re.findall(r"\b(1[89]\d\d|20[0-2]\d)s?\b", script)]
+    return Counter(decades).most_common(1)[0][0] if decades else ""
+
+
+def _script_sentences(script: str) -> list[str]:
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", script) if part.strip()]
+    merged: list[str] = []
+    for part in parts:
+        # "2." split away from "Vinegar Pie" is list numbering, not a sentence.
+        if merged and re.fullmatch(r"#?\d+[.)]", merged[-1]):
+            merged[-1] = f"{merged[-1]} {part}"
+        else:
+            merged.append(part)
+    return merged
+
+
+def auto_topic(script: str, project_name: str = "") -> str:
+    """A single topic only for single-subject films; '' for list videos with section headings."""
+    sentences = _script_sentences(script)
+    if any(heading_subject(sentence) for sentence in sentences):
+        return ""
+    topic = detect_topic(script, project_name)
+    if not topic or not sentences:
+        return ""
+    share = sum(mentions_topic(sentence, topic) for sentence in sentences) / len(sentences)
+    return topic if share >= 0.3 else ""
+
+
+def scene_subjects(scenes: list[dict[str, Any]], topic: str) -> list[str]:
+    """Subject for each scene: the user's topic, else the current list section's heading."""
+    if topic.strip():
+        return [topic.strip()] * len(scenes)
+    current = ""
+    subjects: list[str] = []
+    for scene in scenes:
+        for sentence in _script_sentences(str(scene.get("narration") or "")):
+            current = heading_subject(sentence) or current
+        subjects.append(current)
+    return subjects
+
+
 def scene_keywords(text: str, topic: str, limit: int = 4) -> list[str]:
+    """Filmable words from the sentence, in spoken order, minus the topic's own words."""
     topic_words = {_singular(word) for word in _words(topic)}
+    roots: set[str] = set()
     found: list[str] = []
     for word in _words(text):
         root = _singular(word)
-        if word in _STOP or root in topic_words or len(word) < 3 or root in found:
+        parts = set(re.split(r"[-']", word))
+        if (word in _STOP or parts & _STOP or "'" in word or root in topic_words
+                or len(word) < 3 or root in roots):
             continue
-        found.append(root)
+        roots.add(root)
+        found.append(word)
     return found[:limit]
 
 
-def topic_queries(scene: dict[str, Any], topic: str) -> list[str]:
-    """Searches that always name the topic, narrowed by the scene's own nouns."""
+def topic_queries(scene: dict[str, Any], topic: str, era: str = "") -> list[str]:
+    """Searches that always name the subject, narrowed by the scene's own nouns."""
     source = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
     keys = scene_keywords(source, topic)
     if not topic.strip():
-        return [" ".join(keys + ["footage"])] if keys else []
+        prefix = f"{era} " if era else ""
+        queries = []
+        if keys:
+            queries.append(f"{prefix}{' '.join(keys[:3])} footage")
+            queries.append(f"{prefix}{' '.join(keys[:2])}")
+        return list(dict.fromkeys(query.strip() for query in queries))
     queries = []
     if keys:
-        queries.append(f"{topic} {' '.join(keys[:2])} footage")
+        queries.append(f"{topic} {' '.join(keys[:2])}")
         queries.append(f"{topic} {keys[0]}")
-    queries.append(f"{topic} footage")
+    queries.append(topic)
     return list(dict.fromkeys(query.strip() for query in queries))
 
 
@@ -258,11 +355,10 @@ TOPIC_THRESHOLD = 0.6
 class FootageVerifier:
     """Checks candidate YouTube videos frame by frame before any excerpt is used."""
 
-    def __init__(self, topic: str, scorer: ClipScorer | None = None):
-        self.topic = topic.strip()
+    def __init__(self, scorer: ClipScorer | None = None):
         self.scorer = scorer or ClipScorer()
-        self.negatives = (self.scorer.lookalikes(self.topic) if self.topic else ()) + NEGATIVE_PROMPTS
         self._frames: dict[str, tuple[list[float], Any]] = {}
+        self._lookalikes: dict[str, tuple[str, ...]] = {}
 
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames
@@ -272,37 +368,49 @@ class FootageVerifier:
 
     def _video_frames(self, video_id: str, info: dict[str, Any]) -> tuple[list[float], Any]:
         if video_id not in self._frames:
-            tiles = storyboard_frames(info)
-            self._frames[video_id] = ([time for time, _image in tiles], self.scorer.embed_images([image for _time, image in tiles]))
+            self.add_frames(video_id, storyboard_frames(info))
         return self._frames[video_id]
 
+    def negatives(self, subject: str, scene_text: str) -> tuple[str, ...]:
+        if subject and subject not in self._lookalikes:
+            self._lookalikes[subject] = self.scorer.lookalikes(subject)
+        scene_words = {_singular(word) for word in _words(scene_text)}
+        # "dough" must not count against a scene that is about cookie dough.
+        similar = tuple(
+            item for item in self._lookalikes.get(subject, ())
+            if not {_singular(word) for word in _words(item)} & scene_words
+        )
+        return similar + NEGATIVE_PROMPTS
+
     def best_moment(
-        self, video_id: str, info: dict[str, Any], scene_text: str, clip_duration: float,
+        self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
         avoid: list[float] | None = None,
     ) -> tuple[float, float, float] | None:
-        """Return (start, topic_score, scene_score) for the best unused window, or None."""
+        """Return (start, subject_score, scene_score) for the best unused window, or None."""
         times, features = self._video_frames(video_id, info)
         if not times:
             return None
-        subject = self.topic or scene_text[:120]
-        topic_scores = self.scorer.probabilities(features, subject, self.negatives)
-        keys = scene_keywords(scene_text, self.topic, limit=3)
-        detail = f"{subject} {' '.join(keys)}".strip()
+        core = core_subject(subject)
+        keys = scene_keywords(scene_text, core, limit=3)
+        detail = " ".join(filter(None, [core, *keys])).strip() or scene_text[:100]
+        # The subject itself must be visible ("cookies", "musk ox"); sentence details only
+        # rank moments that pass. Scenes without a subject are gated on their details.
+        gate_scores = self.scorer.probabilities(features, core or detail, self.negatives(core, scene_text))
         # How much better the frame fits this sentence ("musk ox calves playing")
-        # than the topic in general ("musk ox"); ranks moments that passed the gate.
+        # than the subject in general ("musk ox"); ranks moments that passed the gate.
         scene_scores = (
-            self.scorer.probabilities(features, detail, (subject,)) if keys else [0.5] * len(times)
+            self.scorer.probabilities(features, detail, (core,)) if core and keys else [0.5] * len(times)
         )
-        combined = [0.4 * topic + 0.6 * scene for topic, scene in zip(topic_scores, scene_scores)]
+        combined = [0.4 * gate + 0.6 * scene for gate, scene in zip(gate_scores, scene_scores)]
         best: tuple[float, float, float] | None = None
         for index, start in enumerate(times):
             if any(abs(start - used) < 15 for used in avoid or []):
                 continue
             window = [position for position in range(index, len(times)) if times[position] < start + max(clip_duration, 0.1)]
-            topic_average = sum(topic_scores[position] for position in window) / len(window)
-            if topic_average < TOPIC_THRESHOLD:
+            gate_average = sum(gate_scores[position] for position in window) / len(window)
+            if gate_average < TOPIC_THRESHOLD:
                 continue
             score = sum(combined[position] for position in window) / len(window)
             if best is None or score > best[2]:
-                best = (start, topic_average, score)
+                best = (start, gate_average, score)
         return best
