@@ -440,3 +440,12 @@ dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
   .player-panel .preview-load-state { display: none; }
   .export-dialog-layout { grid-template-columns: 1fr; }
 }
+
+.footage-topic { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted, #9aa3ad); }
+.footage-topic input { width: 170px; }
+
+.timeline-clip.narrow .trim-handle { width: 4px; }
+.timeline-clip.narrow .trim-handle::after { display: none; }
+.timeline-clip.drop-before { box-shadow: inset 3px 0 0 #35d8df; }
+.timeline-clip.drop-after { box-shadow: inset -3px 0 0 #35d8df; }
+body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-select: none; }

@@ -28,6 +28,7 @@ from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
 from .youtube_source import FAIR_USE, YouTubeSourceService, normalize_license_mode
+from .footage_match import detect_topic
 from .youtube_auto import AutoYouTubeManager
 
 
@@ -524,6 +525,13 @@ def build_handler(application: StudioApplication):
                     "running": application.generation.is_running(project_id),
                 })
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/footage-topic", path)
+            if match:
+                project = application.db.get_project(match.group(1))
+                if not project:
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                self._json({"topic": detect_topic(str(project.get("script") or ""), str(project.get("name") or ""))})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-status", path)
             if match:
                 if not application.db.get_project(match.group(1)):
@@ -646,7 +654,11 @@ def build_handler(application: StudioApplication):
                 if normalize_license_mode(settings.youtube_license_mode) != FAIR_USE and not settings.youtube_api_key:
                     raise ApiError("Add a YouTube Data API key in Settings first")
                 scene_ids = self._scene_ids(body.get("scene_ids"))
-                status = application.youtube_auto.start(project_id, scene_ids, bool(body.get("force", False)))
+                topic = body.get("topic")
+                status = application.youtube_auto.start(
+                    project_id, scene_ids, bool(body.get("force", False)),
+                    topic=None if topic is None else str(topic)[:80],
+                )
                 self._json(status, HTTPStatus.ACCEPTED)
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/retry-failed", path)

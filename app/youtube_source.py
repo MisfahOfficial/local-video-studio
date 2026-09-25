@@ -200,6 +200,18 @@ class YouTubeSourceService:
             raise ProviderError("This video is not currently marked with a Creative Commons licence on YouTube")
         return "Creative Commons"
 
+    def inspect(self, video_id: str) -> dict[str, Any]:
+        """Full yt-dlp metadata for one video (formats, storyboards, captions)."""
+        try:
+            import yt_dlp
+        except ImportError as error:
+            raise ProviderError("YouTube sourcing needs yt-dlp. Run: python -m pip install -e .") from error
+        try:
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+                return ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+        except Exception as error:
+            raise ProviderError(f"Could not inspect the YouTube source: {error}") from error
+
     @staticmethod
     def _caption_events(info: dict[str, Any]) -> list[dict[str, Any]]:
         tracks = info.get("subtitles") or info.get("automatic_captions") or {}
@@ -219,23 +231,16 @@ class YouTubeSourceService:
 
     def source_clip(
         self, *, video_id: str, query: str, duration: float, destination: Path,
-        source_start_seconds: float | None = None,
+        source_start_seconds: float | None = None, info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
             raise ProviderError("Invalid YouTube video identifier")
         if not math.isfinite(duration) or not 0.25 <= duration <= 600:
             raise ProviderError("The scene duration must be between 0.25 and 600 seconds")
         license_name = None if self.fair_use else self._creative_commons_license(video_id)
-        try:
-            import yt_dlp
-        except ImportError as error:
-            raise ProviderError("YouTube sourcing needs yt-dlp. Run: python -m pip install -e .") from error
         url = f"https://www.youtube.com/watch?v={video_id}"
-        try:
-            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as error:
-            raise ProviderError(f"Could not inspect the YouTube source: {error}") from error
+        if info is None:
+            info = self.inspect(video_id)
         start = float(source_start_seconds) if source_start_seconds is not None else best_caption_timestamp(
             self._caption_events(info), query, duration
         )

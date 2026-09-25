@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,9 @@ from .database import Database
 from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
+from .footage_match import (
+    ClipScorer, FootageVerifier, detect_topic, mentions_topic, storyboard_frames, topic_queries,
+)
 from .youtube_source import YouTubeSourceService, _words
 
 
@@ -82,7 +86,7 @@ def scene_search_queries(scene: dict[str, Any]) -> list[str]:
 
 def gemini_footage_queries(
     scenes: list[dict[str, Any]], api_key: str, model: str, batch_size: int = 40,
-    problems: list[str] | None = None,
+    problems: list[str] | None = None, topic: str = "",
 ) -> dict[int, list[str]]:
     """Ask Gemini for short footage searches per scene; failures are reported in `problems`, never raised."""
     if not api_key.strip() or not scenes:
@@ -107,7 +111,10 @@ def gemini_footage_queries(
             "You pick B-roll for a documentary edited from real YouTube footage. For every scene return 3 YouTube "
             "search queries of 3 to 6 words, best first, describing something a camera actually filmed that shows "
             "the scene. Keep the era, place, and named brands or people. No full sentences, no abstract ideas, "
-            "no quotation marks.\n\nSCENES\n" + json.dumps(batch, ensure_ascii=False)
+            "no quotation marks. Turn figurative words into what the camera would literally show "
+            "(\"impact\" in a wildlife film is the animals, not an explosion)."
+            + (f" The whole video is about {topic}: every query must name {topic}." if topic else "")
+            + "\n\nSCENES\n" + json.dumps(batch, ensure_ascii=False)
         )
         try:
             response = post_json(endpoint, {
@@ -160,6 +167,9 @@ def candidate_relevance(candidate: dict[str, Any], scene: dict[str, Any]) -> flo
     )
 
 
+# Clips whose best moment matched the topic less confidently than this are flagged.
+REVIEW_BELOW = 0.75
+
 # A candidate needs at least one scene word in its title to count as on-topic.
 _GOOD_MATCH = 4.0
 
@@ -175,7 +185,9 @@ class AutoYouTubeManager:
         self._statuses: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def start(self, project_id: str, scene_ids: list[str] | None = None, force: bool = False) -> dict[str, Any]:
+    def start(
+        self, project_id: str, scene_ids: list[str] | None = None, force: bool = False, topic: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             active = self._threads.get(project_id)
             if active and active.is_alive():
@@ -192,12 +204,17 @@ class AutoYouTubeManager:
                 ]
             status = {
                 "running": bool(scenes), "total": len(scenes), "completed": 0, "failed": 0,
-                "current_scene": None, "errors": [], "notice": "",
+                "current_scene": None, "errors": [], "notice": "", "topic": "",
             }
             self._statuses[project_id] = status
             if scenes:
+                project = self.db.get_project(project_id) or {}
+                chosen_topic = (topic if topic is not None else detect_topic(
+                    str(project.get("script") or ""), str(project.get("name") or ""),
+                )).strip()
+                status["topic"] = chosen_topic
                 thread = threading.Thread(
-                    target=self._run, args=(project_id, scenes), daemon=True,
+                    target=self._run, args=(project_id, scenes, chosen_topic), daemon=True,
                     name=f"youtube-auto-{project_id[:8]}",
                 )
                 self._threads[project_id] = thread
@@ -215,48 +232,77 @@ class AutoYouTubeManager:
         with self._lock:
             self._statuses.setdefault(project_id, {}).update(changes)
 
-    def _run(self, project_id: str, scenes: list[dict[str, Any]]) -> None:
+    def _run(self, project_id: str, scenes: list[dict[str, Any]], topic: str = "") -> None:
         settings = self.settings_store.load()
         service = YouTubeSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode)
         model = "fair-use-auto-source" if service.fair_use else "creative-commons-auto-source"
         problems: list[str] = []
-        ai_queries = gemini_footage_queries(scenes, settings.gemini_api_key, settings.gemini_model, problems=problems)
+        ai_queries = gemini_footage_queries(
+            scenes, settings.gemini_api_key, settings.gemini_model, problems=problems, topic=topic,
+        )
         if problems:
             self._update(project_id, notice=problems[0])
         empty_label = "YouTube" if service.fair_use else "Creative Commons"
         # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
         max_attempts = 4 if service.fair_use else 2
-        used_ids = {
-            str(asset.get("provider_asset_id") or "")
-            for asset in self.db.list_assets(project_id) if asset.get("provider") == "youtube"
-        }
+        verifier: FootageVerifier | None = None
+        if ClipScorer.available():
+            try:
+                verifier = FootageVerifier(topic)
+            except Exception as error:  # a broken model must not stop sourcing
+                self._update(project_id, notice=f"Visual check unavailable: {str(error)[:160]}")
+        used: dict[str, list[float]] = {}
+        for asset in self.db.list_assets(project_id):
+            if asset.get("provider") == "youtube":
+                start_time = float((asset.get("metadata") or {}).get("source_start_seconds") or 0)
+                used.setdefault(str(asset.get("provider_asset_id") or ""), []).append(start_time)
+        infos: dict[str, dict[str, Any]] = {}
         completed = failed = 0
         errors: list[dict[str, Any]] = []
+        review: list[int] = []
         try:
             for scene in scenes:
                 position = int(scene.get("position") or 0)
                 self._update(project_id, current_scene=position)
-                queries = list(dict.fromkeys(ai_queries.get(position, []) + scene_search_queries(scene)))
-                query = queries[0]
+                scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
+                own = topic_queries(scene, topic) if topic else scene_search_queries(scene)
+                queries = list(dict.fromkeys(
+                    [query if not topic or mentions_topic(query, topic) else f"{topic} {query}" for query in ai_queries.get(position, [])]
+                    + own
+                ))
+                query = queries[0] if queries else topic
                 try:
                     pool: dict[str, dict[str, Any]] = {}
                     for attempt in queries[:max_attempts]:
                         for item in service.search(attempt, maximum=10):
                             pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
-                        if any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in pool.values()):
+                        on_topic = [item for item in pool.values() if mentions_topic(f"{item.get('title')} {item.get('description')}", topic)]
+                        if len(on_topic) >= 4 and any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in on_topic):
                             break
                     ranked = sorted(
                         pool.values(),
-                        key=lambda item: (str(item.get("video_id")) not in used_ids, candidate_relevance(item, scene)),
+                        key=lambda item: (
+                            mentions_topic(f"{item.get('title')} {item.get('description')}", topic),
+                            str(item.get("video_id")) not in used,
+                            candidate_relevance(item, scene),
+                        ),
                         reverse=True,
                     )
+                    if topic:
+                        # Off-topic titles (buffalo calves for a musk ox film) are never used.
+                        ranked = [item for item in ranked if mentions_topic(f"{item.get('title')} {item.get('description')}", topic)]
                     if not ranked:
-                        raise ProviderError(f'No {empty_label} footage matched "{query}"')
+                        raise ProviderError(f'No {empty_label} footage about "{topic or query}" matched this scene')
                     duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+                    choices = self._choose(service, verifier, ranked[:5], scene_text, duration, used, infos)
+                    if not choices:
+                        raise ProviderError(
+                            f'No clip clearly showed "{topic or query}" for this sentence, so nothing was inserted. '
+                            "Pick a clip manually with Source from YouTube."
+                        )
                     last_error: Exception | None = None
-                    for candidate in ranked[:4]:
+                    for candidate, start_time, topic_score in choices[:3]:
                         video_id = str(candidate["video_id"])
-                        query = str(candidate.get("_query") or query)
                         destination = (
                             self.paths.project_dir(project_id) / "assets" / "youtube"
                             / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4"
@@ -265,35 +311,82 @@ class AutoYouTubeManager:
                             metadata = service.source_clip(
                                 video_id=video_id,
                                 query=" ".join(filter(None, [query, str(scene.get("narration") or "")])),
-                                duration=duration,
-                                destination=destination,
+                                duration=duration, destination=destination, source_start_seconds=start_time,
+                                info=infos.get(video_id),
                             )
-                            metadata.update({
-                                "auto_sourced": True,
-                                "search_query": query,
-                                "relevance_score": round(candidate_relevance(candidate, scene), 3),
-                            })
-                            asset = self.db.add_asset(
-                                project_id=project_id, scene_id=str(scene["id"]),
-                                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
-                                media_kind="video", provider="youtube", model=model,
-                                local_path=str(destination), remote_url=metadata["source_url"],
-                                provider_asset_id=video_id, cost=0.0, metadata=metadata,
-                            )
-                            self.db.select_asset(str(scene["id"]), str(asset["id"]))
-                            used_ids.add(video_id)
-                            completed += 1
                             break
                         except Exception as error:
                             destination.unlink(missing_ok=True)
                             last_error = error
                     else:
                         raise ProviderError(str(last_error or "No downloadable result was found"))
+                    metadata.update({
+                        "auto_sourced": True,
+                        "search_query": str(candidate.get("_query") or query),
+                        "topic": topic,
+                        "relevance_score": round(candidate_relevance(candidate, scene), 3),
+                        "visual_match": None if topic_score is None else round(topic_score, 3),
+                        "needs_review": topic_score is not None and topic_score < REVIEW_BELOW,
+                    })
+                    asset = self.db.add_asset(
+                        project_id=project_id, scene_id=str(scene["id"]),
+                        candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                        media_kind="video", provider="youtube", model=model,
+                        local_path=str(destination), remote_url=metadata["source_url"],
+                        provider_asset_id=video_id, cost=0.0, metadata=metadata,
+                    )
+                    self.db.select_asset(str(scene["id"]), str(asset["id"]))
+                    used.setdefault(video_id, []).append(float(metadata.get("source_start_seconds") or 0))
+                    completed += 1
+                    if metadata["needs_review"]:
+                        review.append(position)
                 except Exception as error:
                     failed += 1
                     errors.append({"scene": position, "error": str(error)[:500], "query": query})
-                self._update(project_id, completed=completed, failed=failed, errors=list(errors))
+                self._update(project_id, completed=completed, failed=failed, errors=list(errors), review=list(review))
         finally:
             self._update(project_id, running=False, current_scene=None, completed=completed, failed=failed, errors=errors)
             with self._lock:
                 self._threads.pop(project_id, None)
+
+    @staticmethod
+    def _choose(
+        service: YouTubeSourceService, verifier: FootageVerifier | None, candidates: list[dict[str, Any]],
+        scene_text: str, duration: float, used: dict[str, list[float]], infos: dict[str, dict[str, Any]],
+    ) -> list[tuple[dict[str, Any], float | None, float | None]]:
+        """Candidates whose best moment passed the visual check, best first."""
+        if verifier is None:
+            fresh = [item for item in candidates if str(item["video_id"]) not in used]
+            return [(item, None, None) for item in fresh + [item for item in candidates if item not in fresh]]
+
+        def prepare(video_id: str) -> tuple[str, dict[str, Any] | None, list[tuple[float, Any]]]:
+            try:
+                info = infos.get(video_id) or service.inspect(video_id)
+            except ProviderError:
+                return video_id, None, []
+            return video_id, info, [] if verifier.has_frames(video_id) else storyboard_frames(info)
+
+        # Network work (metadata + storyboard sprites) runs in parallel; the
+        # CLIP model then scores the frames one video at a time.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            prepared = list(pool.map(prepare, [str(item["video_id"]) for item in candidates]))
+        for video_id, info, tiles in prepared:
+            if info is not None:
+                infos[video_id] = info
+                if tiles:
+                    verifier.add_frames(video_id, tiles)
+        passing: list[tuple[float, dict[str, Any], float, float]] = []
+        for candidate in candidates:
+            video_id = str(candidate["video_id"])
+            info = infos.get(video_id)
+            if info is None:
+                continue
+            moment = verifier.best_moment(video_id, info, scene_text, duration, avoid=used.get(video_id))
+            if moment is None:
+                continue
+            start_time, topic_score, score = moment
+            if video_id in used:
+                score -= 0.05  # prefer a fresh source when quality is similar
+            passing.append((score, candidate, start_time, topic_score))
+        passing.sort(key=lambda item: item[0], reverse=True)
+        return [(candidate, start_time, topic_score) for _score, candidate, start_time, topic_score in passing]

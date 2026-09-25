@@ -53,6 +53,18 @@ The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
 
+Version 0.7.2 also makes **Auto-source videos** topic-aware. A **Footage topic** field
+(detected from the script, editable, may be left empty for list-style videos) is
+added to every search; results whose title and description do not mention the topic
+are discarded, so "musk ox" never returns buffalo calves. Each candidate is then
+checked frame by frame on this computer with OpenCLIP using YouTube's storyboard
+thumbnails, against automatic lookalikes (bison, water buffalo...) and junk such as
+talking heads, title cards, cartoons, and explosions. The best-matching window of
+the best video is used; nothing is inserted when no clip passes, and clips that
+pass with low confidence are flagged "Check". Timeline clips now reorder with a
+pointer drag (with a drop marker) instead of browser drag-and-drop, and narrow clips
+get thinner trim handles so a drag no longer starts a trim by accident.
+
 Version 0.7.2 also adds **Whisper Sync**, now the default visual-planning mode. It
 listens to the uploaded voice-over with Faster-Whisper on this computer (free, no
 API key, no quota), matches every script sentence to its spoken time, and cuts

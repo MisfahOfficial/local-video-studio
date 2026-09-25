@@ -204,6 +204,7 @@ async function openProject(projectId, keepTab = false) {
   if (!keepTab) activateTab(state.scenes.length ? "scenes" : "script");
   await refreshGenerationStatus();
   await refreshYouTubeAutoStatus();
+  fillFootageTopic().catch(() => {});
   await refreshRenderStatus();
 }
 
@@ -464,8 +465,9 @@ async function refreshYouTubeAutoStatus() {
   const finished = Number(result.completed || 0) + Number(result.failed || 0);
   panel.hidden = !(result.running || result.total || result.failed);
   panel.textContent = result.running
-    ? `Finding topic-matched footage · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
+    ? `Finding and visually checking footage${result.topic ? ` of ${result.topic}` : ""} · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
     : `YouTube sourcing finished · ${result.completed || 0} added · ${result.failed || 0} need review`;
+  if (result.review?.length) panel.textContent += ` · Please check scene${result.review.length === 1 ? "" : "s"} ${result.review.join(", ")}`;
   if (result.notice) panel.textContent += ` · ${result.notice}`;
   $("#autoSourceYouTubeButton").disabled = Boolean(result.running);
   if (result.running && !state.youtubeAutoTimer) {
@@ -499,6 +501,21 @@ function youtubeSourceLabel() {
   return youtubeFairUse() ? "YouTube" : "Creative Commons";
 }
 
+function topicStorageKey() {
+  return `footageTopic:${state.current?.id || ""}`;
+}
+
+async function fillFootageTopic() {
+  const input = $("#footageTopicInput");
+  if (!state.current || !input) return;
+  let saved = null;
+  try { saved = localStorage.getItem(topicStorageKey()); } catch { saved = null; }
+  if (saved !== null) { input.value = saved; return; }
+  const projectId = state.current.id;
+  const result = await api(`/api/projects/${projectId}/footage-topic`);
+  if (state.current?.id === projectId) input.value = result.topic || "";
+}
+
 async function autoSourceYouTube() {
   if (!state.current) return;
   if (youtubeKeyMissing()) {
@@ -510,11 +527,12 @@ async function autoSourceYouTube() {
   button.disabled = true;
   try {
     const result = await api(`/api/projects/${state.current.id}/youtube-auto-source`, {
-      method: "POST", body: JSON.stringify({ scene_ids: null, force: false }),
+      method: "POST", body: JSON.stringify({ scene_ids: null, force: false, topic: $("#footageTopicInput").value.trim() }),
     });
     if (!result.total) { toast("Every scene already has a sourced YouTube video"); button.disabled = false; return; }
     $("#youtubeAutoStatus").hidden = false;
-    $("#youtubeAutoStatus").textContent = `Finding topic-matched footage · 0/${result.total}`;
+    try { localStorage.setItem(topicStorageKey(), $("#footageTopicInput").value.trim()); } catch { /* optional */ }
+    $("#youtubeAutoStatus").textContent = `Finding and visually checking footage${result.topic ? ` of ${result.topic}` : ""} · 0/${result.total}`;
     clearInterval(state.youtubeAutoTimer);
     state.youtubeAutoTimer = setInterval(() => refreshYouTubeAutoStatus().catch(error => toast(error.message, true)), 2200);
     await refreshYouTubeAutoStatus();
@@ -983,7 +1001,7 @@ function renderMediaBin() {
       ? `<video src="${escapeHtml(asset.media_url)}" muted preload="metadata"></video>`
       : `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">`;
     const sourceLabel = asset.provider === "youtube"
-      ? `YouTube · ${asset.metadata?.channel || "source"}`
+      ? `${asset.metadata?.needs_review ? "⚠ Check · " : ""}YouTube · ${asset.metadata?.channel || "source"}`
       : `${asset.provider} · option ${Number(asset.candidate_index) + 1}`;
     const sourceTitle = asset.metadata?.title || sourceLabel;
     return `<button class="media-bin-card ${asset.id === scene?.selected_asset_id ? "active" : ""}" type="button" data-asset-id="${asset.id}" data-scene-id="${scene.id}" title="${escapeHtml(sourceTitle)}">${visual}<span>${escapeHtml(sourceLabel)}</span></button>`;
@@ -1098,7 +1116,7 @@ function renderTimeline() {
     const media = asset?.media_kind === "video"
       ? `<div class="timeline-clip-placeholder">VIDEO</div>`
       : asset ? `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">` : `<div class="timeline-clip-placeholder">No media</div>`;
-    return `<div class="timeline-clip ${clip.id === state.activeTimelineClipId ? "active" : ""}" style="left:${left}px;width:${width}px" draggable="${state.editTool === "select"}" tabindex="0" role="button" data-clip-id="${clip.id}" data-scene-id="${scene?.id || ""}">
+    return `<div class="timeline-clip ${clip.id === state.activeTimelineClipId ? "active" : ""} ${width < 44 ? "narrow" : ""}" style="left:${left}px;width:${width}px" draggable="false" tabindex="0" role="button" data-clip-id="${clip.id}" data-scene-id="${scene?.id || ""}">
       <button class="trim-handle trim-left" type="button" data-trim-edge="left" aria-label="Trim clip start"></button>
       <div class="timeline-clip-media">${media}<span class="timeline-clip-number">${clip.position}</span></div>
       <strong class="timeline-clip-title">${escapeHtml(scene?.caption_text || scene?.narration || "Clip")}</strong>
@@ -1545,7 +1563,13 @@ function retimeLocalTimeline() {
 function beginClipTrim(event) {
   const handle = event.target.closest("[data-trim-edge]");
   const element = event.target.closest(".timeline-clip");
-  if (!handle || !element || state.editTool !== "select") return;
+  if (!element || state.editTool !== "select" || event.button !== 0) return;
+  if (!handle) {
+    // Body press: becomes a reorder drag once the pointer moves a few pixels,
+    // otherwise the normal click selects the clip.
+    state.moveSession = { clipId: element.dataset.clipId, startX: event.clientX, startY: event.clientY, active: false };
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   pausePreview();
@@ -1564,7 +1588,51 @@ function beginClipTrim(event) {
   document.body.classList.add("is-trimming");
 }
 
+function clearDropMarkers() {
+  $$("#timelineList .drop-before, #timelineList .drop-after").forEach(item => item.classList.remove("drop-before", "drop-after"));
+}
+
+function dropTarget(event) {
+  const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.("#timelineList .timeline-clip");
+  if (!target || target.dataset.clipId === state.moveSession?.clipId) return null;
+  const bounds = target.getBoundingClientRect();
+  return { target, after: event.clientX > bounds.left + bounds.width / 2 };
+}
+
+function moveClipDrag(event) {
+  const session = state.moveSession;
+  if (!session) return false;
+  if (!session.active) {
+    if (Math.hypot(event.clientX - session.startX, event.clientY - session.startY) < 5) return true;
+    session.active = true;
+    pausePreview();
+    document.body.classList.add("is-moving-clip");
+    $(`#timelineList [data-clip-id="${session.clipId}"]`)?.classList.add("dragging");
+  }
+  event.preventDefault();
+  clearDropMarkers();
+  const drop = dropTarget(event);
+  if (drop) drop.target.classList.add(drop.after ? "drop-after" : "drop-before");
+  return true;
+}
+
+async function endClipDrag(event) {
+  const session = state.moveSession;
+  if (!session) return false;
+  state.moveSession = null;
+  document.body.classList.remove("is-moving-clip");
+  $$("#timelineList .dragging").forEach(item => item.classList.remove("dragging"));
+  const drop = session.active && event ? dropTarget(event) : null;
+  clearDropMarkers();
+  if (!session.active) return true;
+  state.suppressClipClick = true;
+  setTimeout(() => { state.suppressClipClick = false; }, 0);
+  if (drop) await reorderTimeline(session.clipId, drop.target.dataset.clipId, drop.after);
+  return true;
+}
+
 function moveClipTrim(event) {
+  if (moveClipDrag(event)) return;
   const session = state.trimSession;
   if (!session) return;
   const clip = state.timelineClips.find(item => item.id === session.clipId);
@@ -1774,6 +1842,7 @@ $("#sceneList").addEventListener("change", event => {
   updateSelectionCount();
 });
 $("#timelineList").addEventListener("click", event => {
+  if (state.suppressClipClick) return;
   const clip = event.target.closest(".timeline-clip");
   if (!clip || event.target.closest("[data-trim-edge]")) return;
   if (state.editTool === "razor") {
@@ -1788,8 +1857,17 @@ $("#timelineList").addEventListener("click", event => {
 });
 $("#timelineList").addEventListener("pointerdown", beginClipTrim);
 window.addEventListener("pointermove", moveClipTrim);
-window.addEventListener("pointerup", () => endClipTrim().catch(error => toast(error.message, true)));
-window.addEventListener("pointercancel", () => endClipTrim().catch(error => toast(error.message, true)));
+window.addEventListener("pointerup", event => {
+  if (state.moveSession) endClipDrag(event).catch(error => toast(error.message, true));
+  else endClipTrim().catch(error => toast(error.message, true));
+});
+window.addEventListener("pointercancel", () => {
+  if (state.moveSession) endClipDrag(null).catch(error => toast(error.message, true));
+  else endClipTrim().catch(error => toast(error.message, true));
+});
+window.addEventListener("keydown", event => {
+  if (event.key === "Escape" && state.moveSession) endClipDrag(null).catch(() => {});
+});
 $("#previewCaption").addEventListener("pointerdown", beginCaptionDrag);
 window.addEventListener("pointermove", moveCaptionDrag);
 window.addEventListener("pointerup", event => endCaptionDrag(event).catch(error => toast(error.message, true)));
@@ -1809,29 +1887,6 @@ $("#mediaBin").addEventListener("click", event => {
 $("#timelineList").addEventListener("keydown", event => {
   const clip = event.target.closest(".timeline-clip");
   if (clip && event.key === "Enter") { event.preventDefault(); selectTimelineClip(clip.dataset.clipId); }
-});
-$("#timelineList").addEventListener("dragstart", event => {
-  const clip = event.target.closest(".timeline-clip");
-  if (!clip || state.editTool !== "select") { event.preventDefault(); return; }
-  state.draggedClipId = clip.dataset.clipId;
-  clip.classList.add("dragging");
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", state.draggedClipId);
-});
-$("#timelineList").addEventListener("dragend", event => {
-  event.target.closest(".timeline-clip")?.classList.remove("dragging");
-  state.draggedClipId = null;
-});
-$("#timelineList").addEventListener("dragover", event => {
-  if (event.target.closest(".timeline-clip")) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }
-});
-$("#timelineList").addEventListener("drop", event => {
-  const target = event.target.closest(".timeline-clip");
-  if (!target) return;
-  event.preventDefault();
-  const sourceId = state.draggedClipId || event.dataTransfer.getData("text/plain");
-  const insertAfter = event.clientX > target.getBoundingClientRect().left + target.getBoundingClientRect().width / 2;
-  reorderTimeline(sourceId, target.dataset.clipId, insertAfter).catch(error => toast(error.message, true));
 });
 $("#timelineZoom").addEventListener("input", renderTimeline);
 $("#timelineSelectTool").addEventListener("click", () => {
