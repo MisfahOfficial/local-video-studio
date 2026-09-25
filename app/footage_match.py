@@ -359,12 +359,24 @@ class FootageVerifier:
         self.scorer = scorer or ClipScorer()
         self._frames: dict[str, tuple[list[float], Any]] = {}
         self._lookalikes: dict[str, tuple[str, ...]] = {}
+        self._grey: dict[str, Any] = {}
 
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames
 
     def add_frames(self, video_id: str, tiles: list[tuple[float, Any]]) -> None:
+        from .logo_guard import storyboard_stack
+
         self._frames[video_id] = ([time for time, _image in tiles], self.scorer.embed_images([image for _time, image in tiles]))
+        # Greyscale frames from across the whole video let logo detection see what never moves.
+        stack = storyboard_stack(tiles)
+        self._grey[video_id] = None if stack is None else stack.astype("uint8")
+        while len(self._grey) > 24:
+            self._grey.pop(next(iter(self._grey)))
+
+    def grey_frames(self, video_id: str) -> Any:
+        stack = self._grey.get(video_id)
+        return None if stack is None else stack.astype("float32")
 
     def _video_frames(self, video_id: str, info: dict[str, Any]) -> tuple[list[float], Any]:
         if video_id not in self._frames:

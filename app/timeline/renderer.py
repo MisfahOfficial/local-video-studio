@@ -14,6 +14,7 @@ from ..config import SettingsStore
 from ..database import Database
 from ..paths import AppPaths
 from ..transcription import probe_duration
+from ..logo_guard import crop_filter
 from .actions import MotionRegistry, build_default_motion_registry
 
 
@@ -271,6 +272,7 @@ class FFmpegRenderer:
             self._render_clip(
                 source, clip, str(asset["media_kind"]), duration, scene, width, height, fps, encoder,
                 source_in_seconds=float(timeline_clip.get("source_in_seconds", 0)),
+                crop=active_crop(asset),
             )
             clip_paths.append(clip)
             if progress:
@@ -339,8 +341,10 @@ class FFmpegRenderer:
 
     def _render_clip(self, source: Path, destination: Path, media_kind: str, duration: float,
                      scene: dict[str, Any], width: int, height: int, fps: int, encoder: str,
-                     source_in_seconds: float = 0) -> None:
+                     source_in_seconds: float = 0, crop: dict[str, Any] | None = None) -> None:
         motion = self.motion_registry.build(_motion_name(scene), width, height, fps, duration)
+        if crop:
+            motion = f"{crop_filter(crop)},{motion}"  # zoom past a burned-in logo first
         if media_kind == "video":
             motion = video_safe_motion(motion, fps)
         fade = _fade_duration(scene)
@@ -383,6 +387,13 @@ class FFmpegRenderer:
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {result.stderr[-1500:]}")
+
+
+def active_crop(asset: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = asset.get("metadata") or {}
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata or "{}")
+    return None if metadata.get("crop_disabled") else metadata.get("safe_crop")
 
 
 def video_safe_motion(motion: str, fps: int) -> str:

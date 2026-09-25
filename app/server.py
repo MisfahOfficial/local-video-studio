@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 import mimetypes
 import re
 import shutil
@@ -29,6 +30,8 @@ from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
 from .youtube_source import FAIR_USE, YouTubeSourceService, normalize_license_mode
 from .chapter_cards import build_chapter_cards
+from .footage_match import storyboard_frames
+from .logo_guard import analyse_clip, storyboard_stack
 from .key_captions import KEY_POINT_STYLE, key_captions
 from .footage_match import auto_topic, core_subject, detect_era, scene_subjects, topic_queries
 from .youtube_auto import AutoYouTubeManager
@@ -325,6 +328,40 @@ class StudioApplication:
         chosen = Path(result.stdout.strip()).expanduser().resolve()
         chosen.mkdir(parents=True, exist_ok=True)
         return chosen
+
+    def logo_metadata(self, service: YouTubeSourceService, video_id: str, clip: Path) -> dict[str, Any]:
+        """Logo boxes and hiding crop for one clip, using its whole source video's storyboard."""
+        try:
+            frames = storyboard_stack(storyboard_frames(service.inspect(video_id)))
+        except ProviderError:
+            frames = None
+        try:
+            return analyse_clip(clip, service.ffmpeg_path, frames)
+        except Exception:
+            return {"logo_boxes": [], "safe_crop": None, "logo_hidden": True}
+
+    def hide_logos(self, project_id: str) -> dict[str, Any]:
+        settings = self.settings.load()
+        service = YouTubeSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode)
+        selected = {str(scene.get("selected_asset_id") or "") for scene in self.db.list_scenes(project_id)}
+        clips = [
+            asset for asset in self.db.list_assets(project_id)
+            if asset["id"] in selected and asset.get("provider") == "youtube" and Path(str(asset["local_path"])).is_file()
+        ]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(
+                lambda asset: self.logo_metadata(service, str(asset["provider_asset_id"]), Path(str(asset["local_path"]))),
+                clips,
+            ))
+        hidden = review = 0
+        for asset, logo in zip(clips, results):
+            metadata = self.db.update_asset_metadata(str(asset["id"]), {**logo, "crop_disabled": False})
+            hidden += bool(logo["safe_crop"])
+            if not logo["logo_hidden"]:
+                review += 1
+                self.db.update_asset_metadata(str(asset["id"]), {"needs_review": True})
+            del metadata
+        return {"checked": len(clips), "zoomed": hidden, "needs_review": review}
 
     def plan_project(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
         project = self.db.get_project(project_id)
@@ -649,6 +686,22 @@ def build_handler(application: StudioApplication):
                 application.db.update_project(project_id, caption_style=style)
                 self._json({"caption_style": style})
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/hide-logos", path)
+            if match:
+                if not application.db.get_project(match.group(1)):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                self._json(application.hide_logos(match.group(1)))
+                return
+            match = re.fullmatch(r"/api/assets/([a-zA-Z0-9_-]+)/logo-crop", path)
+            if match:
+                try:
+                    metadata = application.db.update_asset_metadata(
+                        match.group(1), {"crop_disabled": not bool(self._read_json().get("enabled", True))},
+                    )
+                except KeyError as error:
+                    raise ApiError("Asset not found", HTTPStatus.NOT_FOUND) from error
+                self._json({"metadata": metadata})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/chapter-cards", path)
             if match:
                 project_id = match.group(1)
@@ -948,6 +1001,7 @@ def build_handler(application: StudioApplication):
                 except ProviderError as error:
                     destination.unlink(missing_ok=True)
                     raise ApiError(str(error)) from error
+                metadata.update(application.logo_metadata(service, video_id, destination))
                 asset = application.db.add_asset(
                     project_id=str(scene["project_id"]), scene_id=str(scene["id"]),
                     candidate_index=application.db.next_asset_candidate_index(str(scene["id"])),

@@ -453,3 +453,5 @@ body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-s
 .caption-mode-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
 .caption-mode-row span { margin-right: auto; }
 .caption-off { opacity: .35; }
+
+.logo-note { color: var(--muted); }

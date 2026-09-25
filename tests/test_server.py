@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.database import Database
+from app.providers.base import ProviderError
 from app.paths import AppPaths
 from app.server import ApiError, create_server, normalize_render_options
 
@@ -154,7 +155,8 @@ class ServerTests(unittest.TestCase):
                         "source_start_seconds": 12.0, "source_end_seconds": 19.5, "matched_from_captions": True,
                     }
 
-                with patch("app.server.YouTubeSourceService.source_clip", side_effect=fake_source_clip):
+                with patch("app.server.YouTubeSourceService.source_clip", side_effect=fake_source_clip), \
+                        patch("app.server.YouTubeSourceService.inspect", side_effect=ProviderError("offline test")):
                     youtube_asset = self._request(
                         f"{base}/api/scenes/{first_scene['id']}/youtube-source", method="POST",
                         payload={"video_id": "abcdefghijk"},

@@ -931,7 +931,7 @@ function applyPreviewMotion(scene, progress, clip = null) {
   if (preset === "slow_pull") transform = `scale(${1.08 - 0.08 * progress})`;
   if (preset === "pan_left") transform = `scale(1.08) translateX(${4 - 8 * progress}%)`;
   if (preset === "pan_right") transform = `scale(1.08) translateX(${-4 + 8 * progress}%)`;
-  media.style.transform = transform;
+  media.style.transform = transform + cropTransform(scene);
   const transition = actionFor(scene, "transition", { preset: "fade", duration: 0.32 });
   const duration = Math.max(0.1, Number(clip?.end_seconds ?? scene.end_seconds) - Number(clip?.start_seconds ?? scene.start_seconds));
   const elapsed = Math.max(0, state.previewTime - Number(clip?.start_seconds ?? scene.start_seconds));
@@ -1008,8 +1008,26 @@ function renderMediaBin() {
   }).join("") || `<p class="library-help">No media for this scene yet. Use Import or generate an image from Visual plan.</p>`;
   const selected = assets.find(asset => asset.id === scene?.selected_asset_id);
   $("#libraryHelp").innerHTML = selected?.provider === "youtube"
-    ? `Source: <a href="${escapeHtml(selected.remote_url)}" target="_blank" rel="noopener">${escapeHtml(selected.metadata?.title || "YouTube video")}</a><br>${escapeHtml(selected.metadata?.channel || "Unknown channel")} · ${escapeHtml(selected.metadata?.license || "Creative Commons")} · ${clock(selected.metadata?.source_start_seconds || 0)}`
+    ? `Source: <a href="${escapeHtml(selected.remote_url)}" target="_blank" rel="noopener">${escapeHtml(selected.metadata?.title || "YouTube video")}</a><br>${escapeHtml(selected.metadata?.channel || "Unknown channel")} · ${escapeHtml(selected.metadata?.license || "Creative Commons")} · ${clock(selected.metadata?.source_start_seconds || 0)}${logoControl(selected)}`
     : `Select a scene, then import media or search ${youtubeSourceLabel()} clips. Every source remains attached to its scene.`;
+}
+
+function logoControl(asset) {
+  const crop = asset.metadata?.safe_crop;
+  if (!crop && asset.metadata?.logo_hidden !== false) return "";
+  if (!crop) return `<br><span class="logo-note">⚠ A logo could not be hidden by zooming. Consider another clip.</span>`;
+  const zoom = (1 / Number(crop.w)).toFixed(2);
+  const off = Boolean(asset.metadata?.crop_disabled);
+  return `<br><span class="logo-note">${off ? "Logo zoom off" : `Logo hidden · ${zoom}× zoom`}</span> <button class="mini-button" type="button" data-logo-toggle="${asset.id}" data-enabled="${off}">${off ? "Hide logo" : "Undo zoom"}</button>`;
+}
+
+function cropTransform(scene) {
+  const asset = selectedAssetForScene(scene);
+  const crop = asset?.metadata?.crop_disabled ? null : asset?.metadata?.safe_crop;
+  if (!crop) return "";
+  const cx = Number(crop.x) + Number(crop.w) / 2;
+  const cy = Number(crop.y) + Number(crop.h) / 2;
+  return ` scale(${(1 / Number(crop.w)).toFixed(4)}) translate(${((0.5 - cx) * 100).toFixed(2)}%, ${((0.5 - cy) * 100).toFixed(2)}%)`;
 }
 
 function activeYouTubeScene() {
@@ -1829,6 +1847,26 @@ $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; rend
 $("#scenePageSelect").addEventListener("change", event => { state.scenePage = Number(event.target.value); renderScenes(); });
 $("#generateAllButton").addEventListener("click", () => generateScenes());
 $("#autoSourceYouTubeButton").addEventListener("click", () => autoSourceYouTube());
+$("#hideLogosButton").addEventListener("click", async event => {
+  if (!state.current) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Checking clips…";
+  try {
+    const result = await api(`/api/projects/${state.current.id}/hide-logos`, { method: "POST", body: "{}" });
+    await openProject(state.current.id, true);
+    toast(`${result.checked} clips checked · ${result.zoomed} zoomed to hide logos${result.needs_review ? ` · ${result.needs_review} still show a logo` : ""}`);
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "Hide logos"; }
+});
+$("#libraryHelp").addEventListener("click", async event => {
+  const button = event.target.closest("[data-logo-toggle]");
+  if (!button) return;
+  const enabled = button.dataset.enabled === "true";
+  await api(`/api/assets/${button.dataset.logoToggle}/logo-crop`, { method: "POST", body: JSON.stringify({ enabled }) });
+  await openProject(state.current.id, true);
+  toast(enabled ? "Logo zoom applied" : "Logo zoom removed for this clip");
+});
 $("#chapterCardsButton").addEventListener("click", async event => {
   if (!state.current) return;
   const button = event.currentTarget;

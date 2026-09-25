@@ -774,6 +774,15 @@ class Database:
             ).fetchone()
         return int(row[0]) if row else 0
 
+    def update_asset_metadata(self, asset_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        with self.connection() as db:
+            row = db.execute("SELECT metadata FROM assets WHERE id = ?", (asset_id,)).fetchone()
+            if not row:
+                raise KeyError("Asset not found")
+            metadata = {**json.loads(row[0] or "{}"), **changes}
+            db.execute("UPDATE assets SET metadata = ? WHERE id = ?", (json.dumps(metadata), asset_id))
+        return metadata
+
     def add_asset(self, *, project_id: str, scene_id: str, candidate_index: int, media_kind: str,
                   provider: str, model: str, local_path: str, remote_url: str | None,
                   provider_asset_id: str | None, cost: float, metadata: dict[str, Any]) -> dict[str, Any]:

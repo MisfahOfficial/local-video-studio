@@ -14,6 +14,7 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
+from .logo_guard import analyse_clip
 from .footage_match import (
     NON_FOOTAGE_TITLE, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
     scene_subjects, storyboard_frames, topic_queries,
@@ -341,6 +342,12 @@ class AutoYouTubeManager:
                         "visual_match": None if topic_score is None else round(topic_score, 3),
                         "needs_review": topic_score is not None and topic_score < REVIEW_BELOW,
                     })
+                    try:
+                        logo = analyse_clip(destination, service.ffmpeg_path, verifier.grey_frames(video_id) if verifier else None)
+                    except Exception:  # logo hiding is best effort
+                        logo = {"logo_boxes": [], "safe_crop": None, "logo_hidden": True}
+                    metadata.update(logo)
+                    metadata["needs_review"] = metadata["needs_review"] or not logo["logo_hidden"]
                     asset = self.db.add_asset(
                         project_id=project_id, scene_id=str(scene["id"]),
                         candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
