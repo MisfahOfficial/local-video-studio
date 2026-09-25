@@ -27,6 +27,7 @@ from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
 from .youtube_source import YouTubeSourceService
+from .youtube_auto import AutoYouTubeManager
 
 
 DEFAULT_CAPTION_STYLE = {
@@ -206,6 +207,7 @@ class StudioApplication:
         self.fonts = FontManager(paths.root)
         self.generation = GenerationManager(self.db, paths, self.settings)
         self.rendering = RenderManager(self.db, paths, self.settings)
+        self.youtube_auto = AutoYouTubeManager(self.db, paths, self.settings)
         self.planner = RuleBasedScenePlanner()
 
     def project_payload(self, project_id: str) -> dict[str, Any]:
@@ -502,6 +504,12 @@ def build_handler(application: StudioApplication):
                     "running": application.generation.is_running(project_id),
                 })
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-status", path)
+            if match:
+                if not application.db.get_project(match.group(1)):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                self._json(application.youtube_auto.status(match.group(1)))
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/render-status", path)
             if match:
                 self._json({"render": application.render_payload(match.group(1))})
@@ -607,6 +615,18 @@ def build_handler(application: StudioApplication):
                 queued = application.db.queue_generation(project_id, scene_ids, bool(body.get("force", False)))
                 application.generation.start(project_id)
                 self._json({"queued": queued})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-source", path)
+            if match:
+                project_id = match.group(1)
+                if not application.db.get_project(project_id):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                body = self._read_json()
+                if not application.settings.load().youtube_api_key:
+                    raise ApiError("Add a YouTube Data API key in Settings first")
+                scene_ids = self._scene_ids(body.get("scene_ids"))
+                status = application.youtube_auto.start(project_id, scene_ids, bool(body.get("force", False)))
+                self._json(status, HTTPStatus.ACCEPTED)
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/retry-failed", path)
             if match:

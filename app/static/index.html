@@ -87,11 +87,13 @@
               <button class="button ghost" id="pauseGenerationButton" type="button">Pause</button>
               <button class="button ghost" id="resumeGenerationButton" type="button">Resume</button>
               <button class="button ghost" id="retryFailedButton" type="button" hidden>Retry failed</button>
+              <button class="button youtube-source" id="autoSourceYouTubeButton" type="button">▶ Auto-source videos</button>
               <button class="button primary" id="generateAllButton" type="button">Generate missing images</button>
             </div>
           </div>
           <div class="warning-panel" id="planWarnings" hidden></div>
           <div class="queue-status" id="generationStatus">No generation jobs yet.</div>
+          <div class="queue-status youtube-auto-status" id="youtubeAutoStatus" hidden></div>
           <details class="failure-panel" id="failurePanel" hidden>
             <summary>Generation errors</summary>
             <div id="failureList"></div>

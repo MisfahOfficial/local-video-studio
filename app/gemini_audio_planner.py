@@ -960,6 +960,7 @@ class GeminiAudioScenePlanner:
             "that can pop into the existing visual rhythm; do not turn it into an unrelated new topic.\n\n"
             "VISUAL RULES\n"
             "- visual_subject must describe the literal, specific subject/action/object the viewer should see in 10-35 words.\n"
+            "- Write visual_subject in clear English even when the narration is in another language, so footage search remains accurate.\n"
             "- Reuse at least one concrete noun or named phrase from narration in visual_subject, then add composition details.\n"
             "- Include named foods, people, place, era and action when the narration supplies them. Avoid generic filler.\n"
             "- Do not invent brands, facts, ingredients, locations or historical details absent from the script.\n"

@@ -96,6 +96,7 @@ class YouTubeSourceService:
             results.append({
                 "video_id": video_id,
                 "title": html.unescape(str(snippet.get("title") or "Untitled video")),
+                "description": html.unescape(str(snippet.get("description") or "")),
                 "channel": html.unescape(str(snippet.get("channelTitle") or "Unknown channel")),
                 "published_at": str(snippet.get("publishedAt") or ""),
                 "thumbnail_url": str(thumbnail),

@@ -33,9 +33,14 @@ class EditorUiTests(unittest.TestCase):
         self.assertIn('$("#audioMuteButton").addEventListener("click", toggleAudioMute)', self.javascript)
 
     def test_youtube_source_controls_are_present_and_wired(self) -> None:
-        for control_id in ("youtubeSourceButton", "youtubeDialog", "youtubeQuery", "youtubeResults", "youtubeKey"):
+        for control_id in (
+            "youtubeSourceButton", "autoSourceYouTubeButton", "youtubeAutoStatus",
+            "youtubeDialog", "youtubeQuery", "youtubeResults", "youtubeKey",
+        ):
             self.assertIn(f'id="{control_id}"', self.html)
         self.assertIn('$("#youtubeSourceButton").addEventListener("click", openYouTubeDialog)', self.javascript)
+        self.assertIn('$("#autoSourceYouTubeButton").addEventListener("click", () => autoSourceYouTube())', self.javascript)
+        self.assertIn("/youtube-auto-source", self.javascript)
         self.assertIn("/youtube-source", self.javascript)
 
 

@@ -1,6 +1,7 @@
 const state = {
   themes: [], motions: [], settings: {}, projects: [], current: null,
   scenes: [], timelineClips: [], assets: [], scenePage: 1, pageSize: 40, generationTimer: null, renderTimer: null,
+  youtubeAutoTimer: null,
   planningTimer: null, planningStartedAt: 0, previewClockFrame: null,
   selectedSceneIds: new Set(), planWarnings: [], activeTimelineSceneId: null, activeTimelineClipId: null,
   previewTime: 0, manualPreviewFrame: null, manualPreviewStartedAt: 0, draggedClipId: null,
@@ -109,7 +110,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.7.0"}`;
+    $("#appVersion").textContent = `v${health.version || "0.7.1"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -197,6 +198,7 @@ async function openProject(projectId, keepTab = false) {
   renderTimeline();
   if (!keepTab) activateTab(state.scenes.length ? "scenes" : "script");
   await refreshGenerationStatus();
+  await refreshYouTubeAutoStatus();
   await refreshRenderStatus();
 }
 
@@ -446,6 +448,58 @@ function startGenerationPolling() {
   clearInterval(state.generationTimer);
   refreshGenerationStatus();
   state.generationTimer = setInterval(() => refreshGenerationStatus().catch(error => toast(error.message, true)), 2200);
+}
+
+async function refreshYouTubeAutoStatus() {
+  if (!state.current) return;
+  const projectId = state.current.id;
+  const result = await api(`/api/projects/${projectId}/youtube-auto-status`);
+  const panel = $("#youtubeAutoStatus");
+  const finished = Number(result.completed || 0) + Number(result.failed || 0);
+  panel.hidden = !(result.running || result.total || result.failed);
+  panel.textContent = result.running
+    ? `Finding topic-matched footage · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
+    : `YouTube sourcing finished · ${result.completed || 0} added · ${result.failed || 0} need review`;
+  $("#autoSourceYouTubeButton").disabled = Boolean(result.running);
+  if (result.running && !state.youtubeAutoTimer) {
+    state.youtubeAutoTimer = setInterval(() => refreshYouTubeAutoStatus().catch(error => toast(error.message, true)), 2200);
+  }
+  if (!result.running) {
+    clearInterval(state.youtubeAutoTimer); state.youtubeAutoTimer = null;
+    if (result.total) {
+      const payload = await api(`/api/projects/${projectId}`);
+      if (state.current?.id !== projectId) return;
+      state.current = payload.project; state.scenes = payload.scenes;
+      state.timelineClips = payload.timeline_clips || state.timelineClips; state.assets = payload.assets;
+      renderScenes(); renderTimeline();
+      if (result.failed) {
+        const first = result.errors?.[0];
+        toast(`${result.failed} scene${result.failed === 1 ? "" : "s"} need manual review${first ? ` · Scene ${first.scene}: ${first.error}` : ""}`, true);
+      } else toast(`Added topic-matched videos to ${result.completed} scenes`);
+    }
+  }
+}
+
+async function autoSourceYouTube() {
+  if (!state.current) return;
+  if (!state.settings.youtube_api_key_set) {
+    toast("Add your YouTube Data API key in Settings first", true);
+    $("#settingsDialog").showModal();
+    return;
+  }
+  const button = $("#autoSourceYouTubeButton");
+  button.disabled = true;
+  try {
+    const result = await api(`/api/projects/${state.current.id}/youtube-auto-source`, {
+      method: "POST", body: JSON.stringify({ scene_ids: null, force: false }),
+    });
+    if (!result.total) { toast("Every scene already has a sourced YouTube video"); button.disabled = false; return; }
+    $("#youtubeAutoStatus").hidden = false;
+    $("#youtubeAutoStatus").textContent = `Finding topic-matched footage · 0/${result.total}`;
+    clearInterval(state.youtubeAutoTimer);
+    state.youtubeAutoTimer = setInterval(() => refreshYouTubeAutoStatus().catch(error => toast(error.message, true)), 2200);
+    await refreshYouTubeAutoStatus();
+  } catch (error) { button.disabled = false; toast(error.message, true); }
 }
 
 function selectedAssetForScene(scene) {
@@ -1663,6 +1717,7 @@ $("#createPlanButton").addEventListener("click", createPlan);
 $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; renderScenes(); });
 $("#scenePageSelect").addEventListener("change", event => { state.scenePage = Number(event.target.value); renderScenes(); });
 $("#generateAllButton").addEventListener("click", () => generateScenes());
+$("#autoSourceYouTubeButton").addEventListener("click", () => autoSourceYouTube());
 $("#retryFailedButton").addEventListener("click", () => retryFailed().catch(error => toast(error.message, true)));
 $("#selectVisibleButton").addEventListener("click", () => { visibleScenes().forEach(scene => state.selectedSceneIds.add(scene.id)); renderScenes(); });
 $("#clearSelectionButton").addEventListener("click", () => { state.selectedSceneIds.clear(); renderScenes(); });
