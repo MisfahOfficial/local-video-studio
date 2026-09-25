@@ -1,4 +1,4 @@
-# Local Video Studio v0.7.1
+# Local Video Studio v0.7.2
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -52,6 +52,20 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.7.2 adds a **YouTube footage source** setting. *Creative Commons only*
+stays the default. *All YouTube videos (fair use)* removes the licence filter, needs
+no YouTube API key, and continues with quota-free `yt-dlp` search when the Data API
+quota runs out. Fair-use use of each clip is your responsibility; the tool still
+records the video, channel, licence, and excerpt time. Auto-source now searches
+with short keyword queries, retries with a shorter query when results are weak,
+ranks talk, reaction, and music videos below real footage, and, when a Gemini key
+is set, asks Gemini for footage-style searches. If Gemini is unavailable (for example the
+free-tier daily quota is used up), the status line says so and keyword search is
+used. Excerpts are now downloaded without the source audio (the export only uses
+your voice-over), a bare `ffmpeg` setting is resolved through `PATH` so excerpt
+downloads work, and exported video clips now keep playing under zoom motion
+instead of freezing on their first frame.
 
 Version 0.7.1 adds **Auto-source videos** to the Visual Plan. It turns every
 scene's English visual direction into a concrete footage search, ranks Creative

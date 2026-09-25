@@ -13,6 +13,7 @@ class StudioSettings:
     together_api_key: str = ""
     gemini_api_key: str = ""
     youtube_api_key: str = ""
+    youtube_license_mode: str = "creative_commons"
     runware_default_model: str = "rundiffusion:110@101"
     runware_precise_model: str = "runware:400@2"
     runware_premium_model: str = "alibaba:qwen-image@3.0"

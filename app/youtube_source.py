@@ -4,6 +4,7 @@ import json
 import html
 import math
 import re
+import shutil
 import subprocess
 import sys
 import urllib.parse
@@ -17,6 +18,18 @@ from .providers.http import request_json, verified_ssl_context
 
 YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+CREATIVE_COMMONS = "creative_commons"
+FAIR_USE = "fair_use"
+
+
+def normalize_license_mode(value: Any) -> str:
+    """Unknown or missing values keep the original Creative Commons-only behaviour."""
+    return FAIR_USE if str(value or "").strip().lower() == FAIR_USE else CREATIVE_COMMONS
+
+
+def _is_quota_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return "quota" in text or "http 403" in text or "http 429" in text
 
 
 def _iso_duration(value: str) -> float:
@@ -59,23 +72,75 @@ def best_caption_timestamp(events: list[dict[str, Any]], query: str, duration: f
     return max(0.0, best_start - 0.8) if best_score > 0 else 0.0
 
 
+def ytdlp_search_result(entry: Any) -> dict[str, Any] | None:
+    """Convert one flat yt-dlp search entry to the API result shape; skip lives and invalid ids."""
+    if not isinstance(entry, dict):
+        return None
+    video_id = str(entry.get("id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        return None
+    if entry.get("live_status") in {"is_live", "is_upcoming"}:
+        return None
+    try:
+        duration = float(entry.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    thumbnails = [item for item in entry.get("thumbnails") or [] if isinstance(item, dict) and item.get("url")]
+    thumbnail = str(thumbnails[-1]["url"]) if thumbnails else f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    return {
+        "video_id": video_id,
+        "title": str(entry.get("title") or "Untitled video"),
+        "description": str(entry.get("description") or ""),
+        "channel": str(entry.get("channel") or entry.get("uploader") or "Unknown channel"),
+        "published_at": "",
+        "thumbnail_url": thumbnail,
+        "duration_seconds": duration,
+        "license": "youtube",
+        "watch_url": f"https://www.youtube.com/watch?v={video_id}",
+    }
+
+
 class YouTubeSourceService:
-    def __init__(self, api_key: str, ffmpeg_path: str = "ffmpeg"):
+    def __init__(self, api_key: str, ffmpeg_path: str = "ffmpeg", license_mode: str = CREATIVE_COMMONS):
         self.api_key = api_key.strip()
-        self.ffmpeg_path = ffmpeg_path
+        # yt-dlp treats --ffmpeg-location as a filesystem path, so a bare "ffmpeg"
+        # setting must be resolved through PATH or every excerpt download fails.
+        self.ffmpeg_path = shutil.which(ffmpeg_path) or ffmpeg_path
+        self.license_mode = normalize_license_mode(license_mode)
+        self._api_exhausted = False
+
+    @property
+    def fair_use(self) -> bool:
+        return self.license_mode == FAIR_USE
 
     def search(self, query: str, maximum: int = 8) -> list[dict[str, Any]]:
-        if not self.api_key:
-            raise ProviderError("Add a YouTube Data API key in Settings first")
         clean_query = " ".join(query.split())[:240]
         if not clean_query:
             raise ProviderError("Enter a YouTube search description")
-        params = urllib.parse.urlencode({
+        if not self.fair_use:
+            if not self.api_key:
+                raise ProviderError("Add a YouTube Data API key in Settings first")
+            return self._search_api(clean_query, maximum, creative_commons=True)
+        # Fair-use mode uses the API while quota lasts, then continues with
+        # yt-dlp search, which needs no key and has no daily search quota.
+        if self.api_key and not self._api_exhausted:
+            try:
+                return self._search_api(clean_query, maximum, creative_commons=False)
+            except ProviderError as error:
+                if not _is_quota_error(error):
+                    raise
+                self._api_exhausted = True
+        return self._search_ytdlp(clean_query, maximum)
+
+    def _search_api(self, clean_query: str, maximum: int, *, creative_commons: bool) -> list[dict[str, Any]]:
+        search_params = {
             "part": "snippet", "type": "video", "q": clean_query,
             "maxResults": max(1, min(12, maximum)), "safeSearch": "moderate",
-            "videoEmbeddable": "true", "videoLicense": "creativeCommon", "key": self.api_key,
-        })
-        found = request_json(f"{YOUTUBE_SEARCH_URL}?{params}", timeout=45)
+            "videoEmbeddable": "true", "key": self.api_key,
+        }
+        if creative_commons:
+            search_params["videoLicense"] = "creativeCommon"
+        found = request_json(f"{YOUTUBE_SEARCH_URL}?{urllib.parse.urlencode(search_params)}", timeout=45)
         assert isinstance(found, dict)
         ids = [str(item.get("id", {}).get("videoId", "")) for item in found.get("items", [])]
         ids = [item for item in ids if re.fullmatch(r"[A-Za-z0-9_-]{11}", item)]
@@ -101,10 +166,27 @@ class YouTubeSourceService:
                 "published_at": str(snippet.get("publishedAt") or ""),
                 "thumbnail_url": str(thumbnail),
                 "duration_seconds": _iso_duration(str(item.get("contentDetails", {}).get("duration") or "")),
-                "license": str(item.get("status", {}).get("license") or "creativeCommon"),
+                "license": str(item.get("status", {}).get("license") or ("creativeCommon" if creative_commons else "youtube")),
                 "watch_url": f"https://www.youtube.com/watch?v={video_id}",
             })
         return results
+
+    def _search_ytdlp(self, clean_query: str, maximum: int) -> list[dict[str, Any]]:
+        try:
+            import yt_dlp
+        except ImportError as error:
+            raise ProviderError("YouTube search needs yt-dlp. Run: python -m pip install -e .") from error
+        count = max(1, min(12, maximum))
+        options = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist"}
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                found = ydl.extract_info(f"ytsearch{count}:{clean_query}", download=False)
+        except Exception as error:
+            raise ProviderError(f"YouTube search failed: {error}") from error
+        return [
+            result for result in (ytdlp_search_result(entry) for entry in (found or {}).get("entries") or [])
+            if result is not None
+        ]
 
     def _creative_commons_license(self, video_id: str) -> str:
         if not self.api_key:
@@ -143,7 +225,7 @@ class YouTubeSourceService:
             raise ProviderError("Invalid YouTube video identifier")
         if not math.isfinite(duration) or not 0.25 <= duration <= 600:
             raise ProviderError("The scene duration must be between 0.25 and 600 seconds")
-        license_name = self._creative_commons_license(video_id)
+        license_name = None if self.fair_use else self._creative_commons_license(video_id)
         try:
             import yt_dlp
         except ImportError as error:
@@ -157,6 +239,8 @@ class YouTubeSourceService:
         start = float(source_start_seconds) if source_start_seconds is not None else best_caption_timestamp(
             self._caption_events(info), query, duration
         )
+        if license_name is None:
+            license_name = str(info.get("license") or "Standard YouTube Licence")
         source_duration = float(info.get("duration") or 0)
         if source_duration > 0:
             start = min(max(0.0, start), max(0.0, source_duration - duration))
@@ -165,8 +249,10 @@ class YouTubeSourceService:
         command = [
             sys.executable, "-m", "yt_dlp", url,
             "--no-playlist", "--download-sections", f"*{start:.3f}-{end:.3f}",
-            "--force-keyframes-at-cuts", "--merge-output-format", "mp4",
-            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+            "--force-keyframes-at-cuts", "--remux-video", "mp4", "--retries", "3",
+            # The export only uses the voice-over, so the source audio is never
+            # downloaded: smaller, faster excerpts with no borrowed soundtrack.
+            "-f", "bestvideo[height<=1080][vcodec^=avc1]/bestvideo[height<=1080]/best[height<=1080]",
             "--ffmpeg-location", self.ffmpeg_path, "-o", str(destination),
         ]
         try:
@@ -182,6 +268,7 @@ class YouTubeSourceService:
             "title": str(info.get("title") or "YouTube source"),
             "channel": str(info.get("channel") or info.get("uploader") or "Unknown channel"),
             "license": license_name,
+            "usage_basis": self.license_mode,
             "source_start_seconds": round(start, 3),
             "source_end_seconds": round(end, 3),
             "matched_from_captions": source_start_seconds is None and start > 0,

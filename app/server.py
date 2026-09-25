@@ -26,7 +26,7 @@ from .providers.base import ProviderError
 from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
-from .youtube_source import YouTubeSourceService
+from .youtube_source import FAIR_USE, YouTubeSourceService, normalize_license_mode
 from .youtube_auto import AutoYouTubeManager
 
 
@@ -483,9 +483,9 @@ def build_handler(application: StudioApplication):
                 if not scene:
                     raise ApiError("Select a timeline scene before searching YouTube", HTTPStatus.NOT_FOUND)
                 query = str(query_values.get("q", [""])[0]).strip() or str(scene.get("visual_subject") or scene.get("narration") or "")
+                settings = application.settings.load()
                 service = YouTubeSourceService(
-                    application.settings.load().youtube_api_key,
-                    application.settings.load().ffmpeg_path,
+                    settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode,
                 )
                 try:
                     results = service.search(query)
@@ -622,7 +622,8 @@ def build_handler(application: StudioApplication):
                 if not application.db.get_project(project_id):
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
                 body = self._read_json()
-                if not application.settings.load().youtube_api_key:
+                settings = application.settings.load()
+                if normalize_license_mode(settings.youtube_license_mode) != FAIR_USE and not settings.youtube_api_key:
                     raise ApiError("Add a YouTube Data API key in Settings first")
                 scene_ids = self._scene_ids(body.get("scene_ids"))
                 status = application.youtube_auto.start(project_id, scene_ids, bool(body.get("force", False)))
@@ -848,9 +849,9 @@ def build_handler(application: StudioApplication):
                     application.paths.project_dir(str(scene["project_id"])) / "assets" / "youtube"
                     / f"scene-{int(scene['position']):04d}-{uuid.uuid4().hex[:10]}.mp4"
                 )
+                settings = application.settings.load()
                 service = YouTubeSourceService(
-                    application.settings.load().youtube_api_key,
-                    application.settings.load().ffmpeg_path,
+                    settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode,
                 )
                 query = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
                 try:
@@ -864,7 +865,8 @@ def build_handler(application: StudioApplication):
                 asset = application.db.add_asset(
                     project_id=str(scene["project_id"]), scene_id=str(scene["id"]),
                     candidate_index=application.db.next_asset_candidate_index(str(scene["id"])),
-                    media_kind="video", provider="youtube", model="creative-commons-source",
+                    media_kind="video", provider="youtube",
+                    model="fair-use-source" if service.fair_use else "creative-commons-source",
                     local_path=str(destination), remote_url=metadata["source_url"],
                     provider_asset_id=video_id, cost=0.0, metadata=metadata,
                 )

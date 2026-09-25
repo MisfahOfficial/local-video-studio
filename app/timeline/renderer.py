@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -340,6 +341,8 @@ class FFmpegRenderer:
                      scene: dict[str, Any], width: int, height: int, fps: int, encoder: str,
                      source_in_seconds: float = 0) -> None:
         motion = self.motion_registry.build(_motion_name(scene), width, height, fps, duration)
+        if media_kind == "video":
+            motion = video_safe_motion(motion, fps)
         fade = _fade_duration(scene)
         filters = [motion]
         if fade > 0 and duration > fade * 2:
@@ -380,6 +383,25 @@ class FFmpegRenderer:
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {result.stderr[-1500:]}")
+
+
+def video_safe_motion(motion: str, fps: int) -> str:
+    """Adapt still-image zoompan motion so video clips keep playing.
+
+    zoompan emits `d` frames for every *input* frame. That is right for a still
+    image, but for a video it freezes the first frame for the whole scene. For
+    video, emit one frame per input frame at the export rate and derive the zoom
+    from the output frame number, because `zoom` restarts on every input frame.
+    """
+    if "zoompan=" not in motion:
+        return motion
+    motion = re.sub(r"z='min\(zoom\+([0-9.]+),([0-9.]+)\)'", r"z='min(1+\1*on,\2)'", motion)
+    motion = re.sub(
+        r"z='if\(eq\(on,1\),([0-9.]+),max\(([0-9.]+),zoom-([0-9.]+)\)\)'",
+        r"z='max(\2,\1-\3*on)'", motion,
+    )
+    motion = re.sub(r":d=\d+(?=:s=)", ":d=1", motion)
+    return motion.replace("zoompan=", f"fps={fps},zoompan=", 1)
 
 
 def _safe_name(name: str) -> str:

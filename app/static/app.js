@@ -110,7 +110,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.7.1"}`;
+    $("#appVersion").textContent = `v${health.version || "0.7.2"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -460,6 +460,7 @@ async function refreshYouTubeAutoStatus() {
   panel.textContent = result.running
     ? `Finding topic-matched footage · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
     : `YouTube sourcing finished · ${result.completed || 0} added · ${result.failed || 0} need review`;
+  if (result.notice) panel.textContent += ` · ${result.notice}`;
   $("#autoSourceYouTubeButton").disabled = Boolean(result.running);
   if (result.running && !state.youtubeAutoTimer) {
     state.youtubeAutoTimer = setInterval(() => refreshYouTubeAutoStatus().catch(error => toast(error.message, true)), 2200);
@@ -480,10 +481,22 @@ async function refreshYouTubeAutoStatus() {
   }
 }
 
+function youtubeFairUse() {
+  return state.settings?.youtube_license_mode === "fair_use";
+}
+
+function youtubeKeyMissing() {
+  return !youtubeFairUse() && !state.settings.youtube_api_key_set;
+}
+
+function youtubeSourceLabel() {
+  return youtubeFairUse() ? "YouTube" : "Creative Commons";
+}
+
 async function autoSourceYouTube() {
   if (!state.current) return;
-  if (!state.settings.youtube_api_key_set) {
-    toast("Add your YouTube Data API key in Settings first", true);
+  if (youtubeKeyMissing()) {
+    toast("Add your YouTube Data API key in Settings first, or switch footage source to fair use", true);
     $("#settingsDialog").showModal();
     return;
   }
@@ -972,7 +985,7 @@ function renderMediaBin() {
   const selected = assets.find(asset => asset.id === scene?.selected_asset_id);
   $("#libraryHelp").innerHTML = selected?.provider === "youtube"
     ? `Source: <a href="${escapeHtml(selected.remote_url)}" target="_blank" rel="noopener">${escapeHtml(selected.metadata?.title || "YouTube video")}</a><br>${escapeHtml(selected.metadata?.channel || "Unknown channel")} · ${escapeHtml(selected.metadata?.license || "Creative Commons")} · ${clock(selected.metadata?.source_start_seconds || 0)}`
-    : "Select a scene, then import media or search Creative Commons YouTube clips. Every source remains attached to its scene.";
+    : `Select a scene, then import media or search ${youtubeSourceLabel()} clips. Every source remains attached to its scene.`;
 }
 
 function activeYouTubeScene() {
@@ -982,15 +995,18 @@ function activeYouTubeScene() {
 function openYouTubeDialog() {
   const scene = activeYouTubeScene();
   if (!scene) return toast("Select a timeline scene before sourcing footage", true);
-  if (!state.settings.youtube_api_key_set) {
-    toast("Add your YouTube Data API key in Settings first", true);
+  if (youtubeKeyMissing()) {
+    toast("Add your YouTube Data API key in Settings first, or switch footage source to fair use", true);
     fillSettings();
     $("#settingsDialog").showModal();
     return;
   }
   $("#youtubeQuery").value = scene.visual_subject || scene.narration || "";
   $("#youtubeSceneContext").textContent = `Scene ${scene.position} · ${clock(scene.start_seconds)}–${clock(scene.end_seconds)} · ${scene.narration}`;
-  $("#youtubeResults").innerHTML = `<p class="library-help">Search Creative Commons videos for this voice-over scene.</p>`;
+  $("#youtubeModeNote").textContent = youtubeFairUse()
+    ? "Fair-use mode searches all YouTube videos. Keep excerpts short and transformative; the tool records the video, channel, licence and exact excerpt time for every clip, and never downloads the source audio."
+    : "Search is restricted to videos marked Creative Commons by YouTube. Check the source before publishing; the tool records the video, channel, licence and exact excerpt time.";
+  $("#youtubeResults").innerHTML = `<p class="library-help">Search ${youtubeSourceLabel()} videos for this voice-over scene.</p>`;
   $("#youtubeDialog").showModal();
 }
 
@@ -999,14 +1015,14 @@ function renderYouTubeResults(results) {
     <img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy">
     <div class="youtube-result-copy">
       <strong>${escapeHtml(item.title)}</strong>
-      <small>${escapeHtml(item.channel)} · ${clock(item.duration_seconds)} · Creative Commons</small>
+      <small>${escapeHtml(item.channel)} · ${clock(item.duration_seconds)} · ${item.license === "creativeCommon" ? "Creative Commons" : "Standard YouTube licence"}</small>
       <div class="youtube-result-actions">
         <label>Start time (optional)<input type="number" min="0" step="0.1" placeholder="Auto from captions" data-youtube-start="${item.video_id}"></label>
         <a href="${escapeHtml(item.watch_url)}" target="_blank" rel="noopener">Review</a>
         <button class="button primary small" type="button" data-source-youtube="${item.video_id}">Use clip</button>
       </div>
     </div>
-  </article>`).join("") || `<p class="library-help">No Creative Commons videos matched. Try a shorter or more visual search.</p>`;
+  </article>`).join("") || `<p class="library-help">No ${youtubeSourceLabel()} videos matched. Try a shorter or more visual search.</p>`;
 }
 
 async function searchYouTube(event) {
@@ -1018,7 +1034,7 @@ async function searchYouTube(event) {
   const button = $("#youtubeSearchButton");
   button.disabled = true;
   button.textContent = "Searching…";
-  $("#youtubeResults").innerHTML = `<p class="library-help">Searching Creative Commons YouTube videos…</p>`;
+  $("#youtubeResults").innerHTML = `<p class="library-help">Searching ${youtubeSourceLabel()} videos…</p>`;
   try {
     const result = await api(`/api/youtube/search?scene_id=${encodeURIComponent(scene.id)}&q=${encodeURIComponent(query)}`);
     renderYouTubeResults(result.results || []);
@@ -1672,6 +1688,7 @@ function fillSettings() {
   $("#concurrencyInput").value = state.settings.generation_concurrency || 4;
   $("#unitCostInput").value = state.settings.estimated_unit_cost ?? 0.0013;
   $("#budgetInput").value = state.settings.max_project_cost || 3;
+  $("#youtubeLicenseMode").value = youtubeFairUse() ? "fair_use" : "creative_commons";
   $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"}`;
 }
 
@@ -1683,6 +1700,7 @@ async function saveSettings(event) {
     generation_concurrency: Number($("#concurrencyInput").value),
     estimated_unit_cost: Number($("#unitCostInput").value),
     max_project_cost: Number($("#budgetInput").value),
+    youtube_license_mode: $("#youtubeLicenseMode").value,
   };
   if ($("#runwareKey").value) body.runware_api_key = $("#runwareKey").value;
   if ($("#togetherKey").value) body.together_api_key = $("#togetherKey").value;
