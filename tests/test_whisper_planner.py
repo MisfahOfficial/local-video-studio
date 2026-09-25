@@ -76,5 +76,15 @@ class WhisperPlannerTests(unittest.TestCase):
         self.assertEqual(len(drafts), 2)
 
 
+    def test_long_sentence_is_split_at_comma_under_seven_seconds(self) -> None:
+        words = [(f"w{index}{',' if index == 9 else ''}", index * 0.6, index * 0.6 + 0.5) for index in range(20)]
+        script = " ".join(word for word, _start, _end in words) + "."
+        planner = WhisperScenePlanner(transcriber=FakeTranscriber(_segments(words)))
+        drafts = planner.plan(script=script, voiceover_path=Path("vo.wav"), duration_seconds=12.5, theme_id="us_nostalgia")
+        self.assertGreater(len(drafts), 1)
+        self.assertTrue(all(draft.end_seconds - draft.start_seconds <= 7.05 for draft in drafts))
+        self.assertTrue(drafts[0].narration.endswith("w9,"))
+
+
 if __name__ == "__main__":
     unittest.main()

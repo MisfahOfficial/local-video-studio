@@ -71,8 +71,8 @@ class ScenePlannerTests(unittest.TestCase):
     def test_automatic_pacing_uses_requested_duration_bands(self) -> None:
         self.assertEqual(scene_duration_limit(0), 5.0)
         self.assertEqual(scene_duration_limit(20 * 60 - 0.01), 5.0)
-        self.assertEqual(scene_duration_limit(20 * 60), 8.0)
-        self.assertEqual(scene_duration_limit(40 * 60), 10.0)
+        self.assertEqual(scene_duration_limit(20 * 60), 7.0)
+        self.assertEqual(scene_duration_limit(40 * 60), 7.0)
 
     def test_short_complete_emphasis_becomes_a_pop_insert(self) -> None:
         drafts = RuleBasedScenePlanner().plan(

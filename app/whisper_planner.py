@@ -14,6 +14,10 @@ from .themes import get_theme
 from .transcription import FasterWhisperTranscriber
 
 
+# No visual stays on screen longer than this; long sentences get several clips.
+MAX_SCENE_SECONDS = 7.0
+
+
 class Transcriber(Protocol):
     def transcribe(self, audio_path: Path) -> list[dict[str, Any]]: ...
 
@@ -33,6 +37,67 @@ def _timed_words(segments: list[dict[str, Any]]) -> list[tuple[str, float, float
     return timed
 
 
+def _match(script_tokens: list[str], words: list[tuple[str, float, float]]) -> dict[int, tuple[float, float]]:
+    matched: dict[int, tuple[float, float]] = {}
+    matcher = difflib.SequenceMatcher(None, script_tokens, [word[0] for word in words], autojunk=False)
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            _token, start, end = words[block.b + offset]
+            matched[block.a + offset] = (start, end)
+    return matched
+
+
+def split_long_sentences(
+    sentences: list[str], spans: list[tuple[float, float]], segments: list[dict[str, Any]], max_seconds: float,
+) -> list[tuple[str, float, float]]:
+    """Units of at most `max_seconds`: long sentences are cut at a comma or the
+    longest spoken pause, so every visual stays short and cuts land between words."""
+    words = _timed_words(segments)
+    script_tokens = [token for sentence in sentences for token in _tokens(sentence)]
+    matched = _match(script_tokens, words)
+    units: list[tuple[str, float, float]] = []
+    cursor = 0
+    for sentence, (sentence_start, sentence_end) in zip(sentences, spans):
+        pieces = sentence.split()
+        times: list[tuple[float | None, float | None]] = []
+        for piece in pieces:
+            count = len(_tokens(piece))
+            hits = [matched[index] for index in range(cursor, cursor + count) if index in matched]
+            cursor += count
+            times.append((hits[0][0], hits[-1][1]) if hits else (None, None))
+        if sentence_end - sentence_start <= max_seconds or len(pieces) < 4:
+            units.append((sentence, sentence_start, sentence_end))
+            continue
+        # Words Whisper missed get times spread evenly across the sentence.
+        filled: list[tuple[float, float]] = []
+        step = (sentence_end - sentence_start) / len(pieces)
+        for index, (start, end) in enumerate(times):
+            guess = sentence_start + index * step
+            filled.append((start if start is not None else guess, end if end is not None else guess + step))
+        first = 0
+        while first < len(pieces):
+            chunk_start = sentence_start if first == 0 else filled[first][0]
+            last = first
+            while last + 1 < len(pieces) and filled[last + 1][1] - chunk_start <= max_seconds:
+                last += 1
+            if last == len(pieces) - 1:
+                cut = len(pieces)
+            else:
+                # Prefer a comma/dash, then the longest pause, in the chunk's back half.
+                options = range(max(first + 2, first + (last - first) // 2), last + 1)
+                cut = max(
+                    options or [last + 1],
+                    key=lambda index: (
+                        pieces[index - 1].endswith((",", ";", ":", "\u2014", "-")),
+                        filled[index][0] - filled[index - 1][1],
+                    ),
+                )
+            chunk_end = sentence_end if cut == len(pieces) else (filled[cut - 1][1] + filled[cut][0]) / 2
+            units.append((" ".join(pieces[first:cut]), chunk_start, chunk_end))
+            first = cut
+    return units
+
+
 def align_sentences(sentences: list[str], segments: list[dict[str, Any]], duration: float) -> list[tuple[float, float]]:
     """Return the spoken (start, end) of every script sentence.
 
@@ -49,12 +114,7 @@ def align_sentences(sentences: list[str], segments: list[dict[str, Any]], durati
             script_tokens.append(token)
             owner.append(index)
 
-    matched: dict[int, tuple[float, float]] = {}
-    matcher = difflib.SequenceMatcher(None, script_tokens, [word[0] for word in words], autojunk=False)
-    for block in matcher.get_matching_blocks():
-        for offset in range(block.size):
-            _token, start, end = words[block.b + offset]
-            matched[block.a + offset] = (start, end)
+    matched = _match(script_tokens, words)
 
     spans: list[tuple[float, float] | None] = [None] * len(sentences)
     for position, index in enumerate(owner):
@@ -105,7 +165,7 @@ def _group_by_pacing(sentences: list[str], spans: list[tuple[float, float]]) -> 
                 current = []
             groups.append([index])
             continue
-        if current and end - spans[current[0]][0] > scene_duration_limit(spans[current[0]][0]):
+        if current and end - spans[current[0]][0] > min(MAX_SCENE_SECONDS, scene_duration_limit(spans[current[0]][0])):
             groups.append(current)
             current = []
         current.append(index)
@@ -154,7 +214,10 @@ class WhisperScenePlanner:
         if not sentences:
             raise ValueError("The script is empty")
         segments = self.transcriber.transcribe(voiceover_path)
-        spans = align_sentences(sentences, segments, duration_seconds)
+        sentence_spans = align_sentences(sentences, segments, duration_seconds)
+        units = split_long_sentences(sentences, sentence_spans, segments, MAX_SCENE_SECONDS)
+        sentences = [text for text, _start, _end in units]
+        spans = [(start, end) for _text, start, end in units]
         groups = _group_by_target(spans, target_scene_count) if target_scene_count else _group_by_pacing(sentences, spans)
 
         # Cut between scenes in the middle of the pause, so every visual change

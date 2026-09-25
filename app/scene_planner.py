@@ -60,11 +60,8 @@ MOTION_BY_EMOTION: dict[Emotion, str] = {
 
 def scene_duration_limit(start_seconds: float) -> float:
     """Return the automatic maximum main-scene length for this point in the video."""
-    if start_seconds < 20 * 60:
-        return 5.0
-    if start_seconds < 40 * 60:
-        return 8.0
-    return 10.0
+    # Never above 7 seconds: long single shots feel slow in documentary edits.
+    return 5.0 if start_seconds < 20 * 60 else 7.0
 
 
 def _sentences(script: str) -> list[str]:

@@ -343,7 +343,7 @@ class GeminiAudioPlannerTests(unittest.TestCase):
         self.assertTrue(guides[1]["pop_insert"])
         self.assertLessEqual(guides[1]["end_seconds"] - guides[1]["start_seconds"], 2.0)
 
-    def test_auto_pacing_enforces_5_8_10_second_bands(self) -> None:
+    def test_auto_pacing_enforces_5_then_7_second_bands(self) -> None:
         transcript = [
             {
                 "start_seconds": index * 2.0,
@@ -355,15 +355,15 @@ class GeminiAudioPlannerTests(unittest.TestCase):
 
         guides = GeminiAudioScenePlanner._adaptive_scene_guides(transcript, 50 * 60)
 
-        self.assertEqual(len(guides), 510)
+        self.assertEqual(len(guides), 600)
         self.assertTrue(all(
             guide["end_seconds"] - guide["start_seconds"]
             <= scene_duration_limit(guide["start_seconds"]) + 0.001
             for guide in guides
         ))
         self.assertEqual(sum(guide["start_seconds"] < 20 * 60 for guide in guides), 300)
-        self.assertEqual(sum(20 * 60 <= guide["start_seconds"] < 40 * 60 for guide in guides), 150)
-        self.assertEqual(sum(guide["start_seconds"] >= 40 * 60 for guide in guides), 60)
+        self.assertEqual(sum(20 * 60 <= guide["start_seconds"] < 40 * 60 for guide in guides), 200)
+        self.assertEqual(sum(guide["start_seconds"] >= 40 * 60 for guide in guides), 100)
 
     def test_wrong_scene_count_is_rejected_without_losing_remote_cleanup(self) -> None:
         client = FakeGeminiAudioClient(sample_items()[:1])
