@@ -542,7 +542,9 @@ async function autoSourceYouTube() {
 }
 
 function selectedAssetForScene(scene) {
-  return state.assets.find(asset => asset.id === scene?.selected_asset_id) || null;
+  // A clip being reviewed in the media bin shows in the player until it is added or dismissed.
+  const previewing = state.previewAssets?.[scene?.id];
+  return state.assets.find(asset => asset.id === (previewing || scene?.selected_asset_id)) || null;
 }
 
 function videoTrackDuration() {
@@ -1008,10 +1010,18 @@ function renderMediaBin() {
     const sourceTitle = asset.metadata?.title || sourceLabel;
     return `<button class="media-bin-card ${asset.id === scene?.selected_asset_id ? "active" : ""}" type="button" data-asset-id="${asset.id}" data-scene-id="${scene.id}" title="${escapeHtml(sourceTitle)}">${visual}<span>${escapeHtml(sourceLabel)}</span></button>`;
   }).join("") || `<p class="library-help">No media for this scene yet. Use Import or generate an image from Visual plan.</p>`;
-  const selected = assets.find(asset => asset.id === scene?.selected_asset_id);
-  $("#libraryHelp").innerHTML = selected?.provider === "youtube"
+  const selected = selectedAssetForScene(scene);
+  const reviewing = scene && state.previewAssets?.[scene.id];
+  const reviewButtons = scene ? `<div class="review-buttons">${reviewing
+    ? `<button class="button primary small" type="button" data-add-asset="${reviewing}" data-scene-id="${scene.id}">Add to timeline</button>`
+    : `<span class="review-note">In timeline</span>`}<button class="button ghost small" type="button" data-change-scene="${scene.id}">Change</button></div>` : "";
+  $("#libraryHelp").innerHTML = reviewButtons + (selected?.provider === "youtube"
     ? `Source: <a href="${escapeHtml(selected.remote_url)}" target="_blank" rel="noopener">${escapeHtml(selected.metadata?.title || "YouTube video")}</a><br>${escapeHtml(selected.metadata?.channel || "Unknown channel")} · ${escapeHtml(selected.metadata?.license || "Creative Commons")} · ${clock(selected.metadata?.source_start_seconds || 0)}${logoControl(selected)}`
-    : `Select a scene, then import media or search ${youtubeSourceLabel()} clips. Every source remains attached to its scene.`;
+    : selected?.provider === "photo"
+      ? `Real photo: <a href="${escapeHtml(selected.remote_url || "")}" target="_blank" rel="noopener">${escapeHtml(selected.metadata?.attribution || "archival photo")}</a>`
+      : selected?.provider === "generated"
+        ? "Vintage-style photo made because no real footage or photo matched this scene."
+        : `Select a scene, then import media or search ${youtubeSourceLabel()} clips. Every source remains attached to its scene.`);
 }
 
 function logoControl(asset) {
@@ -1972,7 +1982,37 @@ $("#captionTrack").addEventListener("click", event => {
 });
 $("#mediaBin").addEventListener("click", event => {
   const asset = event.target.closest("[data-asset-id]");
-  if (asset) selectAsset(asset.dataset.sceneId, asset.dataset.assetId).catch(error => toast(error.message, true));
+  if (!asset) return;
+  // Clicking only previews; "Add to timeline" commits the choice.
+  state.previewAssets = state.previewAssets || {};
+  const scene = state.scenes.find(item => item.id === asset.dataset.sceneId);
+  if (scene?.selected_asset_id === asset.dataset.assetId) delete state.previewAssets[scene.id];
+  else state.previewAssets[asset.dataset.sceneId] = asset.dataset.assetId;
+  renderTimeline();
+  selectTimelineScene(asset.dataset.sceneId);
+});
+$("#libraryHelp").addEventListener("click", async event => {
+  const add = event.target.closest("[data-add-asset]");
+  const change = event.target.closest("[data-change-scene]");
+  try {
+    if (add) {
+      await selectAsset(add.dataset.sceneId, add.dataset.addAsset);
+      delete state.previewAssets[add.dataset.sceneId];
+      renderTimeline();
+      toast("Clip added to the timeline");
+    } else if (change) {
+      change.disabled = true;
+      change.textContent = "Finding another clip…";
+      await api(`/api/projects/${state.current.id}/youtube-auto-source`, {
+        method: "POST",
+        body: JSON.stringify({ scene_ids: [change.dataset.changeScene], force: true, exclude_current: true, topic: $("#footageTopicInput")?.value.trim() ?? null }),
+      });
+      if (state.previewAssets) delete state.previewAssets[change.dataset.changeScene];
+      clearInterval(state.youtubeAutoTimer);
+      state.youtubeAutoTimer = setInterval(() => refreshYouTubeAutoStatus().catch(error => toast(error.message, true)), 2000);
+      toast("Looking for a different clip for this scene…");
+    }
+  } catch (error) { toast(error.message, true); }
 });
 $("#timelineList").addEventListener("keydown", event => {
   const clip = event.target.closest(".timeline-clip");

@@ -59,6 +59,17 @@ Version 0.7.2 editing upgrades:
   run, candidate metadata and storyboards load in parallel, and excerpts are cut
   straight from the stream URL with FFmpeg (yt-dlp is only a fallback). A 20-scene
   test went from about 14 minutes to about 2.
+- **Exact recipe per section.** The section's own text names the dish as a camera
+  sees it ("POOR MAN'S COOKIES" + oats + molasses = "oatmeal molasses cookies"):
+  searches use it and clips must mention the dish name or its signature ingredients,
+  so gingerbread or chocolate-chip videos are not used. Recipe steps ("mixed two cups
+  of rolled oats") are matched on the action and ingredients rather than on a
+  finished dish.
+- **Hook stays real.** Scenes before the first heading never get AI images: real
+  footage, then a real photo, otherwise they are flagged. Elsewhere a scene is never
+  left empty (real photo, then an aged still).
+- **Review buttons.** Clicking a clip in the media bin previews it; **Add to timeline**
+  commits it and **Change** finds a different clip for that scene.
 - **Documentary defaults and a text track.** New plans start with key-point captions.
   The caption track shows only scenes that carry text, like CapCut's text track, and
   **+T** adds text at the playhead. Timeline video clips show thumbnails.

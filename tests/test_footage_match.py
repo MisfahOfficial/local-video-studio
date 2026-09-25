@@ -4,7 +4,8 @@ import unittest
 
 from app.footage_match import (
     AI_LIKE_TITLE, NON_FOOTAGE_TITLE, auto_topic, looks_like_ai_slideshow, best_window, core_subject, detect_era, detect_topic, heading_subject,
-    mentions_topic, scene_keywords, scene_subjects, topic_queries,
+    is_process_scene, mentions_topic, recipe_phrase, scene_keywords, scene_subjects, section_recipes,
+    signature_words, topic_queries,
 )
 
 MUSK = (
@@ -101,6 +102,44 @@ class ListVideoTests(unittest.TestCase):
         blocked = "Vintage Life of USA, Forgotten Flavors of USA"
         self.assertTrue(all(looks_like_ai_slideshow(item, blocked) for item in ai))
         self.assertFalse(any(looks_like_ai_slideshow(item, blocked) for item in real))
+
+
+POOR_MAN = (
+    "POOR MAN'S COOKIES Poor Man's Cookies were made with oats, sugar, shortening, and molasses. "
+    "Grandmas mixed two cups of rolled oats with sugar. A quarter-cup of molasses was stirred in. "
+    "The dough came together without any eggs or butter. Just oats, sugar, and determination."
+)
+
+
+class RecipeIdentityTests(unittest.TestCase):
+    def test_section_text_gives_the_exact_dish(self) -> None:
+        self.assertEqual(recipe_phrase(POOR_MAN, "poor man's cookies"), "oatmeal molasses cookies")
+
+    def test_negated_ingredients_are_ignored(self) -> None:
+        text = "Mayonnaise cake used mayonnaise instead of eggs. It was made without any chocolate or cocoa."
+        # Only the dish's own name is distinctive, so no extra recipe filter is applied.
+        self.assertEqual(recipe_phrase(text, "mayonnaise cake"), "")
+
+    def test_signature_words_accept_name_or_ingredients(self) -> None:
+        words = signature_words("oatmeal molasses cookies", "poor man's cookies")
+        self.assertTrue(any(mentions_topic("Oatmeal Raisin Cookies Recipe", word) for word in words))
+        self.assertTrue(any(mentions_topic("Poor Man's Cookies from the 1930s", word) for word in words))
+        self.assertFalse(any(mentions_topic("Classic Gingerbread Cookies Recipe", word) for word in words))
+
+    def test_steps_are_process_scenes(self) -> None:
+        self.assertTrue(is_process_scene("Grandmas mixed two cups of rolled oats with one cup"))
+        self.assertTrue(is_process_scene("Small spoonfuls were dropped onto greased baking sheets"))
+        self.assertFalse(is_process_scene("Poor Man's Cookies appeared at every holiday gathering during hard times."))
+
+    def test_recipe_queries_name_the_dish_and_the_step(self) -> None:
+        queries = topic_queries({"narration": "Grandmas mixed two cups of rolled oats"}, "poor man's cookies", "1950s",
+                                "oatmeal molasses cookies")
+        self.assertTrue(queries[0].startswith("oatmeal molasses cookies"))
+        self.assertIn("mixed", queries[0])
+        scenes = [{"narration": "POOR MAN'S COOKIES"}, {"narration": "Molasses and oats were mixed."}]
+        recipes = section_recipes(scenes, ["poor man's cookies"] * 2)
+        self.assertEqual(recipes[0], recipes[1])
+        self.assertEqual(set(recipes[0].split()), {"oatmeal", "molasses", "cookies"})
 
 
 if __name__ == "__main__":

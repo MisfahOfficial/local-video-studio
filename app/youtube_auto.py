@@ -20,7 +20,7 @@ from .photo_source import load_image, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    scene_subjects, storyboard_frames, topic_queries,
+    heading_subject, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -180,6 +180,10 @@ REVIEW_BELOW = 0.75
 _GOOD_MATCH = 4.0
 
 
+class _NoFootage(Exception):
+    """No real YouTube footage passed the checks for a scene."""
+
+
 # Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
 SCENE_WORKERS = 3
 
@@ -197,6 +201,9 @@ class _Run:
     era: str
     used: dict[str, list[float]]
     subject_by_id: dict[str, str]
+    recipe_by_id: dict[str, str]
+    hook_ids: set[str]
+    exclude_videos: set[str]
     model: str
     empty_label: str
     max_attempts: int
@@ -225,6 +232,7 @@ class AutoYouTubeManager:
 
     def start(
         self, project_id: str, scene_ids: list[str] | None = None, force: bool = False, topic: str | None = None,
+        exclude_current: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             active = self._threads.get(project_id)
@@ -251,8 +259,13 @@ class AutoYouTubeManager:
                     str(project.get("script") or ""), str(project.get("name") or ""),
                 )).strip()
                 status["topic"] = chosen_topic
+                exclude = {
+                    str(asset.get("provider_asset_id")) for asset in self.db.list_assets(project_id)
+                    if exclude_current and str(asset.get("scene_id")) in {str(scene["id"]) for scene in scenes}
+                    and asset.get("provider") in {"youtube", "photo"}
+                }
                 thread = threading.Thread(
-                    target=self._run, args=(project_id, scenes, chosen_topic), daemon=True,
+                    target=self._run, args=(project_id, scenes, chosen_topic, exclude), daemon=True,
                     name=f"youtube-auto-{project_id[:8]}",
                 )
                 self._threads[project_id] = thread
@@ -270,7 +283,9 @@ class AutoYouTubeManager:
         with self._lock:
             self._statuses.setdefault(project_id, {}).update(changes)
 
-    def _run(self, project_id: str, scenes: list[dict[str, Any]], topic: str = "") -> None:
+    def _run(
+        self, project_id: str, scenes: list[dict[str, Any]], topic: str = "", exclude_videos: set[str] | None = None,
+    ) -> None:
         settings = self.settings_store.load()
         service = YouTubeSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode)
         problems: list[str] = []
@@ -294,10 +309,16 @@ class AutoYouTubeManager:
         # Subjects come from the whole plan so list sections ("POOR MAN'S COOKIES")
         # carry over to the scenes that follow the heading.
         all_scenes = self.db.list_scenes(project_id)
+        subjects = scene_subjects(all_scenes, topic)
+        # The hook is everything before the first list heading; it only ever gets real media.
+        first_heading = next((index for index, item in enumerate(all_scenes) if heading_subject(str(item["narration"]))), None)
+        hook_ids = {str(item["id"]) for item in all_scenes[:first_heading]} if first_heading else set()
         run = _Run(
             project_id=project_id, settings=settings, service=service, verifier=verifier, ai_queries=ai_queries,
             topic=topic, era=detect_era(str(project.get("script") or "")), used=used,
-            subject_by_id=dict(zip((str(item["id"]) for item in all_scenes), scene_subjects(all_scenes, topic))),
+            subject_by_id=dict(zip((str(item["id"]) for item in all_scenes), subjects)),
+            recipe_by_id=dict(zip((str(item["id"]) for item in all_scenes), section_recipes(all_scenes, subjects))),
+            hook_ids=hook_ids, exclude_videos=set(exclude_videos or ()),
             model="fair-use-auto-source" if service.fair_use else "creative-commons-auto-source",
             empty_label="YouTube" if service.fair_use else "Creative Commons",
             # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
@@ -343,8 +364,11 @@ class AutoYouTubeManager:
         self._update(run.project_id, current_scene=position)
         scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
         subject = run.subject_by_id.get(str(scene["id"]), run.topic)
+        recipe = run.recipe_by_id.get(str(scene["id"]), "")
         core = core_subject(subject)
-        own = topic_queries(scene, subject, run.era) or scene_search_queries(scene)
+        signature = signature_words(recipe, subject) if recipe else set()
+        is_hook = str(scene["id"]) in run.hook_ids
+        own = topic_queries(scene, subject, run.era, recipe) or scene_search_queries(scene)
         queries = list(dict.fromkeys(
             [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in run.ai_queries.get(position, [])]
             + own
@@ -354,9 +378,13 @@ class AutoYouTubeManager:
         def usable(item: dict[str, Any]) -> bool:
             text = f"{item.get('title')} {item.get('description')}"
             title = str(item.get("title") or "")
+            # A list section's clips must be that exact dish: its name or signature
+            # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
+            exact = not signature or any(mentions_topic(text, word) for word in signature)
             return (not NON_FOOTAGE_TITLE.search(title)
+                    and str(item.get("video_id")) not in run.exclude_videos
                     and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
-                    and mentions_topic(text, core))
+                    and mentions_topic(text, core) and exact)
 
         try:
             pool: dict[str, dict[str, Any]] = {}
@@ -378,22 +406,10 @@ class AutoYouTubeManager:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             choices = self._choose(
                 run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
-                run.settings.blocked_channels,
+                run.settings.blocked_channels, recipe,
             ) if ranked else []
             if not choices:
-                # No real footage passed: a real archival photo, else an aged period still.
-                if self._real_photo(run, scene, position, scene_text, subject, queries):
-                    with run.lock:
-                        run.completed += 1
-                        run.photos.append(position)
-                    self._progress(run)
-                    return
-                self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings)
-                with run.lock:
-                    run.completed += 1
-                    run.generated.append(position)
-                self._progress(run)
-                return
+                raise _NoFootage()
             last_error: Exception | None = None
             for candidate, start_time, topic_score in choices[:3]:
                 video_id = str(candidate["video_id"])
@@ -447,9 +463,24 @@ class AutoYouTubeManager:
                 if metadata["needs_review"]:
                     run.review.append(position)
         except Exception as error:
-            with run.lock:
-                run.failed += 1
-                run.errors.append({"scene": position, "error": str(error)[:500], "query": query})
+            # Never leave a gap: a real archival photo, then (outside the hook) an aged still.
+            try:
+                if self._real_photo(run, scene, position, scene_text, subject, queries):
+                    with run.lock:
+                        run.completed += 1
+                        run.photos.append(position)
+                elif is_hook:
+                    raise ProviderError("No real footage or photo passed for this hook scene; AI images are never used in the hook")
+                else:
+                    self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings)
+                    with run.lock:
+                        run.completed += 1
+                        run.generated.append(position)
+            except Exception as fallback_error:
+                reason = fallback_error if isinstance(error, _NoFootage) else error
+                with run.lock:
+                    run.failed += 1
+                    run.errors.append({"scene": position, "error": str(reason)[:500], "query": query})
         self._progress(run)
 
     def _real_photo(
@@ -474,6 +505,7 @@ class AutoYouTubeManager:
         candidates = [(item, image) for item, image in candidates if image is not None]
         for index, _score in run.verifier.rank_photos(
             [image for _item, image in candidates], subject, f"{run.era} {scene_text}".strip(),
+            run.recipe_by_id.get(str(scene["id"]), ""),
         )[:2]:
             item = candidates[index][0]
             photo = load_image(str(item["url"]))
@@ -529,7 +561,7 @@ class AutoYouTubeManager:
     def _choose(
         service: YouTubeSourceService, verifier: FootageVerifier | None, candidates: list[dict[str, Any]],
         subject: str, scene_text: str, duration: float, used: dict[str, list[float]], infos: dict[str, dict[str, Any]],
-        blocked_channels: str = "",
+        blocked_channels: str = "", recipe: str = "",
     ) -> list[tuple[dict[str, Any], float | None, float | None]]:
         """Candidates whose best moment passed the visual check, best first."""
         if verifier is None:
@@ -563,7 +595,9 @@ class AutoYouTubeManager:
                 continue
             if verifier.synthetic_score(video_id) >= SYNTHETIC_THRESHOLD:
                 continue  # looks like AI imagery; prefer real camera footage
-            moment = verifier.best_moment(video_id, info, subject, scene_text, duration, avoid=used.get(video_id))
+            moment = verifier.best_moment(
+                video_id, info, subject, scene_text, duration, avoid=used.get(video_id), recipe=recipe,
+            )
             if moment is None:
                 continue
             start_time, topic_score, score = moment

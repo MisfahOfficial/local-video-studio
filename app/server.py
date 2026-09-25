@@ -773,6 +773,7 @@ def build_handler(application: StudioApplication):
                 status = application.youtube_auto.start(
                     project_id, scene_ids, bool(body.get("force", False)),
                     topic=None if topic is None else str(topic)[:80],
+                    exclude_current=bool(body.get("exclude_current", False)),
                 )
                 self._json(status, HTTPStatus.ACCEPTED)
                 return

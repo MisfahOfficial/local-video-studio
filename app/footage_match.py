@@ -159,6 +159,72 @@ def auto_topic(script: str, project_name: str = "") -> str:
     return topic if share >= 0.3 else ""
 
 
+INGREDIENTS = {
+    "oats", "oat", "oatmeal", "molasses", "shortening", "lard", "vinegar", "jello", "jell-o", "gelatin", "raisins",
+    "cinnamon", "nutmeg", "ginger", "cloves", "peanut", "chocolate", "cocoa", "coconut", "banana", "bananas",
+    "apple", "apples", "applesauce", "pumpkin", "cornmeal", "corn", "mayonnaise", "potato", "potatoes", "rice",
+    "bread", "breadcrumbs", "crackers", "graham", "ritz", "marshmallow", "marshmallows", "cornflakes", "walnuts",
+    "walnut", "pecans", "pecan", "almonds", "dates", "prunes", "honey", "syrup", "maple", "lemon", "lime", "orange",
+    "pineapple", "cherries", "cherry", "strawberries", "blueberries", "cranberries", "cranberry", "rhubarb",
+    "buttermilk", "cream", "cheese", "cottage", "sour", "evaporated", "condensed", "spam", "bologna", "beans",
+    "noodles", "macaroni", "tuna", "chicken", "beef", "pork", "ham", "bacon", "sausage", "hotdogs", "tomato",
+    "soup", "cabbage", "carrot", "carrots", "onion", "onions", "zucchini", "yeast", "biscuit", "biscuits",
+    "pudding", "custard", "caramel", "toffee", "fudge", "butterscotch", "vanilla", "nuts", "sprinkles", "icing",
+    "frosting", "jam", "jelly", "preserves", "figs", "persimmon", "sweet", "yams", "hominy", "grits", "sorghum",
+}
+# Present in almost every recipe, so they say nothing about which dish it is.
+GENERIC_INGREDIENTS = {"sugar", "flour", "butter", "egg", "eggs", "milk", "water", "salt", "oil", "sweet", "sour", "cream"}
+PROCESS_WORDS = {
+    "mix", "mixed", "mixing", "stir", "stirred", "stirring", "whisk", "whisked", "beat", "beaten", "fold", "folded",
+    "bake", "baked", "baking", "oven", "dough", "batter", "bowl", "spoon", "spoonful", "spoonfuls", "pour", "poured",
+    "knead", "kneaded", "roll", "rolled", "rolling", "drop", "dropped", "sheet", "sheets", "tray", "pan", "skillet",
+    "melt", "melted", "dissolve", "dissolved", "boil", "boiled", "simmer", "fry", "fried", "cool", "cooled", "slice",
+    "sliced", "cut", "chop", "chopped", "flatten", "flattened", "fork", "measure", "measured", "grease", "greased",
+    "sift", "sifted", "spread", "cream", "creamed", "frost", "frosted", "glaze", "shape", "shaped",
+}
+ADJECTIVE_FORM = {"oats": "oatmeal", "oat": "oatmeal", "bananas": "banana", "apples": "apple", "walnuts": "walnut",
+                  "pecans": "pecan", "raisins": "raisin", "potatoes": "potato", "carrots": "carrot", "cherries": "cherry"}
+
+
+def recipe_phrase(section_text: str, heading: str) -> str:
+    """'Poor Man's Cookies' + its text -> 'oatmeal molasses cookies': the dish as a camera sees it."""
+    words = _words(section_text)
+    counts: Counter[str] = Counter()
+    negated_until = -1
+    for index, word in enumerate(words):
+        if word in {"without", "no", "instead", "skip", "skipped"}:
+            negated_until = index + 5  # "without any eggs or butter"
+        if index <= negated_until:
+            continue
+        if word in INGREDIENTS and word not in GENERIC_INGREDIENTS:
+            counts[ADJECTIVE_FORM.get(word, word)] += 1
+    core = core_subject(heading) if heading else ""
+    kind = core.split()[-1] if core else ""
+    signature = [word for word, _count in counts.most_common(2) if word not in core.split()]
+    return " ".join([*signature, kind]).strip() if signature and kind else ""
+
+
+def signature_words(recipe: str, heading: str) -> set[str]:
+    """Words a matching video should mention: the dish name or its signature ingredients."""
+    kind = core_subject(heading).split()[-1:] if heading else []
+    # The full dish name ("poor man's cookies"), never just its kind ("cookies").
+    return {word for word in _words(recipe) if word not in kind} | ({heading} if heading else set())
+
+
+def is_process_scene(scene_text: str) -> bool:
+    words = {_singular(word) for word in _words(scene_text)} | set(_words(scene_text))
+    return bool(words & PROCESS_WORDS) or bool(words & (INGREDIENTS - GENERIC_INGREDIENTS))
+
+
+def section_recipes(scenes: list[dict[str, Any]], subjects: list[str]) -> list[str]:
+    """Recipe phrase per scene, computed from all text of that scene's list section."""
+    text_by_subject: dict[str, list[str]] = {}
+    for scene, subject in zip(scenes, subjects):
+        text_by_subject.setdefault(subject, []).append(str(scene.get("narration") or ""))
+    phrases = {subject: recipe_phrase(" ".join(texts), subject) for subject, texts in text_by_subject.items() if subject}
+    return [phrases.get(subject, "") for subject in subjects]
+
+
 def scene_subjects(scenes: list[dict[str, Any]], topic: str) -> list[str]:
     """Subject for each scene: the user's topic, else the current list section's heading."""
     if topic.strip():
@@ -185,13 +251,23 @@ def scene_keywords(text: str, topic: str, limit: int = 4) -> list[str]:
             continue
         roots.add(root)
         found.append(word)
-    return found[:limit]
+    visual = [word for word in found if _singular(word) in PROCESS_WORDS or word in PROCESS_WORDS
+              or word in INGREDIENTS or _singular(word) in INGREDIENTS]
+    return (visual + [word for word in found if word not in visual])[:limit]
 
 
-def topic_queries(scene: dict[str, Any], topic: str, era: str = "") -> list[str]:
+def topic_queries(scene: dict[str, Any], topic: str, era: str = "", recipe: str = "") -> list[str]:
     """Searches that always name the subject, narrowed by the scene's own nouns."""
     source = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
     keys = scene_keywords(source, topic)
+    if recipe and topic.strip():
+        # The exact dish first ("oatmeal molasses cookies mixed oats"), then its name.
+        recipe_keys = [key for key in keys if key not in _words(recipe)]
+        queries = [
+            f"{recipe} {' '.join(recipe_keys[:2])}".strip(), f"{topic} {' '.join(keys[:1])}".strip(),
+            f"{recipe} recipe", topic,
+        ]
+        return list(dict.fromkeys(query.strip() for query in queries if query.strip()))
     if not topic.strip():
         prefix = f"{era} " if era else ""
         queries = []
@@ -421,16 +497,22 @@ class FootageVerifier:
         # One model on one GPU: scene threads take turns.
         self.lock = threading.RLock()
 
-    def rank_photos(self, photos: list[Any], subject: str, scene_text: str) -> list[tuple[int, float]]:
+    def rank_photos(
+        self, photos: list[Any], subject: str, scene_text: str, recipe: str = "",
+    ) -> list[tuple[int, float]]:
         """(index, score) of photos that clearly show the subject and are not AI-looking, best first."""
         if not photos:
             return []
         with self.lock:
             features = self.scorer.embed_images(photos)
-            core = core_subject(subject)
-            keys = scene_keywords(scene_text, core, limit=3)
+            core = core_subject(recipe or subject)
+            keys = scene_keywords(scene_text, f"{subject} {recipe}", limit=3)
             detail = " ".join(filter(None, [core, *keys])).strip() or scene_text[:100]
-            gate = self.scorer.probabilities(features, core or detail, self.negatives(core, scene_text))
+            # Same rule as for footage: recipe steps must show the step, not a finished dish.
+            process = is_process_scene(scene_text) and bool(keys)
+            gate = self.scorer.probabilities(
+                features, " ".join(keys) if process else (core or detail), self.negatives(core, scene_text),
+            )
             scene = self.scorer.probabilities(features, detail, (core,)) if core and keys else [0.5] * len(photos)
             render = self.scorer.probabilities(
                 features, "a hyperrealistic AI render, overly perfect and saturated",
@@ -504,25 +586,28 @@ class FootageVerifier:
 
     def best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
-        avoid: list[float] | None = None,
+        avoid: list[float] | None = None, recipe: str = "",
     ) -> tuple[float, float, float] | None:
         """Return (start, subject_score, scene_score) for the best unused window, or None."""
         with self.lock:
-            return self._best_moment(video_id, info, subject, scene_text, clip_duration, avoid)
+            return self._best_moment(video_id, info, subject, scene_text, clip_duration, avoid, recipe)
 
     def _best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
-        avoid: list[float] | None = None,
+        avoid: list[float] | None = None, recipe: str = "",
     ) -> tuple[float, float, float] | None:
         times, features = self._video_frames(video_id, info)
         if not times:
             return None
-        core = core_subject(subject)
-        keys = scene_keywords(scene_text, core, limit=3)
+        core = core_subject(recipe or subject)
+        keys = scene_keywords(scene_text, f"{subject} {recipe}", limit=3)
         detail = " ".join(filter(None, [core, *keys])).strip() or scene_text[:100]
-        # The subject itself must be visible ("cookies", "musk ox"); sentence details only
-        # rank moments that pass. Scenes without a subject are gated on their details.
-        gate_scores = self.scorer.probabilities(features, core or detail, self.negatives(core, scene_text))
+        # Normally the dish itself must be visible ("oatmeal molasses cookies", "musk ox").
+        # Recipe steps ("mixed rolled oats in a bowl") show the action instead, before any
+        # cookie exists, so they are gated on the action and its ingredients.
+        process = is_process_scene(scene_text) and bool(keys)
+        gate_text = " ".join(keys) if process else (core or detail)
+        gate_scores = self.scorer.probabilities(features, gate_text, self.negatives(core, scene_text))
         # How much better the frame fits this sentence ("musk ox calves playing")
         # than the subject in general ("musk ox"); ranks moments that passed the gate.
         scene_scores = (
