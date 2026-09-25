@@ -254,7 +254,8 @@ def _timeline_actions(emotion: Emotion, *, pop_insert: bool = False) -> list[Tim
         ]
     return [
         TimelineAction(type="motion", params={"preset": MOTION_BY_EMOTION[emotion], "strength": 0.55}),
-        TimelineAction(type="transition", params={"preset": "fade", "duration": 0.32}),
+        # Straight cuts: a dip to black on every edit reads as a glitch in documentaries.
+        TimelineAction(type="transition", params={"preset": "cut", "duration": 0.0}),
     ]
 
 

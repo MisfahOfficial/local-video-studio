@@ -129,6 +129,8 @@ class RecipeIdentityTests(unittest.TestCase):
     def test_steps_are_process_scenes(self) -> None:
         self.assertTrue(is_process_scene("Grandmas mixed two cups of rolled oats with one cup"))
         self.assertTrue(is_process_scene("Small spoonfuls were dropped onto greased baking sheets"))
+        # A bare ingredient list is a summary: it shows the finished dish, not raw oats.
+        self.assertFalse(is_process_scene("Just oats, sugar, and determination."))
         self.assertFalse(is_process_scene("Poor Man's Cookies appeared at every holiday gathering during hard times."))
 
     def test_recipe_queries_name_the_dish_and_the_step(self) -> None:

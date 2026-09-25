@@ -1773,6 +1773,7 @@ async function startRender() {
       width, height,
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
       edit_package: $("#exportEditPackage").checked, capcut: $("#exportCapCut").checked,
+      film_look: $("#exportFilmLook").checked,
       output_name: outputName,
       output_directory: $("#exportDirectory").value,
       preset: $("#exportPreset").value,

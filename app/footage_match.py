@@ -212,8 +212,13 @@ def signature_words(recipe: str, heading: str) -> set[str]:
 
 
 def is_process_scene(scene_text: str) -> bool:
+    """A recipe step shows an action ("mixed", "stirred", "dropped onto sheets").
+
+    A bare ingredient list ("Just oats, sugar, and determination") is a summary and
+    shows the finished dish, so the story never jumps back to raw ingredients.
+    """
     words = {_singular(word) for word in _words(scene_text)} | set(_words(scene_text))
-    return bool(words & PROCESS_WORDS) or bool(words & (INGREDIENTS - GENERIC_INGREDIENTS))
+    return bool(words & PROCESS_WORDS)
 
 
 def section_recipes(scenes: list[dict[str, Any]], subjects: list[str]) -> list[str]:
@@ -342,8 +347,12 @@ SYNTHETIC_THRESHOLD = 0.6
 NEGATIVE_PROMPTS = (
     "a person talking to the camera", "a news anchor in a studio", "a title card with text",
     "a logo on a plain background", "a cartoon", "a video game screenshot", "an explosion",
-    "a black screen",
+    "a black screen", "a nutrition facts label", "text printed on a food package",
+    "a channel logo intro animation",
 )
+VINTAGE = ("old vintage film footage", ("modern digital video", "a modern smartphone video"))
+# Channel intros and end screens live here; skip them in longer sources.
+EDGE_SKIP_SECONDS = 8.0
 
 
 class ClipScorer:
@@ -586,15 +595,15 @@ class FootageVerifier:
 
     def best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
-        avoid: list[float] | None = None, recipe: str = "",
+        avoid: list[float] | None = None, recipe: str = "", prefer_vintage: bool = False,
     ) -> tuple[float, float, float] | None:
         """Return (start, subject_score, scene_score) for the best unused window, or None."""
         with self.lock:
-            return self._best_moment(video_id, info, subject, scene_text, clip_duration, avoid, recipe)
+            return self._best_moment(video_id, info, subject, scene_text, clip_duration, avoid, recipe, prefer_vintage)
 
     def _best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
-        avoid: list[float] | None = None, recipe: str = "",
+        avoid: list[float] | None = None, recipe: str = "", prefer_vintage: bool = False,
     ) -> tuple[float, float, float] | None:
         times, features = self._video_frames(video_id, info)
         if not times:
@@ -614,9 +623,18 @@ class FootageVerifier:
             self.scorer.probabilities(features, detail, (core,)) if core and keys else [0.5] * len(times)
         )
         combined = [0.4 * gate + 0.6 * scene for gate, scene in zip(gate_scores, scene_scores)]
+        if prefer_vintage:
+            # A period story reads best on footage that already looks old.
+            vintage = self.scorer.probabilities(features, *VINTAGE)
+            combined = [value + 0.25 * old for value, old in zip(combined, vintage)]
+        source_length = float(info.get("duration") or 0)
         best: tuple[float, float, float] | None = None
         for index, start in enumerate(times):
             if any(abs(start - used) < 15 for used in avoid or []):
+                continue
+            if source_length > 60 and (
+                start < EDGE_SKIP_SECONDS or start + clip_duration > source_length - EDGE_SKIP_SECONDS
+            ):
                 continue
             window = [position for position in range(index, len(times)) if times[position] < start + max(clip_duration, 0.1)]
             gate_average = sum(gate_scores[position] for position in window) / len(window)

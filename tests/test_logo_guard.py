@@ -38,3 +38,30 @@ class LogoGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BlackBarTests(unittest.TestCase):
+    def test_pillarboxed_clip_is_detected_and_cropped(self) -> None:
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        from app.logo_guard import content_box, fit_crop
+
+        if not shutil.which("ffmpeg"):
+            self.skipTest("FFmpeg is required")
+        with tempfile.TemporaryDirectory() as temporary:
+            clip = Path(temporary) / "pillar.mp4"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:d=2",
+                 "-vf", "pad=1280:720:320:180:black", "-pix_fmt", "yuv420p", str(clip)],
+                check=True,
+            )
+            box = content_box(clip)
+            self.assertIsNotNone(box)
+            self.assertAlmostEqual(box[2], 0.5, delta=0.03)
+            self.assertAlmostEqual(box[4], 16 / 9, delta=0.1)
+            crop = fit_crop(box, None)
+            self.assertGreaterEqual(crop["x"], box[0] - 0.01)
+            self.assertLessEqual(crop["x"] + crop["w"], box[0] + box[2] + 0.01)

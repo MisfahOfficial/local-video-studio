@@ -74,7 +74,7 @@ class GeminiSceneEnhancer:
                 draft.candidate_count = 1
                 draft.timeline_actions = [
                     TimelineAction(type="motion", params={"preset": item["motion"], "strength": 0.55}),
-                    TimelineAction(type="transition", params={"preset": "fade", "duration": 0.32}),
+                    TimelineAction(type="transition", params={"preset": "cut", "duration": 0.0}),
                 ]
         return drafts
 

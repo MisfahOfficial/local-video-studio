@@ -189,3 +189,49 @@ def analyse_clip(path: Path, ffmpeg_path: str = "ffmpeg", source_frames: Any = N
     boxes = find_logos(path, ffmpeg_path, source_frames)
     crop, ok = safe_crop(boxes)
     return {"logo_boxes": [list(box) for box in boxes], "safe_crop": crop, "logo_hidden": ok}
+
+
+def _ffprobe_for(ffmpeg_path: str) -> str:
+    """ffprobe next to the given ffmpeg ("/x/bin/ffmpeg" -> "/x/bin/ffprobe")."""
+    candidate = Path(ffmpeg_path)
+    return str(candidate.with_name("ffprobe")) if candidate.parent != Path(".") else "ffprobe"
+
+
+def content_box(path: Path, ffmpeg_path: str = "ffmpeg") -> tuple[float, float, float, float, float] | None:
+    """Normalized (x, y, w, h) of the picture inside black bars plus its pixel aspect; None without bars."""
+    import re
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-i", str(path), "-vf", "cropdetect=limit=24:round=2:reset=0",
+             "-frames:v", "90", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60,
+        )
+        probe = subprocess.run(
+            [_ffprobe_for(ffmpeg_path), "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        width, height = (int(value) for value in probe.stdout.strip().split(",")[:2])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    found = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", result.stderr)
+    if not found or not width or not height:
+        return None
+    w, h, x, y = (int(value) for value in found[-1])
+    if w >= width * 0.94 and h >= height * 0.94:
+        return None
+    return (x / width, y / height, w / width, h / height, w / max(h, 1))
+
+
+def fit_crop(content: tuple[float, ...], crop: dict[str, float] | None) -> dict[str, float]:
+    """Largest frame-aspect crop inside the picture area (and inside the logo crop, if any)."""
+    x0, y0, w, h = content[:4]
+    x1, y1 = x0 + w, y0 + h
+    if crop:
+        x0, y0 = max(x0, crop["x"]), max(y0, crop["y"])
+        x1, y1 = min(x1, crop["x"] + crop["w"]), min(y1, crop["y"] + crop["h"])
+    # Crops are normalized to the frame, so a frame-aspect crop has equal normalized w and h.
+    size = min(x1 - x0, y1 - y0)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    return {"x": round(cx - size / 2, 4), "y": round(cy - size / 2, 4), "w": round(size, 4), "h": round(size, 4)}

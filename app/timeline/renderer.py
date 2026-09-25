@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import sys
@@ -47,7 +48,10 @@ def caption_segments(scene: dict[str, Any], style: dict[str, Any] | None = None)
     segments: list[tuple[float, float, str]] = []
     cursor_words = 0
     for card in cards:
-        lines = [card[index:index + words_per_line] for index in range(0, len(card), words_per_line)]
+        # Even lines ("two cups / of rolled oats"), never a lone word on the last line.
+        line_count = max(1, math.ceil(len(card) / words_per_line))
+        per_line = math.ceil(len(card) / line_count)
+        lines = [card[index:index + per_line] for index in range(0, len(card), per_line)]
         card_text = "\n".join(" ".join(line) for line in lines)
         segment_start = start + (end - start) * cursor_words / len(words)
         cursor_words += len(card)
@@ -229,6 +233,7 @@ class FFmpegRenderer:
         video_bitrate_kbps: int = 12_000,
         audio_bitrate_kbps: int = 192,
         progress: ProgressCallback | None = None,
+        film_look: bool = False,
     ) -> Path:
         selected = {scene["id"]: scene.get("selected_asset_id") for scene in scenes}
         scenes_by_id = {scene["id"]: scene for scene in scenes}
@@ -273,6 +278,8 @@ class FFmpegRenderer:
                 source, clip, str(asset["media_kind"]), duration, scene, width, height, fps, encoder,
                 source_in_seconds=float(timeline_clip.get("source_in_seconds", 0)),
                 crop=active_crop(asset),
+                # Chapter cards and generated stills are already period-styled.
+                film_look=film_look and asset.get("provider") not in {"chapter", "generated"},
             )
             clip_paths.append(clip)
             if progress:
@@ -321,7 +328,12 @@ class FFmpegRenderer:
         command += ["-b:v", f"{bitrate}k", "-maxrate", f"{round(bitrate * 1.25)}k", "-bufsize", f"{bitrate * 2}k"]
         if voiceover and voiceover.exists():
             audio_bitrate = max(96, min(320, int(audio_bitrate_kbps)))
-            command += ["-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", f"{audio_bitrate}k", "-shortest"]
+            # YouTube's loudness target with true-peak headroom so nothing clips.
+            command += ["-map", "0:v:0", "-map", "1:a:0"]
+            loudness = self._loudnorm_filter(voiceover)
+            if loudness:
+                command += ["-af", loudness, "-ar", "48000"]
+            command += ["-c:a", "aac", "-b:a", f"{audio_bitrate}k", "-shortest"]
         else:
             command += ["-an"]
         command += ["-movflags", "+faststart", str(output)]
@@ -341,7 +353,8 @@ class FFmpegRenderer:
 
     def _render_clip(self, source: Path, destination: Path, media_kind: str, duration: float,
                      scene: dict[str, Any], width: int, height: int, fps: int, encoder: str,
-                     source_in_seconds: float = 0, crop: dict[str, Any] | None = None) -> None:
+                     source_in_seconds: float = 0, crop: dict[str, Any] | None = None,
+                     film_look: bool = False) -> None:
         motion = self.motion_registry.build(_motion_name(scene), width, height, fps, duration)
         if crop:
             motion = f"{crop_filter(crop)},{motion}"  # zoom past a burned-in logo first
@@ -349,6 +362,8 @@ class FFmpegRenderer:
             motion = video_safe_motion(motion, fps)
         fade = _fade_duration(scene)
         filters = [motion]
+        if film_look:
+            filters.append(FILM_LOOK)
         if fade > 0 and duration > fade * 2:
             filters.extend([f"fade=t=in:st=0:d={fade}", f"fade=t=out:st={duration-fade}:d={fade}"])
         if media_kind == "video":
@@ -371,6 +386,29 @@ class FFmpegRenderer:
             fallback[-2:-2] = ["-preset", "veryfast", "-crf", "20"]
             self._run(fallback)
 
+    def _loudnorm_filter(self, audio: Path) -> str:
+        """Two-pass loudnorm to YouTube's -14 LUFS with -1.5 dB true peak; '' for silent audio."""
+        target = "I=-14:TP=-1.5:LRA=11"
+        result = subprocess.run(
+            [self.ffmpeg_path, "-hide_banner", "-i", str(audio), "-af", f"loudnorm={target}:print_format=json",
+             "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        text = result.stderr
+        start, end = text.rfind("{"), text.rfind("}")
+        try:
+            measured = json.loads(text[start:end + 1])
+            values = {key: float(measured[key]) for key in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")}
+        except (ValueError, KeyError):
+            return ""
+        if not all(math.isfinite(value) for value in values.values()):
+            return ""  # silence: nothing to normalise
+        return (
+            f"loudnorm={target}:measured_I={values['input_i']}:measured_TP={values['input_tp']}:"
+            f"measured_LRA={values['input_lra']}:measured_thresh={values['input_thresh']}:"
+            f"offset={values['target_offset']}:linear=true"
+        )
+
     def _choose_encoder(self) -> str:
         try:
             result = subprocess.run([self.ffmpeg_path, "-hide_banner", "-encoders"], capture_output=True, text=True, check=True)
@@ -387,6 +425,15 @@ class FFmpegRenderer:
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {result.stderr[-1500:]}")
+
+
+# One period grade over every clip so modern and archival footage read as the same era:
+# faded colour, warm highlights, lifted blacks, fine grain and a soft vignette.
+FILM_LOOK = (
+    "eq=saturation=0.72:contrast=0.93:brightness=0.015:gamma=1.03,"
+    "colorbalance=rs=0.05:gs=0.01:bs=-0.06:rh=0.05:bh=-0.05,"
+    "noise=alls=6:allf=t,vignette=angle=PI/5"
+)
 
 
 def active_crop(asset: dict[str, Any]) -> dict[str, Any] | None:
@@ -485,6 +532,7 @@ class RenderManager:
                 video_bitrate_kbps=int(options.get("video_bitrate_kbps", 12_000)),
                 audio_bitrate_kbps=int(options.get("audio_bitrate_kbps", 192)),
                 progress=lambda value: self._update(job_id, progress=value),
+                film_look=bool(options.get("film_look", True)),
             )
             rendered_duration = probe_duration(output, settings.ffprobe_path)
             if voiceover_path.is_file() and rendered_duration + 0.25 < voiceover_duration:

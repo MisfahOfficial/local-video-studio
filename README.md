@@ -59,6 +59,14 @@ Version 0.7.2 editing upgrades:
   run, candidate metadata and storyboards load in parallel, and excerpts are cut
   straight from the stream URL with FFmpeg (yt-dlp is only a fallback). A 20-scene
   test went from about 14 minutes to about 2.
+- **Documentary finish.** Export applies one vintage film grade to every clip (faded
+  colour, warm highlights, grain, vignette) so modern and archival footage feel like
+  one era; period footage is preferred when choosing moments. Scenes cut straight
+  (only chapter cards fade). The voice-over is loudness-normalised in two passes to
+  -14 LUFS with -1.5 dB true peak. Vertical sources are skipped, letterboxed ones are
+  zoomed to the picture, channel intros/outros and packaging text are avoided, a
+  source is used at most twice, and summary sentences show the finished dish so the
+  story never jumps back to raw ingredients.
 - **Exact recipe per section.** The section's own text names the dish as a camera
   sees it ("POOR MAN'S COOKIES" + oats + molasses = "oatmeal molasses cookies"):
   searches use it and clips must mention the dish name or its signature ingredients,

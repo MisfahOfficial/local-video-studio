@@ -15,7 +15,8 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
-from .logo_guard import analyse_clip
+from .logo_guard import analyse_clip, content_box, fit_crop
+from .youtube_source import pick_video_stream
 from .photo_source import load_image, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
@@ -406,7 +407,7 @@ class AutoYouTubeManager:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             choices = self._choose(
                 run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
-                run.settings.blocked_channels, recipe,
+                run.settings.blocked_channels, recipe, bool(run.era),
             ) if ranked else []
             if not choices:
                 raise _NoFootage()
@@ -428,6 +429,9 @@ class AutoYouTubeManager:
                         duration=duration, destination=destination, source_start_seconds=start_time,
                         info=run.infos.get(video_id),
                     )
+                    bars = content_box(destination, run.service.ffmpeg_path)
+                    if bars and bars[4] < 1.25:
+                        raise ProviderError("Portrait picture inside black bars")
                     break
                 except Exception as error:
                     destination.unlink(missing_ok=True)
@@ -448,6 +452,10 @@ class AutoYouTubeManager:
                 )
             except Exception:  # logo hiding is best effort
                 logo = {"logo_boxes": [], "safe_crop": None, "logo_hidden": True}
+            if bars:
+                # Letterboxed/pillarboxed source: zoom to the real picture (and past any logo).
+                logo["safe_crop"] = fit_crop(bars, logo.get("safe_crop"))
+                logo["black_bars"] = [round(value, 4) for value in bars[:4]]
             metadata.update(logo)
             metadata["needs_review"] = metadata["needs_review"] or not logo["logo_hidden"]
             asset = self.db.add_asset(
@@ -561,7 +569,7 @@ class AutoYouTubeManager:
     def _choose(
         service: YouTubeSourceService, verifier: FootageVerifier | None, candidates: list[dict[str, Any]],
         subject: str, scene_text: str, duration: float, used: dict[str, list[float]], infos: dict[str, dict[str, Any]],
-        blocked_channels: str = "", recipe: str = "",
+        blocked_channels: str = "", recipe: str = "", prefer_vintage: bool = False,
     ) -> list[tuple[dict[str, Any], float | None, float | None]]:
         """Candidates whose best moment passed the visual check, best first."""
         if verifier is None:
@@ -590,6 +598,11 @@ class AutoYouTubeManager:
             info = infos.get(video_id)
             if info is None:
                 continue
+            stream = pick_video_stream(info) or {}
+            if int(stream.get("height") or info.get("height") or 0) > int(stream.get("width") or info.get("width") or 1):
+                continue  # vertical/Shorts footage leaves black side bars in 16:9
+            if len(used.get(video_id, [])) >= 2:
+                continue  # one source at most twice per video, so it never feels repetitive
             # The full description is only known after inspection (AI voice/image disclosures).
             if looks_like_ai_slideshow({**candidate, "description": info.get("description")}, blocked_channels):
                 continue
@@ -597,6 +610,7 @@ class AutoYouTubeManager:
                 continue  # looks like AI imagery; prefer real camera footage
             moment = verifier.best_moment(
                 video_id, info, subject, scene_text, duration, avoid=used.get(video_id), recipe=recipe,
+                prefer_vintage=prefer_vintage,
             )
             if moment is None:
                 continue
