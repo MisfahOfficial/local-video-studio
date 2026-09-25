@@ -195,6 +195,8 @@ def normalize_render_options(value: Any) -> dict[str, Any]:
         "output_name": output_name,
         "output_directory": output_directory,
         "burn_captions": bool(supplied.get("burn_captions", True)),
+        "edit_package": bool(supplied.get("edit_package", False)),
+        "capcut": bool(supplied.get("capcut", False)),
         "preset": str(supplied.get("preset") or "youtube-1080p")[:50],
         "caption_style": normalize_caption_style(supplied.get("caption_style")),
     }

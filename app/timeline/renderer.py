@@ -492,6 +492,19 @@ class RenderManager:
                     f"Export verification failed: video is {rendered_duration:.2f}s but the voice-over is "
                     f"{voiceover_duration:.2f}s. The incomplete export was not marked complete."
                 )
+            if options.get("edit_package") or options.get("capcut"):
+                from ..edit_export import build_edit_package
+
+                self._update(job_id, progress=0.97)
+                project = self.db.get_project(project_id) or project
+                build_edit_package(
+                    project=project, scenes=self.db.list_scenes(project_id),
+                    timeline_clips=self.db.list_timeline_clips(project_id), assets=self.db.list_assets(project_id),
+                    project_dir=self.paths.project_dir(project_id), destination=output.parent,
+                    caption_style=options.get("caption_style"), fps=int(options.get("fps", 30)),
+                    width=int(options.get("width", 1920)), height=int(options.get("height", 1080)),
+                    capcut=bool(options.get("capcut")), ffprobe_path=settings.ffprobe_path,
+                )
             self._update(job_id, status="complete", progress=1.0, output_path=str(output))
             self.db.update_project(project_id, status="rendered")
         except Exception as error:

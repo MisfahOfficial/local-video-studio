@@ -45,7 +45,8 @@ _STOP = {
 # Titles containing these are talk, music or reaction content, never B-roll.
 NON_FOOTAGE_TITLE = re.compile(
     r"\b(lyrics?|lyric video|music video|official video|asmr|podcast|reacts?|reaction|prank(ed)?|karaoke|"
-    r"trailer|unboxing|live ?stream|#shorts|audiobook|full album|playlist)\b",
+    r"trailer|unboxing|live ?stream|#shorts|audiobook|full album|playlist|roblox|minecraft|fortnite|gameplay|"
+    r"let'?s play|video game|walkthrough|animation|animated|cartoon|no music|no talk)\b",
     re.IGNORECASE,
 )
 

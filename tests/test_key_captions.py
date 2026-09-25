@@ -22,6 +22,7 @@ class KeyCaptionTests(unittest.TestCase):
         )
         self.assertEqual(key_phrase("It cost less than fifty cents per batch when butter was scarce."), "fifty cents per batch")
         self.assertEqual(key_phrase("The dough came together without eggs."), "")
+        self.assertEqual(key_phrase("Grandmas mixed two cups of rolled oats with one cup"), "two cups of rolled oats")
 
     def test_hook_question_is_kept_whole(self) -> None:
         self.assertEqual(key_phrase("How did one dollar fill a table in 1955?", hook=True), "How did one dollar fill a table in 1955?")

@@ -23,7 +23,7 @@ EDGE_STOP = {"a", "an", "the", "to", "of", "for", "and", "or", "in", "on", "at",
 LEADING_KEEP = {"between", "from", "since", "in", "under", "over", "about", "nearly", "almost", "just", "only"}
 
 KEY_POINT_STYLE = {
-    "position": "middle", "alignment": "center", "case": "upper", "size": 64, "bold": True,
+    "position": "middle", "alignment": "center", "case": "upper", "size": 84, "bold": True,
     "background_enabled": False, "stroke_enabled": False, "glow_enabled": False,
     "shadow_enabled": True, "shadow_color": "#000000", "shadow_blur": 12, "shadow_x": 0, "shadow_y": 3,
     "max_lines": 2, "words_per_line": 4, "position_x": 0, "position_y": 0,
@@ -58,6 +58,9 @@ def key_phrase(sentence: str, hook: bool = False) -> str:
             phrase.append(word)
         if token.rstrip().endswith((",", ".", ";", ":", "—", "?", "!")):
             break
+    # "...oats with one" is cut mid-measure: drop dangling number words and linkers.
+    while len(phrase) > 2 and (phrase[-1].lower() in EDGE_STOP or phrase[-1].lower() in NUMBER_WORDS):
+        phrase.pop()
     while phrase and phrase[-1].lower() in EDGE_STOP:
         phrase.pop()
     return " ".join(phrase) if len(phrase) >= 2 else ""

@@ -77,6 +77,7 @@ class ListVideoTests(unittest.TestCase):
         self.assertTrue(NON_FOOTAGE_TITLE.search("Eraserheads - Poorman's Grave [Lyric Video]"))
         self.assertTrue(NON_FOOTAGE_TITLE.search("Poor Man's Cookies Soft Spoken ASMR"))
         self.assertIsNone(NON_FOOTAGE_TITLE.search("Old Fashioned Hermit Cookies"))
+        self.assertTrue(NON_FOOTAGE_TITLE.search("Roblox Steal Cookies From Grandma"))
 
 
 if __name__ == "__main__":

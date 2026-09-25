@@ -53,6 +53,30 @@ The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
 
+Version 0.7.2 editing upgrades:
+
+- **7-second visuals.** No scene stays on screen longer than 7 seconds (5 seconds in the
+  first 20 minutes). Whisper Sync splits long sentences at a comma or the longest spoken
+  pause, so each part gets its own clip.
+- **Key-point captions.** In Timeline > Text, **Key points** replaces subtitles with a few
+  short, centred captions on the hook, numbers, dates and prices, at least 12 seconds
+  apart (Gemini chooses them when its quota allows, local rules otherwise).
+  **Full subtitles** restores sentence captions. Empty captions now stay empty.
+- **Chapter cards.** Script headings on their own line (ALL CAPS, or numbered like
+  "2. Vinegar Pie") become full-screen cards: the section's footage blurred and tinted
+  for the theme, "CHAPTER N" and the title. Auto-source builds them automatically;
+  **Chapter cards** rebuilds them.
+- **Logo hiding.** Channel logos and watermarks are detected from the whole source
+  video's storyboard and the clip itself; the clip is zoomed (up to 1.35x) just enough
+  to hide corner logos, in both preview and export. **Hide logos** checks an existing
+  project; each clip has **Undo zoom**. Clips whose logo cannot be hidden are flagged.
+- **Edit package export.** Tick **Premiere edit package** in Export to get a folder
+  next to the video with the rendered 1080p clips, the untouched YouTube excerpts,
+  the voice-over, `captions.srt`, and a Final Cut 7 XML that Premiere imports as a
+  sequence. Tick **CapCut project** (with CapCut closed) to also create a native
+  CapCut desktop draft that appears in CapCut's project list; CapCut's project index
+  is backed up first.
+
 Version 0.7.2 also makes **Auto-source videos** topic-aware. A **Footage topic** field
 (detected from the script, editable, may be left empty for list-style videos) is
 added to every search; results whose title and description do not mention the topic

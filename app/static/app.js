@@ -1759,6 +1759,7 @@ async function startRender() {
     const result = await api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
       width, height,
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
+      edit_package: $("#exportEditPackage").checked, capcut: $("#exportCapCut").checked,
       output_name: outputName,
       output_directory: $("#exportDirectory").value,
       preset: $("#exportPreset").value,
@@ -1784,7 +1785,9 @@ async function refreshRenderStatus() {
   if (!render) return;
   $("#renderState").textContent = render.status[0].toUpperCase() + render.status.slice(1);
   $("#renderProgress").value = Math.round(Number(render.progress || 0) * 100);
-  $("#renderMessage").textContent = render.error || render.output_path || `${Math.round(Number(render.progress || 0) * 100)}% complete`;
+  $("#renderMessage").textContent = render.error || (render.output_path
+    ? `${render.output_path}${$("#exportEditPackage").checked || $("#exportCapCut").checked ? " · Edit package saved in the same folder" : ""}${$("#exportCapCut").checked ? " · CapCut project added" : ""}`
+    : `${Math.round(Number(render.progress || 0) * 100)}% complete`);
   state.lastRenderOutputPath = render.output_path || state.lastRenderOutputPath;
   const videoLink = $("#openVideoLink");
   videoLink.hidden = !(render.status === "complete" && render.media_url);
