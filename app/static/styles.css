@@ -455,3 +455,5 @@ body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-s
 .caption-off { opacity: .35; }
 
 .logo-note { color: var(--muted); }
+
+.caption-clip.text-block { background: #5b3f8f; border-color: #8e6bd1; color: #fff; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

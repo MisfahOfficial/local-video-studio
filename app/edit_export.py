@@ -71,6 +71,7 @@ def build_edit_package(
     if srt.is_file():
         shutil.copy2(srt, package / "captions.srt")
 
+    (package / "CREDITS.txt").write_text(credits_text(scenes, assets_by_id), encoding="utf-8")
     vo_duration = probe_duration(voiceover, ffprobe_path) if voiceover else clips[-1][2]
     xml_path = package / f"{name} - Premiere.xml"
     write_premiere_xml(xml_path, name, clips, voiceover, vo_duration, fps, width, height)
@@ -87,6 +88,23 @@ def build_edit_package(
             capcut_root, name, clips, voiceover, vo_duration, captions, caption_style or {}, width, height, fps,
         ))
     return result
+
+
+def credits_text(scenes: list[dict[str, Any]], assets_by_id: dict[str, dict[str, Any]]) -> str:
+    """Source list for the video description: YouTube excerpts and CC photos need credit."""
+    lines: list[str] = []
+    for scene in scenes:
+        asset = assets_by_id.get(str(scene.get("selected_asset_id") or "")) or {}
+        metadata = asset.get("metadata") or {}
+        if asset.get("provider") == "photo":
+            line = f"{metadata.get('attribution')} {metadata.get('source_url') or ''}".strip()
+        elif asset.get("provider") == "youtube":
+            line = f"\"{metadata.get('title')}\" by {metadata.get('channel')} {asset.get('remote_url') or ''}".strip()
+        else:
+            continue
+        if line not in lines:
+            lines.append(line)
+    return "Footage and photo credits\n\n" + "\n".join(lines) + "\n"
 
 
 def _frames(seconds: float, fps: int) -> int:

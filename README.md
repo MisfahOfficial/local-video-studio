@@ -59,6 +59,13 @@ Version 0.7.2 editing upgrades:
   run, candidate metadata and storyboards load in parallel, and excerpts are cut
   straight from the stream URL with FFmpeg (yt-dlp is only a fallback). A 20-scene
   test went from about 14 minutes to about 2.
+- **Documentary defaults and a text track.** New plans start with key-point captions.
+  The caption track shows only scenes that carry text, like CapCut's text track, and
+  **+T** adds text at the playhead. Timeline video clips show thumbnails.
+- **Real archival photos.** When no YouTube footage passes, Openverse (Flickr,
+  Wikimedia Commons, museums) is searched for photographs whose licence allows
+  commercial use and modification; CLIP checks subject and AI look. The edit package
+  includes `CREDITS.txt` for the video description.
 - **Real footage first.** Auto-source skips AI-slideshow sources: your own channels and
   any listed in **Settings > Never use footage from**, nostalgia narrator channels,
   titles that pair an era with a nostalgia hook ("FORGOTTEN Objects in EVERY 1950s

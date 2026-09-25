@@ -467,6 +467,7 @@ async function refreshYouTubeAutoStatus() {
   panel.textContent = result.running
     ? `Finding and visually checking footage${result.topic ? ` of ${result.topic}` : ""} · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
     : `YouTube sourcing finished · ${result.completed || 0} added · ${result.failed || 0} need review`;
+  if (result.photos?.length) panel.textContent += ` · Real archival photo used for scene${result.photos.length === 1 ? "" : "s"} ${result.photos.join(", ")}`;
   if (result.generated?.length) panel.textContent += ` · No real footage for scene${result.generated.length === 1 ? "" : "s"} ${result.generated.join(", ")}, so a vintage photo was made`;
   if (result.review?.length) panel.textContent += ` · Please check scene${result.review.length === 1 ? "" : "s"} ${result.review.join(", ")}`;
   if (result.notice) panel.textContent += ` · ${result.notice}`;
@@ -1136,7 +1137,7 @@ function renderTimeline() {
     const width = Math.max(18, clipDuration * zoom);
     const left = Number(clip.start_seconds) * zoom;
     const media = asset?.media_kind === "video"
-      ? `<div class="timeline-clip-placeholder">VIDEO</div>`
+      ? `<img src="${escapeHtml(asset.media_url.replace(/^\/media\//, "/thumb/"))}" alt="" loading="lazy">`
       : asset ? `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">` : `<div class="timeline-clip-placeholder">No media</div>`;
     return `<div class="timeline-clip ${clip.id === state.activeTimelineClipId ? "active" : ""} ${width < 44 ? "narrow" : ""}" style="left:${left}px;width:${width}px" draggable="false" tabindex="0" role="button" data-clip-id="${clip.id}" data-scene-id="${scene?.id || ""}">
       <button class="trim-handle trim-left" type="button" data-trim-edge="left" aria-label="Trim clip start"></button>
@@ -1146,10 +1147,11 @@ function renderTimeline() {
       <button class="trim-handle trim-right" type="button" data-trim-edge="right" aria-label="Trim clip end"></button>
     </div>`;
   }).join("") || `<div class="queue-status">Create the visual plan first.</div>`;
-  $("#captionTrack").innerHTML = state.scenes.map(scene => {
+  // Like CapCut's text track: only scenes that actually carry text appear as text blocks.
+  $("#captionTrack").innerHTML = state.scenes.filter(scene => (state.captionDrafts[scene.id] ?? scene.caption_text ?? "").trim()).map(scene => {
     const width = Math.max(18, (Number(scene.end_seconds) - Number(scene.start_seconds)) * zoom);
     const left = Number(scene.start_seconds) * zoom;
-    return `<button class="caption-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" type="button" style="left:${left}px;width:${width}px" data-scene-id="${scene.id}">${scene.caption_text ? escapeHtml(scene.caption_text) : '<span class="caption-off">·</span>'}</button>`;
+    return `<button class="caption-clip text-block ${scene.id === state.activeTimelineSceneId ? "active" : ""}" type="button" style="left:${left}px;width:${width}px" data-scene-id="${scene.id}" title="${escapeHtml(scene.caption_text)}">T&nbsp;${escapeHtml(state.captionDrafts[scene.id] ?? scene.caption_text)}</button>`;
   }).join("");
   const voiceDuration = voiceoverDuration();
   $("#audioTrack").innerHTML = state.current?.voiceover_path ? `<div class="audio-wave" style="left:0;width:${Math.max(18, voiceDuration * zoom)}px"></div>` : `<span class="library-help">No voice-over attached</span>`;
@@ -1947,6 +1949,20 @@ window.addEventListener("pointermove", moveCaptionDrag);
 window.addEventListener("pointerup", event => endCaptionDrag(event).catch(error => toast(error.message, true)));
 window.addEventListener("pointercancel", event => endCaptionDrag(event).catch(error => toast(error.message, true)));
 $("#captionVisibilityButton").addEventListener("click", toggleCaptionVisibility);
+$("#addTextButton").addEventListener("click", async () => {
+  if (!state.current) return;
+  const at = Number(state.previewTime || 0);
+  const scene = state.scenes.find(item => Number(item.start_seconds) <= at && at < Number(item.end_seconds)) || state.scenes[0];
+  if (!scene) return;
+  const updated = await api(`/api/scenes/${scene.id}`, { method: "PATCH", body: JSON.stringify({ caption_text: scene.caption_text || "NEW TEXT" }) });
+  state.scenes = state.scenes.map(item => item.id === updated.id ? updated : item);
+  selectTimelineScene(scene.id);
+  showInspector("text");
+  renderTimeline();
+  $("#timelineCaption").focus();
+  $("#timelineCaption").select();
+  toast("Text added at the playhead. Type your text in the box on the right.");
+});
 $("#videoVisibilityButton").addEventListener("click", toggleVisualVisibility);
 $("#audioMuteButton").addEventListener("click", toggleAudioMute);
 $("#previewMuteButton").addEventListener("click", toggleAudioMute);

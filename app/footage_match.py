@@ -421,6 +421,29 @@ class FootageVerifier:
         # One model on one GPU: scene threads take turns.
         self.lock = threading.RLock()
 
+    def rank_photos(self, photos: list[Any], subject: str, scene_text: str) -> list[tuple[int, float]]:
+        """(index, score) of photos that clearly show the subject and are not AI-looking, best first."""
+        if not photos:
+            return []
+        with self.lock:
+            features = self.scorer.embed_images(photos)
+            core = core_subject(subject)
+            keys = scene_keywords(scene_text, core, limit=3)
+            detail = " ".join(filter(None, [core, *keys])).strip() or scene_text[:100]
+            gate = self.scorer.probabilities(features, core or detail, self.negatives(core, scene_text))
+            scene = self.scorer.probabilities(features, detail, (core,)) if core and keys else [0.5] * len(photos)
+            render = self.scorer.probabilities(
+                features, "a hyperrealistic AI render, overly perfect and saturated",
+                ("an ordinary real photo", "real camera footage"),
+            )
+            drawing = self.scorer.probabilities(features, "a drawing, painting or illustration", ("a photograph",))
+        ranked = [
+            (index, 0.4 * gate[index] + 0.6 * scene[index])
+            for index in range(len(photos))
+            if gate[index] >= TOPIC_THRESHOLD and max(render[index], drawing[index]) < SYNTHETIC_THRESHOLD
+        ]
+        return sorted(ranked, key=lambda item: item[1], reverse=True)
+
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames
 

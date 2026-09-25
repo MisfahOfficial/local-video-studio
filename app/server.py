@@ -331,6 +331,27 @@ class StudioApplication:
         chosen.mkdir(parents=True, exist_ok=True)
         return chosen
 
+    def apply_caption_mode(self, project_id: str, mode: str) -> dict[str, Any]:
+        """key_points: a few short centred captions; full: every sentence as a subtitle."""
+        project = self.db.get_project(project_id) or {}
+        scenes = self.db.list_scenes(project_id)
+        current = normalize_caption_style(project.get("caption_style"))
+        if mode == "key_points":
+            settings = self.settings.load()
+            captions, source = key_captions(scenes, settings.gemini_api_key, settings.gemini_model)
+            texts = [captions.get(index, "") for index in range(len(scenes))]
+            style = normalize_caption_style({**current, **KEY_POINT_STYLE})
+        else:
+            source = "script"
+            texts = [str(scene["narration"]) for scene in scenes]
+            style = normalize_caption_style({
+                **current, "position": "bottom", "case": "normal", "size": 54, "max_lines": 2,
+                "words_per_line": 7, "background_enabled": True,
+            })
+        updated = [self.db.update_scene(str(scene["id"]), {"caption_text": text}) for scene, text in zip(scenes, texts)]
+        self.db.update_project(project_id, caption_style=style)
+        return {"scenes": updated, "caption_style": style, "source": source, "captioned": sum(bool(text) for text in texts)}
+
     def logo_metadata(self, service: YouTubeSourceService, video_id: str, clip: Path) -> dict[str, Any]:
         """Logo boxes and hiding crop for one clip, using its whole source video's storyboard."""
         try:
@@ -457,7 +478,9 @@ class StudioApplication:
             target_scene_count=len(drafts),
             estimated_cost=estimated_cost,
         )
-        scenes = self.db.replace_scenes(project_id, drafts)
+        self.db.replace_scenes(project_id, drafts)
+        # Documentary style by default: captions only on key points (Full subtitles restores all).
+        scenes = self.apply_caption_mode(project_id, str(body.get("captions") or "key_points"))["scenes"]
         return {
             "scenes": scenes,
             "generation_count": generation_count,
@@ -595,6 +618,10 @@ def build_handler(application: StudioApplication):
             if match:
                 self._json({"render": application.render_payload(match.group(1))})
                 return
+            match = re.fullmatch(r"/thumb/([a-zA-Z0-9_-]+)/(.+)", path)
+            if match:
+                self._serve_thumbnail(match.group(1), urllib.parse.unquote(match.group(2)))
+                return
             match = re.fullmatch(r"/media/([a-zA-Z0-9_-]+)/(.+)", path)
             if match:
                 self._serve_media(match.group(1), urllib.parse.unquote(match.group(2)))
@@ -716,33 +743,12 @@ def build_handler(application: StudioApplication):
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/captions/mode", path)
             if match:
-                project_id = match.group(1)
-                project = application.db.get_project(project_id)
-                if not project:
+                if not application.db.get_project(match.group(1)):
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
                 mode = str(self._read_json().get("mode") or "")
-                scenes = application.db.list_scenes(project_id)
-                current = normalize_caption_style(project.get("caption_style"))
-                if mode == "key_points":
-                    settings = application.settings.load()
-                    captions, source = key_captions(scenes, settings.gemini_api_key, settings.gemini_model)
-                    texts = [captions.get(index, "") for index in range(len(scenes))]
-                    style = normalize_caption_style({**current, **KEY_POINT_STYLE})
-                elif mode == "full":
-                    source = "script"
-                    texts = [str(scene["narration"]) for scene in scenes]
-                    style = normalize_caption_style({
-                        **current, "position": "bottom", "case": "normal", "size": 54, "max_lines": 2,
-                        "words_per_line": 7, "background_enabled": True,
-                    })
-                else:
+                if mode not in {"key_points", "full"}:
                     raise ApiError("Caption mode must be key_points or full")
-                updated = [application.db.update_scene(str(scene["id"]), {"caption_text": text}) for scene, text in zip(scenes, texts)]
-                application.db.update_project(project_id, caption_style=style)
-                self._json({
-                    "scenes": updated, "caption_style": style, "source": source,
-                    "captioned": sum(bool(text) for text in texts),
-                })
+                self._json(application.apply_caption_mode(match.group(1), mode))
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/generate", path)
             if match:
@@ -1121,6 +1127,23 @@ def build_handler(application: StudioApplication):
             if project_dir not in target.parents or not target.is_file():
                 raise ApiError("Media not found", HTTPStatus.NOT_FOUND)
             self._serve_file(target)
+
+        def _serve_thumbnail(self, project_id: str, relative: str) -> None:
+            """A cached still from a video clip, so timeline clips show their picture."""
+            project_dir = application.paths.project_dir(project_id).resolve()
+            target = (project_dir / relative).resolve()
+            if project_dir not in target.parents or not target.is_file():
+                raise ApiError("Media not found", HTTPStatus.NOT_FOUND)
+            poster = target.with_name(target.name + ".thumb.jpg")
+            if not poster.is_file():
+                subprocess.run(
+                    [application.settings.load().ffmpeg_path, "-v", "error", "-y", "-ss", "0.4", "-i", str(target),
+                     "-frames:v", "1", "-vf", "scale=320:-2", str(poster)],
+                    capture_output=True, timeout=60,
+                )
+            if not poster.is_file():
+                raise ApiError("Thumbnail unavailable", HTTPStatus.NOT_FOUND)
+            self._serve_file(poster)
 
         def _serve_file(self, path: Path) -> None:
             if not path.is_file():

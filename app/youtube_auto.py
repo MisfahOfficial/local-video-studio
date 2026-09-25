@@ -16,6 +16,7 @@ from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
 from .logo_guard import analyse_clip
+from .photo_source import load_image, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
@@ -207,6 +208,8 @@ class _Run:
     errors: list[dict[str, Any]] = field(default_factory=list)
     review: list[int] = field(default_factory=list)
     generated: list[int] = field(default_factory=list)
+    photos: list[int] = field(default_factory=list)
+    used_photos: set[str] = field(default_factory=set)
 
 
 class AutoYouTubeManager:
@@ -320,6 +323,7 @@ class AutoYouTubeManager:
                 self._update(
                     project_id, running=False, current_scene=None, completed=run.completed, failed=run.failed,
                     errors=list(run.errors), review=sorted(run.review), generated=sorted(run.generated),
+                    photos=sorted(run.photos),
                 )
             with self._lock:
                 self._threads.pop(project_id, None)
@@ -377,7 +381,13 @@ class AutoYouTubeManager:
                 run.settings.blocked_channels,
             ) if ranked else []
             if not choices:
-                # No real footage passed: an aged period still is better than a wrong clip.
+                # No real footage passed: a real archival photo, else an aged period still.
+                if self._real_photo(run, scene, position, scene_text, subject, queries):
+                    with run.lock:
+                        run.completed += 1
+                        run.photos.append(position)
+                    self._progress(run)
+                    return
                 self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings)
                 with run.lock:
                     run.completed += 1
@@ -441,6 +451,51 @@ class AutoYouTubeManager:
                 run.failed += 1
                 run.errors.append({"scene": position, "error": str(error)[:500], "query": query})
         self._progress(run)
+
+    def _real_photo(
+        self, run: "_Run", scene: dict[str, Any], position: int, scene_text: str, subject: str, queries: list[str],
+    ) -> bool:
+        """Place a genuine, commercially reusable archival photo; False when none passes."""
+        if run.verifier is None:
+            return False
+        photo_queries = list(dict.fromkeys(
+            ([f"{run.era} {core_subject(subject)}".strip()] if subject else [])
+            + [query.replace(" footage", "") for query in queries[:2]]
+        ))
+        items: dict[str, dict[str, Any]] = {}
+        for query in [item for item in photo_queries if item.strip()][:3]:
+            for item in search_photos(query):
+                items.setdefault(str(item.get("id") or item["url"]), item)
+            if len(items) >= 12:
+                break
+        with run.lock:
+            fresh = [item for key, item in items.items() if key not in run.used_photos]
+        candidates = [(item, load_image(str(item.get("thumbnail") or item["url"]))) for item in fresh[:12]]
+        candidates = [(item, image) for item, image in candidates if image is not None]
+        for index, _score in run.verifier.rank_photos(
+            [image for _item, image in candidates], subject, f"{run.era} {scene_text}".strip(),
+        )[:2]:
+            item = candidates[index][0]
+            photo = load_image(str(item["url"]))
+            if photo is None:
+                continue
+            key = str(item.get("id") or item["url"])
+            with run.lock:
+                if key in run.used_photos:
+                    continue
+                run.used_photos.add(key)
+            destination = self.paths.project_dir(run.project_id) / "assets" / "photos" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
+            metadata = save_photo(item, photo, destination)
+            metadata["search_topic"] = subject
+            asset = self.db.add_asset(
+                project_id=run.project_id, scene_id=str(scene["id"]),
+                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                media_kind="image", provider="photo", model="openverse", local_path=str(destination),
+                remote_url=metadata["source_url"], provider_asset_id=key, cost=0.0, metadata=metadata,
+            )
+            self.db.select_asset(str(scene["id"]), str(asset["id"]))
+            return True
+        return False
 
     def _progress(self, run: "_Run") -> None:
         with run.lock:
