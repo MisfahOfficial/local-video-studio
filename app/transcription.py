@@ -1,20 +1,45 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 
 def probe_duration(path: Path, ffprobe_path: str = "ffprobe") -> float:
-    result = subprocess.run(
-        [ffprobe_path, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    data = json.loads(result.stdout)
-    return float(data["format"]["duration"])
+    ffprobe_error: Exception | None = None
+    try:
+        result = subprocess.run(
+            [ffprobe_path, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        duration = float(json.loads(result.stdout)["format"]["duration"])
+        if duration > 0:
+            return duration
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        ffprobe_error = error
+
+    # macOS ships afinfo independently of Homebrew. It keeps VO measurement
+    # working when an ffprobe binary exists but one of its dylibs is broken.
+    afinfo = shutil.which("afinfo")
+    if afinfo:
+        try:
+            result = subprocess.run(
+                [afinfo, str(path)], capture_output=True, text=True, check=True
+            )
+            match = re.search(r"estimated duration:\s*([0-9]+(?:\.[0-9]+)?)\s*sec", result.stdout)
+            if match and float(match.group(1)) > 0:
+                return float(match.group(1))
+        except (OSError, subprocess.CalledProcessError, ValueError):
+            pass
+
+    raise RuntimeError(
+        "The voice-over duration could not be measured. Repair FFprobe or re-upload the audio."
+    ) from ffprobe_error
 
 
 class FasterWhisperTranscriber:
@@ -41,4 +66,3 @@ class FasterWhisperTranscriber:
             }
             for segment in segments
         ]
-

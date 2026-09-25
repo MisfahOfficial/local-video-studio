@@ -14,9 +14,9 @@ easiest-to-review development flow, or use the all-at-once prompt at the end.
 
 ## Task 2 — selective clip re-rendering and waveform
 
-> Add a local audio waveform and draggable scene boundaries to the Timeline tab.
-> Validate that scenes stay ordered and cover the voice-over. Hash each scene's
-> selected asset, duration, actions, and render settings so unchanged cached clips
+> Add a local audio waveform to the Timeline tab and connect it to the existing
+> editable video clips and fixed voice-over track. Hash each clip's selected
+> asset, duration, source-in, actions, and render settings so unchanged cached clips
 > are reused. Do not change provider adapters. Add migration-safe persistence and
 > automated tests.
 
@@ -47,8 +47,8 @@ easiest-to-review development flow, or use the all-at-once prompt at the end.
 ## All-at-once prompt
 
 > Continue building Local Video Studio using docs/ARCHITECTURE.md and
-> docs/ROADMAP.md as authoritative constraints. Implement roadmap versions 0.2–0.4
-> in separate, reviewable commits/modules: precise background transcription and
+> docs/ROADMAP.md as authoritative constraints. Implement the next roadmap modules
+> in separate, reviewable commits: precise background transcription and
 > word sync; waveform and selective scene re-rendering; a provider-neutral video
 > generation workflow with one concrete provider; and plug-in crossfades, overlays,
 > looks, audio tracks, and animated captions. Preserve existing projects and API
@@ -56,4 +56,3 @@ easiest-to-review development flow, or use the all-at-once prompt at the end.
 > recovery, run unit tests plus real local FFmpeg smoke tests, and update all user
 > documentation. Stop and ask before choosing any paid provider or licensing a
 > bundled binary.
-

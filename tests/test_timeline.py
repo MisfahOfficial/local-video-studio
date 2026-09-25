@@ -8,13 +8,19 @@ from pathlib import Path
 from app.domain import GenerationRequest
 from app.providers.mock import MockImageProvider
 from app.timeline.actions import build_default_motion_registry
-from app.timeline.renderer import FFmpegRenderer, write_scene_srt
+from app.timeline.renderer import (
+    FFmpegRenderer,
+    build_subtitle_style,
+    caption_segments,
+    write_scene_ass,
+    write_scene_srt,
+)
 
 
 class TimelineTests(unittest.TestCase):
     def test_default_motion_presets_build_filters(self) -> None:
         registry = build_default_motion_registry()
-        expected = {"static", "slow_push", "detail_push", "slow_pull", "pan_left", "pan_right"}
+        expected = {"static", "slow_push", "detail_push", "pop_in", "slow_pull", "pan_left", "pan_right"}
         self.assertEqual(set(registry.names()), expected)
         for name in expected:
             self.assertIn("fps=12", registry.build(name, 320, 180, 12, 1.0))
@@ -23,12 +29,54 @@ class TimelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "captions.srt"
             write_scene_srt(
-                [{"start_seconds": 0.0, "end_seconds": 2.345, "narration": "A first caption."}],
+                [{"start_seconds": 0.0, "end_seconds": 2.345, "narration": "Narration.", "caption_text": "A first caption."}],
                 destination,
             )
             text = destination.read_text(encoding="utf-8")
             self.assertIn("00:00:00,000 --> 00:00:02,345", text)
             self.assertIn("A first caption.", text)
+            self.assertNotIn("Narration.", text)
+
+    def test_caption_segments_respect_line_and_word_limits(self) -> None:
+        scene = {
+            "start_seconds": 0.0,
+            "end_seconds": 8.0,
+            "caption_text": "one two three four five six seven eight nine ten eleven twelve",
+        }
+        segments = caption_segments(scene, {"max_lines": 2, "words_per_line": 3})
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0][2], "one two three\nfour five six")
+        self.assertEqual(segments[1][2], "seven eight nine\nten eleven twelve")
+        self.assertEqual(segments[0][1], segments[1][0])
+        self.assertEqual(segments[-1][1], 8.0)
+
+    def test_caption_style_builds_safe_ass_options(self) -> None:
+        style = build_subtitle_style({
+            "font": "Georgia", "size": 48, "position": "top",
+            "text_color": "#F0E0D0", "background_color": "#102030",
+            "background_opacity": 0.5,
+        })
+        self.assertIn("FontName=Georgia", style)
+        self.assertIn("FontSize=48", style)
+        self.assertIn("Alignment=8", style)
+        self.assertIn("PrimaryColour=&H00D0E0F0", style)
+
+    def test_ass_supports_transform_case_and_advanced_style(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "captions.ass"
+            write_scene_ass(
+                [{"start_seconds": 0, "end_seconds": 2.5, "caption_text": "Mixed Case"}],
+                destination, 1920, 1080,
+                {"font": "Georgia", "size": 60, "case": "upper", "position": "middle",
+                 "alignment": "right", "position_x": -10, "position_y": 5, "scale": 115,
+                 "rotation": 2, "background_enabled": False, "stroke_enabled": True,
+                 "stroke_color": "#112233", "stroke_width": 4},
+            )
+            text = destination.read_text(encoding="utf-8")
+            self.assertIn("PlayResX: 1920", text)
+            self.assertIn("Style: Default,Georgia,60", text)
+            self.assertIn("MIXED CASE", text)
+            self.assertIn("\\pos(", text)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for filter validation")
     def test_all_motion_presets_execute_in_ffmpeg(self) -> None:

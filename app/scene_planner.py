@@ -58,6 +58,15 @@ MOTION_BY_EMOTION: dict[Emotion, str] = {
 }
 
 
+def scene_duration_limit(start_seconds: float) -> float:
+    """Return the automatic maximum main-scene length for this point in the video."""
+    if start_seconds < 20 * 60:
+        return 5.0
+    if start_seconds < 40 * 60:
+        return 8.0
+    return 10.0
+
+
 def _sentences(script: str) -> list[str]:
     normalized = re.sub(r"[ \t]+", " ", script.replace("\r", "\n"))
     normalized = re.sub(r"\n{2,}", "\n", normalized).strip()
@@ -71,21 +80,12 @@ def _word_count(text: str) -> int:
     return max(1, len(re.findall(r"\b[\w'-]+\b", text)))
 
 
-def _split_longest(units: list[str], desired: int) -> list[str]:
-    result = units[:]
-    while len(result) < desired:
-        candidate_index = max(range(len(result)), key=lambda index: _word_count(result[index]))
-        words = result[candidate_index].split()
-        if len(words) < 4:
-            break
-        middle = len(words) // 2
-        result[candidate_index:candidate_index + 1] = [" ".join(words[:middle]), " ".join(words[middle:])]
-    return result
-
-
 def _group_units(units: list[str], desired: int) -> list[str]:
     if desired <= 0 or len(units) <= desired:
-        return _split_longest(units, desired) if desired > len(units) else units
+        # Never manufacture extra visuals by cutting an unfinished sentence in
+        # half. The caller reports when a requested image target cannot be met
+        # with the complete semantic units available in the script.
+        return units
 
     total_words = sum(_word_count(unit) for unit in units)
     groups: list[str] = []
@@ -115,6 +115,51 @@ def _group_units(units: list[str], desired: int) -> list[str]:
             cursor += 1
         groups.append(" ".join(selected))
     return [group for group in groups if group]
+
+
+def _is_pop_insert(text: str, duration_seconds: float) -> bool:
+    """Use a brief punch-in for short, self-contained emphasis beats."""
+    stripped = text.strip()
+    return duration_seconds <= 2.0 and (
+        stripped.endswith(("!", "?"))
+        or stripped.casefold().startswith(
+            ("but ", "why ", "suddenly ", "imagine ", "look ", "one detail ", "the result ")
+        )
+    )
+
+
+def _group_units_by_pacing(units: list[str], duration_seconds: float) -> list[str]:
+    """Group complete sentences using the requested time-based pacing curve."""
+    total_words = sum(_word_count(unit) for unit in units)
+    groups: list[str] = []
+    current: list[str] = []
+    elapsed = 0.0
+    group_start = 0.0
+
+    for unit in units:
+        unit_duration = duration_seconds * _word_count(unit) / total_words
+        unit_end = elapsed + unit_duration
+        pop_insert = _is_pop_insert(unit, unit_duration)
+
+        if pop_insert:
+            if current:
+                groups.append(" ".join(current))
+                current = []
+            groups.append(unit)
+            elapsed = unit_end
+            group_start = elapsed
+            continue
+
+        if current and unit_end - group_start > scene_duration_limit(group_start):
+            groups.append(" ".join(current))
+            current = []
+            group_start = elapsed
+        current.append(unit)
+        elapsed = unit_end
+
+    if current:
+        groups.append(" ".join(current))
+    return groups
 
 
 def _classify_emotion(text: str) -> Emotion:
@@ -164,7 +209,14 @@ def _era_hint(text: str) -> str:
     return f"historical period anchored to {years[0]}" if years else "period details inferred from the surrounding chapter"
 
 
-def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: int) -> str:
+def _compose_prompt(
+    narration: str,
+    emotion: Emotion,
+    theme_id: str,
+    position: int,
+    spoken_context: str | None = None,
+    pop_insert: bool = False,
+) -> str:
     theme = get_theme(theme_id)
     shot = "establishing wide shot" if position % 5 == 1 else "observational medium shot"
     if emotion in {Emotion.SUSPENSE, Emotion.REVEAL}:
@@ -175,15 +227,34 @@ def _compose_prompt(narration: str, emotion: Emotion, theme_id: str, position: i
         shot = "quiet environmental composition with purposeful negative space"
 
     subject = _visual_subject(narration)
+    spoken_anchor = _visual_subject(spoken_context or "")
+    context_direction = (
+        f"Exact spoken moment that this image must directly illustrate: {spoken_anchor}. "
+        if spoken_anchor and spoken_anchor.casefold() != subject.casefold() else ""
+    )
+    insert_direction = (
+        "Brief pop-in detail image: isolate the key named item or action in the center with bold readable shape, "
+        "strong foreground separation, and enough surrounding context to remain part of the same documentary world. "
+        if pop_insert else ""
+    )
     return (
-        f"Visualize this narration without adding unsupported facts: {subject}. "
+        f"Primary visible subject and action: {subject}. "
+        f"{context_direction}"
+        f"{insert_direction}"
         f"{_era_hint(narration)}. {EMOTION_DIRECTION[emotion]}. {shot}. "
         f"{theme.visual_style}. Palette: {theme.palette}. Camera: {theme.camera_language}. "
-        "One coherent moment, realistic proportions, clean cinematic 16:9 composition, no captions inside the image."
+        "Show the named subject clearly in one coherent moment; do not substitute a generic person, room, or object. "
+        "Historically credible materials, realistic proportions, layered depth, clean cinematic 16:9 composition, "
+        "no captions, logos, collages, split screens, or watermarks inside the image."
     )
 
 
-def _timeline_actions(emotion: Emotion) -> list[TimelineAction]:
+def _timeline_actions(emotion: Emotion, *, pop_insert: bool = False) -> list[TimelineAction]:
+    if pop_insert:
+        return [
+            TimelineAction(type="motion", params={"preset": "pop_in", "strength": 0.75}),
+            TimelineAction(type="transition", params={"preset": "cut", "duration": 0.0}),
+        ]
     return [
         TimelineAction(type="motion", params={"preset": MOTION_BY_EMOTION[emotion], "strength": 0.55}),
         TimelineAction(type="transition", params={"preset": "fade", "duration": 0.32}),
@@ -200,7 +271,6 @@ class RuleBasedScenePlanner:
         theme_id: str,
         duration_seconds: float,
         target_scene_count: int | None = None,
-        seconds_per_scene: float = 12.5,
     ) -> list[SceneDraft]:
         units = _sentences(script)
         if not units:
@@ -208,8 +278,10 @@ class RuleBasedScenePlanner:
 
         if duration_seconds <= 0:
             duration_seconds = max(10.0, sum(_word_count(unit) for unit in units) / 2.35)
-        desired = target_scene_count or max(1, round(duration_seconds / max(2.0, seconds_per_scene)))
-        chunks = _group_units(units, desired)
+        if target_scene_count:
+            chunks = _group_units(units, target_scene_count)
+        else:
+            chunks = _group_units_by_pacing(units, duration_seconds)
         total_words = sum(_word_count(chunk) for chunk in chunks)
 
         drafts: list[SceneDraft] = []
@@ -220,6 +292,7 @@ class RuleBasedScenePlanner:
             emotion = _classify_emotion(chunk)
             role = _narrative_role(chunk, index, len(chunks), emotion)
             importance = _importance(role, emotion)
+            pop_insert = _is_pop_insert(chunk, end - elapsed)
             drafts.append(
                 SceneDraft(
                     position=index,
@@ -230,14 +303,14 @@ class RuleBasedScenePlanner:
                     emotion=emotion,
                     narrative_role=role,
                     importance=importance,
-                    prompt=_compose_prompt(chunk, emotion, theme_id, index),
+                    prompt=_compose_prompt(chunk, emotion, theme_id, index, pop_insert=pop_insert),
                     negative_prompt=get_theme(theme_id).negative_prompt,
                     # The economical default is one generation per scene. Important scenes are
                     # still labelled, so the editor can deliberately request extra candidates or
                     # a more expensive model only where it adds value.
                     model_role="photoreal",
                     candidate_count=1,
-                    timeline_actions=_timeline_actions(emotion),
+                    timeline_actions=_timeline_actions(emotion, pop_insert=pop_insert),
                 )
             )
             elapsed = end

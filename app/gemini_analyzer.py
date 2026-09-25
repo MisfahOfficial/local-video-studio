@@ -19,7 +19,7 @@ SCENE_SCHEMA = {
             "narrative_role": {"type": "STRING", "enum": [item.value for item in NarrativeRole]},
             "importance": {"type": "INTEGER"},
             "prompt": {"type": "STRING"},
-            "motion": {"type": "STRING", "enum": ["static", "slow_push", "slow_pull", "pan_left", "pan_right", "detail_push"]},
+            "motion": {"type": "STRING", "enum": ["static", "slow_push", "slow_pull", "pan_left", "pan_right", "detail_push", "pop_in"]},
             "model_role": {"type": "STRING", "enum": ["photoreal", "precise", "premium"]},
         },
         "required": ["position", "visual_subject", "emotion", "narrative_role", "importance", "prompt", "motion", "model_role"],

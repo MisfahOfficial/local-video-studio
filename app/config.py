@@ -12,6 +12,7 @@ class StudioSettings:
     runware_api_key: str = ""
     together_api_key: str = ""
     gemini_api_key: str = ""
+    youtube_api_key: str = ""
     runware_default_model: str = "rundiffusion:110@101"
     runware_precise_model: str = "runware:400@2"
     runware_premium_model: str = "alibaba:qwen-image@3.0"
@@ -27,7 +28,7 @@ class StudioSettings:
 
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        for key in ("runware_api_key", "together_api_key", "gemini_api_key"):
+        for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key"):
             data[f"{key}_set"] = bool(data.pop(key))
         return data
 
@@ -50,6 +51,7 @@ class SettingsStore:
         settings.runware_api_key = os.getenv("RUNWARE_API_KEY", settings.runware_api_key)
         settings.together_api_key = os.getenv("TOGETHER_API_KEY", settings.together_api_key)
         settings.gemini_api_key = os.getenv("GEMINI_API_KEY", settings.gemini_api_key)
+        settings.youtube_api_key = os.getenv("YOUTUBE_API_KEY", settings.youtube_api_key)
         return settings
 
     def update(self, changes: dict[str, Any]) -> StudioSettings:
