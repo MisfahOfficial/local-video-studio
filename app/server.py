@@ -28,6 +28,7 @@ from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
 from .youtube_source import FAIR_USE, YouTubeSourceService, normalize_license_mode
+from .chapter_cards import build_chapter_cards
 from .key_captions import KEY_POINT_STYLE, key_captions
 from .footage_match import auto_topic, core_subject, detect_era, scene_subjects, topic_queries
 from .youtube_auto import AutoYouTubeManager
@@ -647,6 +648,16 @@ def build_handler(application: StudioApplication):
                 style = normalize_caption_style(self._read_json())
                 application.db.update_project(project_id, caption_style=style)
                 self._json({"caption_style": style})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/chapter-cards", path)
+            if match:
+                project_id = match.group(1)
+                if not application.db.get_project(project_id):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                made = build_chapter_cards(
+                    application.db, application.paths, project_id, application.settings.load().ffmpeg_path,
+                )
+                self._json({"made": made})
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/captions/mode", path)
             if match:

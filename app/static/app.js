@@ -1829,6 +1829,17 @@ $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; rend
 $("#scenePageSelect").addEventListener("change", event => { state.scenePage = Number(event.target.value); renderScenes(); });
 $("#generateAllButton").addEventListener("click", () => generateScenes());
 $("#autoSourceYouTubeButton").addEventListener("click", () => autoSourceYouTube());
+$("#chapterCardsButton").addEventListener("click", async event => {
+  if (!state.current) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/projects/${state.current.id}/chapter-cards`, { method: "POST", body: "{}" });
+    await openProject(state.current.id, true);
+    toast(result.made ? `${result.made} chapter card${result.made === 1 ? "" : "s"} created` : "No headings found. Write headings in CAPS or as '2. Dessert name' on their own line.");
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
 $("#retryFailedButton").addEventListener("click", () => retryFailed().catch(error => toast(error.message, true)));
 $("#selectVisibleButton").addEventListener("click", () => { visibleScenes().forEach(scene => state.selectedSceneIds.add(scene.id)); renderScenes(); });
 $("#clearSelectionButton").addEventListener("click", () => { state.selectedSceneIds.clear(); renderScenes(); });

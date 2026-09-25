@@ -13,6 +13,7 @@ from .database import Database
 from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
+from .chapter_cards import build_chapter_cards, heading_scenes
 from .footage_match import (
     NON_FOOTAGE_TITLE, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
     scene_subjects, storyboard_frames, topic_queries,
@@ -267,10 +268,13 @@ class AutoYouTubeManager:
         completed = failed = 0
         errors: list[dict[str, Any]] = []
         review: list[int] = []
+        headings = {str(item["id"]) for item in heading_scenes(scenes)}
         try:
             for scene in scenes:
                 position = int(scene.get("position") or 0)
                 self._update(project_id, current_scene=position)
+                if str(scene["id"]) in headings:
+                    continue  # headings become chapter cards after the footage is in
                 scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
                 subject = subject_by_id.get(str(scene["id"]), topic)
                 core = core_subject(subject)
@@ -353,6 +357,11 @@ class AutoYouTubeManager:
                     failed += 1
                     errors.append({"scene": position, "error": str(error)[:500], "query": query})
                 self._update(project_id, completed=completed, failed=failed, errors=list(errors), review=list(review))
+            if headings:
+                try:
+                    completed += build_chapter_cards(self.db, self.paths, project_id, service.ffmpeg_path)
+                except Exception as error:  # cards are a finishing touch; never lose the footage
+                    errors.append({"scene": 0, "error": f"Chapter cards failed: {str(error)[:300]}", "query": ""})
         finally:
             self._update(project_id, running=False, current_scene=None, completed=completed, failed=failed, errors=errors)
             with self._lock:
