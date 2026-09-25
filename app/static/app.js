@@ -1130,7 +1130,7 @@ function renderTimeline() {
   $("#captionTrack").innerHTML = state.scenes.map(scene => {
     const width = Math.max(18, (Number(scene.end_seconds) - Number(scene.start_seconds)) * zoom);
     const left = Number(scene.start_seconds) * zoom;
-    return `<button class="caption-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" type="button" style="left:${left}px;width:${width}px" data-scene-id="${scene.id}">${escapeHtml(scene.caption_text || scene.narration)}</button>`;
+    return `<button class="caption-clip ${scene.id === state.activeTimelineSceneId ? "active" : ""}" type="button" style="left:${left}px;width:${width}px" data-scene-id="${scene.id}">${scene.caption_text ? escapeHtml(scene.caption_text) : '<span class="caption-off">·</span>'}</button>`;
   }).join("");
   const voiceDuration = voiceoverDuration();
   $("#audioTrack").innerHTML = state.current?.voiceover_path ? `<div class="audio-wave" style="left:0;width:${Math.max(18, voiceDuration * zoom)}px"></div>` : `<span class="library-help">No voice-over attached</span>`;
@@ -1250,6 +1250,22 @@ async function uploadReplacementMedia(file) {
     button.textContent = "Upload replacement";
     $("#replacementMediaInput").value = "";
   }
+}
+
+async function applyCaptionMode(mode, button) {
+  if (!state.current) return;
+  button.disabled = true;
+  try {
+    const result = await api(`/api/projects/${state.current.id}/captions/mode`, { method: "POST", body: JSON.stringify({ mode }) });
+    state.scenes = result.scenes;
+    state.captionDrafts = {};
+    state.current.caption_style = result.caption_style;
+    fillCaptionStyle();
+    renderTimeline();
+    toast(mode === "key_points"
+      ? `Key-point captions on ${result.captioned} scenes${result.source === "gemini" ? " (chosen by Gemini)" : ""}. Edit any text in the box below.`
+      : "Full subtitles restored");
+  } finally { button.disabled = false; }
 }
 
 async function saveCaptionStyle(quiet = false) {
@@ -2002,6 +2018,8 @@ $("#previewAudio").addEventListener("ended", event => {
   updatePreviewAt(Math.min(timelineDuration(), Number(event.target.duration || timelineDuration())));
 });
 $("#saveCaptionStyleButton").addEventListener("click", () => saveCaptionStyle().catch(error => toast(error.message, true)));
+$("#keyCaptionsButton").addEventListener("click", event => applyCaptionMode("key_points", event.currentTarget).catch(error => toast(error.message, true)));
+$("#fullCaptionsButton").addEventListener("click", event => applyCaptionMode("full", event.currentTarget).catch(error => toast(error.message, true)));
 $$("[data-inspector-tab]").forEach(button => button.addEventListener("click", () => showInspector(button.dataset.inspectorTab)));
 $$("[data-style-toggle]").forEach(button => button.addEventListener("click", () => {
   const key = button.dataset.styleToggle;

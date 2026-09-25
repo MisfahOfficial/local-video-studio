@@ -28,6 +28,7 @@ from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
 from .youtube_source import FAIR_USE, YouTubeSourceService, normalize_license_mode
+from .key_captions import KEY_POINT_STYLE, key_captions
 from .footage_match import auto_topic, core_subject, detect_era, scene_subjects, topic_queries
 from .youtube_auto import AutoYouTubeManager
 
@@ -646,6 +647,36 @@ def build_handler(application: StudioApplication):
                 style = normalize_caption_style(self._read_json())
                 application.db.update_project(project_id, caption_style=style)
                 self._json({"caption_style": style})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/captions/mode", path)
+            if match:
+                project_id = match.group(1)
+                project = application.db.get_project(project_id)
+                if not project:
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                mode = str(self._read_json().get("mode") or "")
+                scenes = application.db.list_scenes(project_id)
+                current = normalize_caption_style(project.get("caption_style"))
+                if mode == "key_points":
+                    settings = application.settings.load()
+                    captions, source = key_captions(scenes, settings.gemini_api_key, settings.gemini_model)
+                    texts = [captions.get(index, "") for index in range(len(scenes))]
+                    style = normalize_caption_style({**current, **KEY_POINT_STYLE})
+                elif mode == "full":
+                    source = "script"
+                    texts = [str(scene["narration"]) for scene in scenes]
+                    style = normalize_caption_style({
+                        **current, "position": "bottom", "case": "normal", "size": 54, "max_lines": 2,
+                        "words_per_line": 7, "background_enabled": True,
+                    })
+                else:
+                    raise ApiError("Caption mode must be key_points or full")
+                updated = [application.db.update_scene(str(scene["id"]), {"caption_text": text}) for scene, text in zip(scenes, texts)]
+                application.db.update_project(project_id, caption_style=style)
+                self._json({
+                    "scenes": updated, "caption_style": style, "source": source,
+                    "captioned": sum(bool(text) for text in texts),
+                })
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/generate", path)
             if match:

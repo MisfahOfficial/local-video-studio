@@ -204,7 +204,8 @@ class Database:
             scene_columns = {row[1] for row in db.execute("PRAGMA table_info(scenes)")}
             if "caption_text" not in scene_columns:
                 db.execute("ALTER TABLE scenes ADD COLUMN caption_text TEXT NOT NULL DEFAULT ''")
-            db.execute("UPDATE scenes SET caption_text = narration WHERE caption_text = ''")
+                # Only when the column is new: afterwards an empty caption means "no caption".
+                db.execute("UPDATE scenes SET caption_text = narration WHERE caption_text = ''")
             db.execute(
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?)",
                 (utc_now(),),

@@ -449,3 +449,7 @@ dialog::backdrop { background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
 .timeline-clip.drop-before { box-shadow: inset 3px 0 0 #35d8df; }
 .timeline-clip.drop-after { box-shadow: inset -3px 0 0 #35d8df; }
 body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-select: none; }
+
+.caption-mode-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+.caption-mode-row span { margin-right: auto; }
+.caption-off { opacity: .35; }
