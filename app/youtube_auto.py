@@ -5,6 +5,7 @@ import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,36 @@ REVIEW_BELOW = 0.75
 _GOOD_MATCH = 4.0
 
 
+# Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
+SCENE_WORKERS = 3
+
+
+@dataclass
+class _Run:
+    """Shared state for one sourcing run; every mutable field is guarded by `lock`."""
+
+    project_id: str
+    settings: Any
+    service: YouTubeSourceService
+    verifier: FootageVerifier | None
+    ai_queries: dict[int, list[str]]
+    topic: str
+    era: str
+    used: dict[str, list[float]]
+    subject_by_id: dict[str, str]
+    model: str
+    empty_label: str
+    max_attempts: int
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    searches: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    infos: dict[str, dict[str, Any]] = field(default_factory=dict)
+    completed: int = 0
+    failed: int = 0
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    review: list[int] = field(default_factory=list)
+    generated: list[int] = field(default_factory=list)
+
+
 class AutoYouTubeManager:
     """Background, project-wide B-roll sourcing (Creative Commons or fair-use mode)."""
 
@@ -239,16 +270,12 @@ class AutoYouTubeManager:
     def _run(self, project_id: str, scenes: list[dict[str, Any]], topic: str = "") -> None:
         settings = self.settings_store.load()
         service = YouTubeSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode)
-        model = "fair-use-auto-source" if service.fair_use else "creative-commons-auto-source"
         problems: list[str] = []
         ai_queries = gemini_footage_queries(
             scenes, settings.gemini_api_key, settings.gemini_model, problems=problems, topic=topic,
         )
         if problems:
             self._update(project_id, notice=problems[0])
-        empty_label = "YouTube" if service.fair_use else "Creative Commons"
-        # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
-        max_attempts = 4 if service.fair_use else 2
         verifier: FootageVerifier | None = None
         if ClipScorer.available():
             try:
@@ -260,131 +287,167 @@ class AutoYouTubeManager:
             if asset.get("provider") == "youtube":
                 start_time = float((asset.get("metadata") or {}).get("source_start_seconds") or 0)
                 used.setdefault(str(asset.get("provider_asset_id") or ""), []).append(start_time)
-        infos: dict[str, dict[str, Any]] = {}
         project = self.db.get_project(project_id) or {}
-        era = detect_era(str(project.get("script") or ""))
         # Subjects come from the whole plan so list sections ("POOR MAN'S COOKIES")
         # carry over to the scenes that follow the heading.
         all_scenes = self.db.list_scenes(project_id)
-        subject_by_id = dict(zip((str(item["id"]) for item in all_scenes), scene_subjects(all_scenes, topic)))
-        completed = failed = 0
-        errors: list[dict[str, Any]] = []
-        review: list[int] = []
+        run = _Run(
+            project_id=project_id, settings=settings, service=service, verifier=verifier, ai_queries=ai_queries,
+            topic=topic, era=detect_era(str(project.get("script") or "")), used=used,
+            subject_by_id=dict(zip((str(item["id"]) for item in all_scenes), scene_subjects(all_scenes, topic))),
+            model="fair-use-auto-source" if service.fair_use else "creative-commons-auto-source",
+            empty_label="YouTube" if service.fair_use else "Creative Commons",
+            # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
+            max_attempts=4 if service.fair_use else 2,
+        )
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
         try:
-            for scene in scenes:
-                position = int(scene.get("position") or 0)
-                self._update(project_id, current_scene=position)
-                if str(scene["id"]) in headings:
-                    continue  # headings become chapter cards after the footage is in
-                scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
-                subject = subject_by_id.get(str(scene["id"]), topic)
-                core = core_subject(subject)
-                own = topic_queries(scene, subject, era) or scene_search_queries(scene)
-                queries = list(dict.fromkeys(
-                    [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in ai_queries.get(position, [])]
-                    + own
-                ))
-                query = queries[0] if queries else subject
-
-                def usable(item: dict[str, Any]) -> bool:
-                    text = f"{item.get('title')} {item.get('description')}"
-                    title = str(item.get("title") or "")
-                    return (not NON_FOOTAGE_TITLE.search(title)
-                            and not looks_like_ai_slideshow(item, settings.blocked_channels)
-                            and mentions_topic(text, core))
-
-                try:
-                    pool: dict[str, dict[str, Any]] = {}
-                    for attempt in queries[:max_attempts]:
-                        for item in service.search(attempt, maximum=10):
-                            pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
-                        good = [item for item in pool.values() if usable(item)]
-                        if len(good) >= 4 and any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in good):
-                            break
-                    # Off-subject titles (buffalo calves for a musk ox film, lasagna in a
-                    # cookie section) and lyric/ASMR/podcast videos are never used.
-                    ranked = sorted(
-                        (item for item in pool.values() if usable(item)),
-                        key=lambda item: (str(item.get("video_id")) not in used, candidate_relevance(item, scene)),
-                        reverse=True,
-                    )
-                    duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
-                    if not ranked:
-                        self._fallback_still(project_id, scene, position, scene_text, subject, era, settings)
-                        completed += 1
-                        generated.append(position)
-                        self._update(project_id, completed=completed, generated=list(generated))
-                        continue
-                    choices = self._choose(
-                        service, verifier, ranked[:5], subject, scene_text, duration, used, infos, settings.blocked_channels,
-                    )
-                    if not choices:
-                        # No real footage passed: an aged period still is better than a wrong clip.
-                        self._fallback_still(project_id, scene, position, scene_text, subject, era, settings)
-                        completed += 1
-                        generated.append(position)
-                        self._update(project_id, completed=completed, generated=list(generated))
-                        continue
-                    last_error: Exception | None = None
-                    for candidate, start_time, topic_score in choices[:3]:
-                        video_id = str(candidate["video_id"])
-                        destination = (
-                            self.paths.project_dir(project_id) / "assets" / "youtube"
-                            / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4"
-                        )
-                        try:
-                            metadata = service.source_clip(
-                                video_id=video_id,
-                                query=" ".join(filter(None, [query, str(scene.get("narration") or "")])),
-                                duration=duration, destination=destination, source_start_seconds=start_time,
-                                info=infos.get(video_id),
-                            )
-                            break
-                        except Exception as error:
-                            destination.unlink(missing_ok=True)
-                            last_error = error
-                    else:
-                        raise ProviderError(str(last_error or "No downloadable result was found"))
-                    metadata.update({
-                        "auto_sourced": True,
-                        "search_query": str(candidate.get("_query") or query),
-                        "topic": subject,
-                        "relevance_score": round(candidate_relevance(candidate, scene), 3),
-                        "visual_match": None if topic_score is None else round(topic_score, 3),
-                        "needs_review": topic_score is not None and topic_score < REVIEW_BELOW,
-                    })
-                    try:
-                        logo = analyse_clip(destination, service.ffmpeg_path, verifier.grey_frames(video_id) if verifier else None)
-                    except Exception:  # logo hiding is best effort
-                        logo = {"logo_boxes": [], "safe_crop": None, "logo_hidden": True}
-                    metadata.update(logo)
-                    metadata["needs_review"] = metadata["needs_review"] or not logo["logo_hidden"]
-                    asset = self.db.add_asset(
-                        project_id=project_id, scene_id=str(scene["id"]),
-                        candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
-                        media_kind="video", provider="youtube", model=model,
-                        local_path=str(destination), remote_url=metadata["source_url"],
-                        provider_asset_id=video_id, cost=0.0, metadata=metadata,
-                    )
-                    self.db.select_asset(str(scene["id"]), str(asset["id"]))
-                    used.setdefault(video_id, []).append(float(metadata.get("source_start_seconds") or 0))
-                    completed += 1
-                    if metadata["needs_review"]:
-                        review.append(position)
-                except Exception as error:
-                    failed += 1
-                    errors.append({"scene": position, "error": str(error)[:500], "query": query})
-                self._update(project_id, completed=completed, failed=failed, errors=list(errors), review=list(review))
+            # Several scenes at once: most of the time is spent waiting on YouTube.
+            with ThreadPoolExecutor(max_workers=SCENE_WORKERS) as pool:
+                list(pool.map(lambda scene: self._source_scene(run, scene), [
+                    scene for scene in scenes if str(scene["id"]) not in headings  # headings become chapter cards
+                ]))
             if headings:
                 try:
-                    completed += build_chapter_cards(self.db, self.paths, project_id, service.ffmpeg_path)
+                    made = build_chapter_cards(self.db, self.paths, project_id, service.ffmpeg_path)
+                    with run.lock:
+                        run.completed += made
                 except Exception as error:  # cards are a finishing touch; never lose the footage
-                    errors.append({"scene": 0, "error": f"Chapter cards failed: {str(error)[:300]}", "query": ""})
+                    with run.lock:
+                        run.errors.append({"scene": 0, "error": f"Chapter cards failed: {str(error)[:300]}", "query": ""})
         finally:
-            self._update(project_id, running=False, current_scene=None, completed=completed, failed=failed, errors=errors)
+            with run.lock:
+                self._update(
+                    project_id, running=False, current_scene=None, completed=run.completed, failed=run.failed,
+                    errors=list(run.errors), review=sorted(run.review), generated=sorted(run.generated),
+                )
             with self._lock:
                 self._threads.pop(project_id, None)
+
+    def _search(self, run: "_Run", query: str) -> list[dict[str, Any]]:
+        """Searches are cached per run: scenes in one list section repeat the same queries."""
+        with run.lock:
+            if query in run.searches:
+                return run.searches[query]
+        results = run.service.search(query, maximum=10)
+        with run.lock:
+            run.searches[query] = results
+        return results
+
+    def _source_scene(self, run: "_Run", scene: dict[str, Any]) -> None:
+        position = int(scene.get("position") or 0)
+        self._update(run.project_id, current_scene=position)
+        scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
+        subject = run.subject_by_id.get(str(scene["id"]), run.topic)
+        core = core_subject(subject)
+        own = topic_queries(scene, subject, run.era) or scene_search_queries(scene)
+        queries = list(dict.fromkeys(
+            [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in run.ai_queries.get(position, [])]
+            + own
+        ))
+        query = queries[0] if queries else subject
+
+        def usable(item: dict[str, Any]) -> bool:
+            text = f"{item.get('title')} {item.get('description')}"
+            title = str(item.get("title") or "")
+            return (not NON_FOOTAGE_TITLE.search(title)
+                    and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
+                    and mentions_topic(text, core))
+
+        try:
+            pool: dict[str, dict[str, Any]] = {}
+            for attempt in queries[:run.max_attempts]:
+                for item in self._search(run, attempt):
+                    pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
+                good = [item for item in pool.values() if usable(item)]
+                if len(good) >= 4 and any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in good):
+                    break
+            # Off-subject titles (buffalo calves for a musk ox film, lasagna in a
+            # cookie section) and lyric/ASMR/podcast videos are never used.
+            with run.lock:
+                used_now = {key: list(value) for key, value in run.used.items()}
+            ranked = sorted(
+                (item for item in pool.values() if usable(item)),
+                key=lambda item: (str(item.get("video_id")) not in used_now, candidate_relevance(item, scene)),
+                reverse=True,
+            )
+            duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+            choices = self._choose(
+                run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
+                run.settings.blocked_channels,
+            ) if ranked else []
+            if not choices:
+                # No real footage passed: an aged period still is better than a wrong clip.
+                self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings)
+                with run.lock:
+                    run.completed += 1
+                    run.generated.append(position)
+                self._progress(run)
+                return
+            last_error: Exception | None = None
+            for candidate, start_time, topic_score in choices[:3]:
+                video_id = str(candidate["video_id"])
+                with run.lock:
+                    if start_time is not None and any(abs(start_time - used) < 15 for used in run.used.get(video_id, [])):
+                        continue  # another scene took this moment meanwhile
+                    run.used.setdefault(video_id, []).append(float(start_time or 0))
+                destination = (
+                    self.paths.project_dir(run.project_id) / "assets" / "youtube"
+                    / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4"
+                )
+                try:
+                    metadata = run.service.source_clip(
+                        video_id=video_id,
+                        query=" ".join(filter(None, [query, str(scene.get("narration") or "")])),
+                        duration=duration, destination=destination, source_start_seconds=start_time,
+                        info=run.infos.get(video_id),
+                    )
+                    break
+                except Exception as error:
+                    destination.unlink(missing_ok=True)
+                    last_error = error
+            else:
+                raise ProviderError(str(last_error or "No downloadable result was found"))
+            metadata.update({
+                "auto_sourced": True,
+                "search_query": str(candidate.get("_query") or query),
+                "topic": subject,
+                "relevance_score": round(candidate_relevance(candidate, scene), 3),
+                "visual_match": None if topic_score is None else round(topic_score, 3),
+                "needs_review": topic_score is not None and topic_score < REVIEW_BELOW,
+            })
+            try:
+                logo = analyse_clip(
+                    destination, run.service.ffmpeg_path, run.verifier.grey_frames(video_id) if run.verifier else None,
+                )
+            except Exception:  # logo hiding is best effort
+                logo = {"logo_boxes": [], "safe_crop": None, "logo_hidden": True}
+            metadata.update(logo)
+            metadata["needs_review"] = metadata["needs_review"] or not logo["logo_hidden"]
+            asset = self.db.add_asset(
+                project_id=run.project_id, scene_id=str(scene["id"]),
+                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                media_kind="video", provider="youtube", model=run.model,
+                local_path=str(destination), remote_url=metadata["source_url"],
+                provider_asset_id=video_id, cost=0.0, metadata=metadata,
+            )
+            self.db.select_asset(str(scene["id"]), str(asset["id"]))
+            with run.lock:
+                run.completed += 1
+                if metadata["needs_review"]:
+                    run.review.append(position)
+        except Exception as error:
+            with run.lock:
+                run.failed += 1
+                run.errors.append({"scene": position, "error": str(error)[:500], "query": query})
+        self._progress(run)
+
+    def _progress(self, run: "_Run") -> None:
+        with run.lock:
+            self._update(
+                run.project_id, completed=run.completed, failed=run.failed, errors=list(run.errors),
+                review=sorted(run.review), generated=sorted(run.generated),
+            )
 
     def _fallback_still(
         self, project_id: str, scene: dict[str, Any], position: int, scene_text: str, subject: str, era: str,

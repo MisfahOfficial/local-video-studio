@@ -72,6 +72,22 @@ def best_caption_timestamp(events: list[dict[str, Any]], query: str, duration: f
     return max(0.0, best_start - 0.8) if best_score > 0 else 0.0
 
 
+def pick_video_stream(info: dict[str, Any]) -> dict[str, Any] | None:
+    """Best progressive-download video stream up to 1080p (H.264 preferred), or None."""
+    streams = [
+        item for item in info.get("formats") or []
+        if item.get("url") and item.get("vcodec") not in (None, "none")
+        and str(item.get("protocol") or "") in {"https", "http"}
+        and 0 < int(item.get("height") or 0) <= 1080
+    ]
+    if not streams:
+        return None
+    return max(streams, key=lambda item: (
+        str(item.get("vcodec") or "").startswith("avc1"), int(item.get("height") or 0),
+        item.get("acodec") in (None, "none"),
+    ))
+
+
 def ytdlp_search_result(entry: Any) -> dict[str, Any] | None:
     """Convert one flat yt-dlp search entry to the API result shape; skip lives and invalid ids."""
     if not isinstance(entry, dict):
@@ -251,6 +267,10 @@ class YouTubeSourceService:
             start = min(max(0.0, start), max(0.0, source_duration - duration))
         end = start + duration
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # Fast path: cut straight from the stream URL already in `info`, instead of
+        # letting yt-dlp re-extract the whole page (the slowest step of sourcing).
+        if self._direct_excerpt(info, start, duration, destination):
+            return self._clip_metadata(video_id, url, info, license_name, start, end, source_start_seconds)
         command = [
             sys.executable, "-m", "yt_dlp", url,
             "--no-playlist", "--download-sections", f"*{start:.3f}-{end:.3f}",
@@ -267,6 +287,35 @@ class YouTubeSourceService:
         if result.returncode or not destination.is_file() or destination.stat().st_size == 0:
             detail = (result.stderr or result.stdout or "yt-dlp did not create a clip")[-700:]
             raise ProviderError(f"Could not download the YouTube excerpt: {detail}")
+        return self._clip_metadata(video_id, url, info, license_name, start, end, source_start_seconds)
+
+    def _direct_excerpt(self, info: dict[str, Any], start: float, duration: float, destination: Path) -> bool:
+        stream = pick_video_stream(info)
+        if not stream:
+            return False
+        headers = "".join(f"{key}: {value}\r\n" for key, value in (stream.get("http_headers") or {}).items())
+        command = [self.ffmpeg_path, "-y", "-v", "error"]
+        if headers:
+            command += ["-headers", headers]
+        command += [
+            "-ss", f"{start:.3f}", "-i", str(stream["url"]), "-t", f"{duration:.3f}", "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(destination),
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=180)
+        except (OSError, subprocess.TimeoutExpired):
+            destination.unlink(missing_ok=True)
+            return False
+        if result.returncode or not destination.is_file() or destination.stat().st_size < 1000:
+            destination.unlink(missing_ok=True)
+            return False
+        return True
+
+    def _clip_metadata(
+        self, video_id: str, url: str, info: dict[str, Any], license_name: str, start: float, end: float,
+        source_start_seconds: float | None,
+    ) -> dict[str, Any]:
         return {
             "video_id": video_id,
             "source_url": url,

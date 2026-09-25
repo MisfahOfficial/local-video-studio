@@ -55,6 +55,10 @@ stored on the local machine.
 
 Version 0.7.2 editing upgrades:
 
+- **Faster sourcing.** Three scenes are sourced at once, searches are cached for the
+  run, candidate metadata and storyboards load in parallel, and excerpts are cut
+  straight from the stream URL with FFmpeg (yt-dlp is only a fallback). A 20-scene
+  test went from about 14 minutes to about 2.
 - **Real footage first.** Auto-source skips AI-slideshow sources: your own channels and
   any listed in **Settings > Never use footage from**, nostalgia narrator channels,
   titles that pair an era with a nostalgia hook ("FORGOTTEN Objects in EVERY 1950s

@@ -345,7 +345,7 @@ class ClipScorer:
         return tuple(f"a {name}" for name in ranked[:count])
 
 
-def storyboard_frames(info: dict[str, Any], max_frames: int = 120) -> list[tuple[float, Any]]:
+def storyboard_frames(info: dict[str, Any], max_frames: int = 80) -> list[tuple[float, Any]]:
     """Return (timestamp, PIL image) tiles from YouTube's storyboard sprites."""
     from PIL import Image
 
@@ -418,11 +418,17 @@ class FootageVerifier:
         self._lookalikes: dict[str, tuple[str, ...]] = {}
         self._grey: dict[str, Any] = {}
         self._synthetic: dict[str, float] = {}
+        # One model on one GPU: scene threads take turns.
+        self.lock = threading.RLock()
 
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames
 
     def add_frames(self, video_id: str, tiles: list[tuple[float, Any]]) -> None:
+        with self.lock:
+            self._add_frames(video_id, tiles)
+
+    def _add_frames(self, video_id: str, tiles: list[tuple[float, Any]]) -> None:
         from .logo_guard import storyboard_stack
 
         self._frames[video_id] = ([time for time, _image in tiles], self.scorer.embed_images([image for _time, image in tiles]))
@@ -443,6 +449,10 @@ class FootageVerifier:
 
     def synthetic_score(self, video_id: str) -> float:
         """How much the whole source looks like AI art rather than camera footage (0-1)."""
+        with self.lock:
+            return self._synthetic_score(video_id)
+
+    def _synthetic_score(self, video_id: str) -> float:
         if video_id not in self._synthetic:
             _times, features = self._frames.get(video_id, ([], []))
             if len(features):
@@ -474,6 +484,13 @@ class FootageVerifier:
         avoid: list[float] | None = None,
     ) -> tuple[float, float, float] | None:
         """Return (start, subject_score, scene_score) for the best unused window, or None."""
+        with self.lock:
+            return self._best_moment(video_id, info, subject, scene_text, clip_duration, avoid)
+
+    def _best_moment(
+        self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
+        avoid: list[float] | None = None,
+    ) -> tuple[float, float, float] | None:
         times, features = self._video_frames(video_id, info)
         if not times:
             return None
