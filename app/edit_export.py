@@ -189,6 +189,21 @@ def write_capcut_draft(
         suffix += 1
     folder.mkdir(parents=True)
 
+    # CapCut is sandboxed to ~/Movies, so media outside it shows as offline:
+    # keep a copy of every clip and the voice-over inside the draft folder.
+    media_dir = folder / "Resources" / "local_media"
+    media_dir.mkdir(parents=True)
+    local: list[tuple[Path, float, float]] = []
+    for file, start, end in clips:
+        target = media_dir / file.name
+        shutil.copy2(file, target)
+        local.append((target, start, end))
+    clips = local
+    if voiceover is not None:
+        target = media_dir / voiceover.name
+        shutil.copy2(voiceover, target)
+        voiceover = target
+
     draft = copy.deepcopy(template["draft"])
     materials: dict[str, list[Any]] = {key: [] for key in draft["materials"]}
     total = max([end for _file, _start, end in clips] + [vo_duration])

@@ -52,7 +52,10 @@ class EditExportTests(unittest.TestCase):
         videos = draft["tracks"][0]["segments"]
         self.assertEqual([segment["target_timerange"]["start"] for segment in videos], [0, 4_200_000, 10_000_000])
         paths = {item["path"] for item in draft["materials"]["videos"]}
-        self.assertEqual(paths, {str(path.resolve()) for path, _start, _end in self.clips})
+        # Media is copied inside the draft folder because CapCut is sandboxed to ~/Movies.
+        self.assertEqual(paths, {str((folder / "Resources" / "local_media" / path.name).resolve()) for path, _s, _e in self.clips})
+        self.assertTrue(all(Path(path).is_file() for path in paths))
+        self.assertTrue(draft["materials"]["audios"][0]["path"].startswith(str(folder.resolve())))
         text = json.loads(draft["materials"]["texts"][0]["content"])
         self.assertEqual(text["text"], "HOW DID ONE DOLLAR")
         index = json.loads((drafts / "root_meta_info.json").read_text())
