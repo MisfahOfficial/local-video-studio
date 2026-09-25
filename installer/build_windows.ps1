@@ -6,11 +6,12 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw "Python 3.11 or newer is required."
 }
 
-python -m pip install --upgrade pyinstaller certifi
+python -m pip install --upgrade pyinstaller certifi yt-dlp
 python -m PyInstaller `
     --noconfirm `
     --clean `
     --name LocalVideoStudio `
+    --collect-all yt_dlp `
     --add-data "app/static;app/static" `
     run.py
 

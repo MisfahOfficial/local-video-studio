@@ -109,7 +109,7 @@ async function boot() {
     state.fonts = fontData.fonts || [];
     $("#healthBadge").textContent = health.ffmpeg ? "Local engine ready" : "FFmpeg missing";
     $("#healthBadge").classList.toggle("ok", health.ffmpeg);
-    $("#appVersion").textContent = `v${health.version || "0.6.9"}`;
+    $("#appVersion").textContent = `v${health.version || "0.7.0"}`;
     fillThemeOptions();
     fillEmotionFilter();
     $("#bulkMotion").insertAdjacentHTML("beforeend", state.motions.map(item => `<option value="${item}">${item.replaceAll("_", " ")}</option>`).join(""));
@@ -325,12 +325,17 @@ function renderScenes() {
 
 function sceneCard(scene) {
   const assets = assetsForScene(scene.id);
-  const assetHtml = assets.length ? assets.map(asset => `
+  const assetHtml = assets.length ? assets.map(asset => {
+    const visual = asset.media_kind === "video"
+      ? `<video src="${escapeHtml(asset.media_url)}" muted preload="metadata"></video>`
+      : `<img src="${escapeHtml(asset.media_url)}" alt="Candidate ${Number(asset.candidate_index) + 1} for scene ${scene.position}">`;
+    return `
     <div class="asset ${scene.selected_asset_id === asset.id ? "selected" : ""}">
-      <img src="${escapeHtml(asset.media_url)}" alt="Candidate ${Number(asset.candidate_index) + 1} for scene ${scene.position}">
+      ${visual}
       <button type="button" data-action="select-asset" data-scene-id="${scene.id}" data-asset-id="${asset.id}" aria-label="Select this candidate"></button>
       <span class="asset-label">${escapeHtml(asset.provider)} · ${money(asset.cost)}</span>
-    </div>`).join("") : `<div class="asset-empty">No image generated yet</div>`;
+    </div>`;
+  }).join("") : `<div class="asset-empty">No visual generated or sourced yet</div>`;
   const motion = (scene.timeline_actions || []).find(action => action.type === "motion")?.params?.preset || "slow_push";
   return `<article class="scene-card" data-scene-id="${scene.id}">
     <header class="scene-card-head"><div class="meta"><input class="scene-selector" type="checkbox" data-action="select-scene" aria-label="Select scene ${scene.position}" ${state.selectedSceneIds.has(scene.id) ? "checked" : ""}><strong>Scene ${scene.position}</strong><span class="badge">${escapeHtml(scene.emotion)}</span><span class="badge">${escapeHtml(scene.narrative_role)}</span><span class="time">${clock(scene.start_seconds)} → ${clock(scene.end_seconds)}</span></div><span class="badge">${scene.candidate_count} option${scene.candidate_count === 1 ? "" : "s"}</span></header>
@@ -342,7 +347,7 @@ function sceneCard(scene) {
           <label>Options<select data-field="candidate_count"><option value="1" ${scene.candidate_count === 1 ? "selected" : ""}>1</option><option value="2" ${scene.candidate_count === 2 ? "selected" : ""}>2</option><option value="3" ${scene.candidate_count === 3 ? "selected" : ""}>3</option></select></label>
           <label>Motion<select data-field="motion">${state.motions.map(item => `<option value="${item}" ${motion === item ? "selected" : ""}>${item.replaceAll("_", " ")}</option>`).join("")}</select></label>
         </div>
-        <div class="scene-buttons"><button class="button ghost small" data-action="save-scene" type="button">Save changes</button><button class="button primary small" data-action="generate-scene" type="button">Generate options</button></div>
+        <div class="scene-buttons"><button class="button youtube-source small" data-action="source-youtube" type="button">▶ Source YouTube</button><button class="button ghost small" data-action="save-scene" type="button">Save changes</button><button class="button primary small" data-action="generate-scene" type="button">Generate options</button></div>
       </div><div class="asset-grid">${assetHtml}</div>
     </div></article>`;
 }
@@ -904,8 +909,90 @@ function renderMediaBin() {
     const visual = asset.media_kind === "video"
       ? `<video src="${escapeHtml(asset.media_url)}" muted preload="metadata"></video>`
       : `<img src="${escapeHtml(asset.media_url)}" alt="" loading="lazy">`;
-    return `<button class="media-bin-card ${asset.id === scene?.selected_asset_id ? "active" : ""}" type="button" data-asset-id="${asset.id}" data-scene-id="${scene.id}">${visual}<span>${escapeHtml(asset.provider)} · option ${Number(asset.candidate_index) + 1}</span></button>`;
+    const sourceLabel = asset.provider === "youtube"
+      ? `YouTube · ${asset.metadata?.channel || "source"}`
+      : `${asset.provider} · option ${Number(asset.candidate_index) + 1}`;
+    const sourceTitle = asset.metadata?.title || sourceLabel;
+    return `<button class="media-bin-card ${asset.id === scene?.selected_asset_id ? "active" : ""}" type="button" data-asset-id="${asset.id}" data-scene-id="${scene.id}" title="${escapeHtml(sourceTitle)}">${visual}<span>${escapeHtml(sourceLabel)}</span></button>`;
   }).join("") || `<p class="library-help">No media for this scene yet. Use Import or generate an image from Visual plan.</p>`;
+  const selected = assets.find(asset => asset.id === scene?.selected_asset_id);
+  $("#libraryHelp").innerHTML = selected?.provider === "youtube"
+    ? `Source: <a href="${escapeHtml(selected.remote_url)}" target="_blank" rel="noopener">${escapeHtml(selected.metadata?.title || "YouTube video")}</a><br>${escapeHtml(selected.metadata?.channel || "Unknown channel")} · ${escapeHtml(selected.metadata?.license || "Creative Commons")} · ${clock(selected.metadata?.source_start_seconds || 0)}`
+    : "Select a scene, then import media or search Creative Commons YouTube clips. Every source remains attached to its scene.";
+}
+
+function activeYouTubeScene() {
+  return state.scenes.find(item => item.id === state.activeTimelineSceneId) || null;
+}
+
+function openYouTubeDialog() {
+  const scene = activeYouTubeScene();
+  if (!scene) return toast("Select a timeline scene before sourcing footage", true);
+  if (!state.settings.youtube_api_key_set) {
+    toast("Add your YouTube Data API key in Settings first", true);
+    fillSettings();
+    $("#settingsDialog").showModal();
+    return;
+  }
+  $("#youtubeQuery").value = scene.visual_subject || scene.narration || "";
+  $("#youtubeSceneContext").textContent = `Scene ${scene.position} · ${clock(scene.start_seconds)}–${clock(scene.end_seconds)} · ${scene.narration}`;
+  $("#youtubeResults").innerHTML = `<p class="library-help">Search Creative Commons videos for this voice-over scene.</p>`;
+  $("#youtubeDialog").showModal();
+}
+
+function renderYouTubeResults(results) {
+  $("#youtubeResults").innerHTML = results.map(item => `<article class="youtube-result">
+    <img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy">
+    <div class="youtube-result-copy">
+      <strong>${escapeHtml(item.title)}</strong>
+      <small>${escapeHtml(item.channel)} · ${clock(item.duration_seconds)} · Creative Commons</small>
+      <div class="youtube-result-actions">
+        <label>Start time (optional)<input type="number" min="0" step="0.1" placeholder="Auto from captions" data-youtube-start="${item.video_id}"></label>
+        <a href="${escapeHtml(item.watch_url)}" target="_blank" rel="noopener">Review</a>
+        <button class="button primary small" type="button" data-source-youtube="${item.video_id}">Use clip</button>
+      </div>
+    </div>
+  </article>`).join("") || `<p class="library-help">No Creative Commons videos matched. Try a shorter or more visual search.</p>`;
+}
+
+async function searchYouTube(event) {
+  event.preventDefault();
+  const scene = activeYouTubeScene();
+  if (!scene) throw new Error("Select a timeline scene first");
+  const query = $("#youtubeQuery").value.trim();
+  if (!query) throw new Error("Describe the footage you want to find");
+  const button = $("#youtubeSearchButton");
+  button.disabled = true;
+  button.textContent = "Searching…";
+  $("#youtubeResults").innerHTML = `<p class="library-help">Searching Creative Commons YouTube videos…</p>`;
+  try {
+    const result = await api(`/api/youtube/search?scene_id=${encodeURIComponent(scene.id)}&q=${encodeURIComponent(query)}`);
+    renderYouTubeResults(result.results || []);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Search";
+  }
+}
+
+async function sourceYouTubeClip(videoId, button) {
+  const scene = activeYouTubeScene();
+  if (!scene) throw new Error("Select a timeline scene first");
+  const startInput = $(`[data-youtube-start="${videoId}"]`);
+  const body = { video_id: videoId };
+  if (startInput?.value !== "") body.source_start_seconds = Number(startInput.value);
+  button.disabled = true;
+  button.textContent = "Matching & downloading…";
+  try {
+    const result = await api(`/api/scenes/${scene.id}/youtube-source`, { method: "POST", body: JSON.stringify(body) });
+    await openProject(state.current.id, true);
+    activateTab("timeline");
+    $("#youtubeDialog").close();
+    const source = result.source || {};
+    toast(`YouTube clip added at ${clock(source.source_start_seconds || 0)} for scene ${scene.position}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Use clip";
+  }
 }
 
 function rulerStep(zoom) {
@@ -1531,7 +1618,7 @@ function fillSettings() {
   $("#concurrencyInput").value = state.settings.generation_concurrency || 4;
   $("#unitCostInput").value = state.settings.estimated_unit_cost ?? 0.0013;
   $("#budgetInput").value = state.settings.max_project_cost || 3;
-  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"}`;
+  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"}`;
 }
 
 async function saveSettings(event) {
@@ -1546,10 +1633,11 @@ async function saveSettings(event) {
   if ($("#runwareKey").value) body.runware_api_key = $("#runwareKey").value;
   if ($("#togetherKey").value) body.together_api_key = $("#togetherKey").value;
   if ($("#geminiKey").value) body.gemini_api_key = $("#geminiKey").value;
+  if ($("#youtubeKey").value) body.youtube_api_key = $("#youtubeKey").value;
   try {
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
     $("#settingsDialog").close();
-    $$("#runwareKey,#togetherKey,#geminiKey").forEach(input => input.value = "");
+    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey").forEach(input => input.value = "");
     fillSettings(); toast("Settings saved locally");
   } catch (error) { toast(error.message, true); }
 }
@@ -1559,6 +1647,12 @@ $("#emptyCreateButton").addEventListener("click", showNewProject);
 $("#newProjectForm").addEventListener("submit", createProject);
 $("#settingsButton").addEventListener("click", () => { fillSettings(); $("#settingsDialog").showModal(); });
 $("#settingsForm").addEventListener("submit", saveSettings);
+$("#youtubeSourceButton").addEventListener("click", openYouTubeDialog);
+$("#youtubeSearchForm").addEventListener("submit", event => searchYouTube(event).catch(error => toast(error.message, true)));
+$("#youtubeResults").addEventListener("click", event => {
+  const button = event.target.closest("[data-source-youtube]");
+  if (button) sourceYouTubeClip(button.dataset.sourceYoutube, button).catch(error => toast(error.message, true));
+});
 $$('[data-close-dialog]').forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
 $("#projectList").addEventListener("click", event => { const button = event.target.closest("[data-project-id]"); if (button) openProject(button.dataset.projectId).catch(error => toast(error.message, true)); });
 $$(".tab[data-tab]").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
@@ -1580,6 +1674,13 @@ $("#resumeGenerationButton").addEventListener("click", async () => { await api(`
 $("#sceneList").addEventListener("click", async event => {
   const action = event.target.closest("[data-action]"); if (!action) return;
   const card = action.closest(".scene-card");
+  if (action.dataset.action === "source-youtube") {
+    state.activeTimelineSceneId = card.dataset.sceneId;
+    const matchingClip = state.timelineClips.find(clip => clip.scene_id === card.dataset.sceneId);
+    if (matchingClip) state.activeTimelineClipId = matchingClip.id;
+    openYouTubeDialog();
+    return;
+  }
   try {
     if (action.dataset.action === "save-scene") await saveScene(card);
     if (action.dataset.action === "generate-scene") { const updated = await saveScene(card, true); await generateScenes([updated.id], true); }

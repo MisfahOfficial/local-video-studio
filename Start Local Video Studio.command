@@ -12,9 +12,9 @@ fi
 
 source .venv/bin/activate
 
-if ! python -c "import certifi" >/dev/null 2>&1; then
-  echo "Installing secure certificate support..."
-  python -m pip install --disable-pip-version-check --quiet "certifi>=2024.8.30"
+if ! python -c "import certifi, yt_dlp" >/dev/null 2>&1; then
+  echo "Installing secure certificate and YouTube sourcing support..."
+  python -m pip install --disable-pip-version-check --quiet "certifi>=2024.8.30" "yt-dlp>=2025.1.15"
 fi
 
 echo "Starting Local Video Studio..."

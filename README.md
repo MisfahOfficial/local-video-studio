@@ -1,4 +1,4 @@
-# Local Video Studio v0.6.9
+# Local Video Studio v0.7.0
 
 Local Video Studio turns a script and an existing voice-over into a scene plan,
 bulk-generated images, an editable timeline, captions, and an exported MP4. The
@@ -31,6 +31,7 @@ Extra candidates and premium models are opt-in on individual scenes.
 - Smooth frame timecode, a full-width draggable seek bar, buffering state, and loaded-audio progress
 - Per-clip duration/source trim plus per-scene caption, motion, fade, and cut controls
 - Local replacement image/video uploads with automatic scene selection
+- Voice-over-scene YouTube search restricted to Creative Commons results, optional caption-based timestamp matching, excerpt-only download, source attribution, and direct timeline placement
 - Advanced caption font, pattern, case, alignment, spacing, transform, blend, stroke, background, glow, shadow, and presets
 - TTF/OTF font installation from a file or a protected direct Google Fonts/GitHub download
 - Local FFmpeg rendering, voice-over muxing, and optional styled burned captions
@@ -51,6 +52,16 @@ python run.py
 The application opens at `http://127.0.0.1:8765`. Open **Settings** and add a
 Runware key only when you are ready for paid generations. Keys and projects are
 stored on the local machine.
+
+Version 0.7.0 adds **Source from YouTube** beside local media import. Add a YouTube
+Data API key in Settings, select a VO-synchronized scene in Timeline, and search
+from its visual subject or narration. Results are restricted to videos marked
+Creative Commons by YouTube. Review the source, optionally enter an exact source
+time, then choose **Use clip**. When the start field is blank, the app tries to
+match the scene words against available English captions. It downloads only the
+scene-length excerpt, selects it for that scene, and records the original URL,
+channel, licence, and source timestamp in the media bin. Search and licence
+metadata come from YouTube; `yt-dlp` performs the local excerpt download.
 
 Version 0.6.9 makes captions directly draggable in the player and saves the new
 position to the project. Caption and visual tracks now have show/hide controls,
@@ -144,6 +155,20 @@ The command accepts `--data-dir`, `--host`, `--port`, and `--no-browser`.
    burning can be disabled to produce a clean video;
    `captions.srt` is always written in the project folder. Use **Open output
    folder** or **Open rendered video** when the render completes.
+
+## YouTube source clips
+
+1. Create a YouTube Data API v3 key in Google Cloud and paste it into **Settings → YouTube Data API key**.
+2. In Timeline, select the VO scene that needs real footage and click **Source from YouTube**.
+3. Search using the scene's prepared visual subject, or edit the search phrase.
+4. Open **Review** to verify the footage and licence. Leave **Start time** blank for caption matching, or enter the exact source time in seconds.
+5. Click **Use clip**. The downloaded excerpt automatically matches the scene's timeline duration and replaces that scene's selected visual.
+
+Only results whose YouTube status is Creative Commons are returned and the licence
+is checked again during import. You are still responsible for verifying that the
+uploader owns the footage and that your use follows the licence, attribution terms,
+and local law. Videos without a usable stream, regional access, or current Creative
+Commons status are rejected. Keep `yt-dlp` updated if YouTube changes playback.
 
 At 715 images, each scene averages about 12.5 seconds. Image cost is exactly
 `715 × the chosen model's current per-image price` when every scene uses one

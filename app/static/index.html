@@ -148,8 +148,9 @@
               <div class="editor-panel-head"><strong id="libraryTitle">Media</strong><button class="icon-button tiny" id="libraryImportButton" type="button">+</button></div>
               <div class="library-tabs"><button class="active" type="button">Project</button><button type="button">Local</button></div>
               <button class="button ghost full compact" id="libraryUploadButton" type="button">Import for selected scene</button>
+              <button class="button youtube-source full compact" id="youtubeSourceButton" type="button">▶ Source from YouTube</button>
               <div class="media-bin" id="mediaBin"></div>
-              <div class="library-help" id="libraryHelp">Select a scene, then import an image or video. Generated options remain available here.</div>
+              <div class="library-help" id="libraryHelp">Select a scene, then import media or search Creative Commons YouTube clips. Every source remains attached to its scene.</div>
             </aside>
 
             <section class="player-panel">
@@ -282,6 +283,7 @@
         <label>Runware API key<input id="runwareKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key"></label>
         <label>Together backup key<input id="togetherKey" type="password" autocomplete="off" placeholder="Optional fallback"></label>
         <label>Gemini planning key<input id="geminiKey" type="password" autocomplete="off" placeholder="Optional smart planning"></label>
+        <label>YouTube Data API key<input id="youtubeKey" type="password" autocomplete="off" placeholder="For Creative Commons video search"></label>
         <label>Runware default model<input id="runwareModel"></label>
         <label>Runware precise model<input id="preciseModel"></label>
         <label>Runware premium model<input id="premiumModel"></label>
@@ -291,6 +293,16 @@
       </div>
       <p class="settings-note" id="keyStatus"></p>
       <div class="dialog-actions"><button class="button ghost" type="button" data-close-dialog>Cancel</button><button class="button primary" id="saveSettingsButton" value="default">Save settings</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="youtubeDialog" class="youtube-dialog">
+    <form method="dialog" id="youtubeSearchForm">
+      <div class="dialog-head"><div><span class="eyebrow">Licensed source footage</span><h2>Source a YouTube clip</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close">×</button></div>
+      <p class="section-copy" id="youtubeSceneContext">Select a scene to search from its voice-over direction.</p>
+      <div class="youtube-search-row"><input id="youtubeQuery" maxlength="240" placeholder="Describe the footage needed"><button class="button primary" id="youtubeSearchButton" type="submit">Search</button></div>
+      <p class="settings-note">Search is restricted to videos marked Creative Commons by YouTube. Check the source before publishing; the tool records the video, channel, licence and exact excerpt time.</p>
+      <div id="youtubeResults" class="youtube-results"><p class="library-help">Search results will appear here.</p></div>
     </form>
   </dialog>
 

@@ -322,7 +322,16 @@ class FFmpegRenderer:
         else:
             command += ["-an"]
         command += ["-movflags", "+faststart", str(output)]
-        self._run(command)
+        try:
+            self._run(command)
+        except RuntimeError:
+            if encoder == "libx264":
+                raise
+            # Hardware encoders can be advertised but unavailable in remote,
+            # virtualized, or busy desktop sessions. Retry the clip in software.
+            fallback = ["libx264" if item == encoder else item for item in command]
+            fallback[-1:-1] = ["-preset", "veryfast", "-crf", "20"]
+            self._run(fallback)
         if progress:
             progress(1.0)
         return output
@@ -346,7 +355,14 @@ class FFmpegRenderer:
         if encoder == "libx264":
             command += ["-preset", "veryfast", "-crf", "20"]
         command += ["-an", str(destination)]
-        self._run(command)
+        try:
+            self._run(command)
+        except RuntimeError:
+            if encoder == "libx264":
+                raise
+            fallback = ["libx264" if item == encoder else item for item in command]
+            fallback[-2:-2] = ["-preset", "veryfast", "-crf", "20"]
+            self._run(fallback)
 
     def _choose_encoder(self) -> str:
         try:

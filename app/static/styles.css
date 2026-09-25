@@ -128,7 +128,7 @@ input[type="file"] { padding: 8px; }
 .asset-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
 .asset { position: relative; border: 2px solid transparent; border-radius: 9px; overflow: hidden; background: var(--surface-3); aspect-ratio: 16/9; }
 .asset.selected { border-color: var(--accent); }
-.asset img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.asset img, .asset video { width: 100%; height: 100%; display: block; object-fit: cover; }
 .asset button { position: absolute; inset: 0; width: 100%; border: 0; background: transparent; }
 .asset .asset-label { position: absolute; left: 6px; bottom: 6px; padding: 3px 6px; border-radius: 5px; background: rgba(0,0,0,.68); color: white; font-size: 10px; pointer-events: none; }
 .asset-empty { min-height: 120px; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); text-align: center; padding: 18px; }
@@ -210,12 +210,30 @@ body.editor-mode .studio-editor.active { display: flex; flex-direction: column; 
 .library-tabs button, .subtabs button, .inspector-tabs button { flex: 1; padding: 7px 5px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 11px; }
 .library-tabs button.active, .subtabs button.active, .inspector-tabs button.active { color: var(--text); background: #30353d; }
 .button.compact { margin-top: 10px; padding: 8px; font-size: 11px; }
+.button.youtube-source { margin-top: 7px; border-color: rgba(255,78,78,.45); color: #ff8f8f; background: rgba(255,52,52,.08); }
+.button.youtube-source:hover { border-color: #ff5d5d; background: rgba(255,52,52,.15); }
 .media-bin { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 12px; }
 .media-bin-card { position: relative; overflow: hidden; aspect-ratio: 16/10; padding: 0; border: 1px solid var(--border); border-radius: 7px; background: #090b0f; color: var(--text); }
 .media-bin-card img, .media-bin-card video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .media-bin-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .media-bin-card span { position: absolute; inset: auto 4px 4px; padding: 2px 4px; overflow: hidden; border-radius: 4px; background: rgba(0,0,0,.74); white-space: nowrap; text-overflow: ellipsis; font-size: 9px; }
 .library-help { margin-top: 12px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+
+.youtube-dialog { width: min(980px, 94vw); }
+.youtube-dialog form { min-width: 0; }
+.youtube-search-row { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
+.youtube-search-row input { margin: 0; }
+.youtube-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-height: 58vh; margin-top: 15px; overflow-y: auto; }
+.youtube-result { display: grid; grid-template-columns: 170px 1fr; gap: 11px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.youtube-result img { width: 170px; aspect-ratio: 16/9; border-radius: 7px; object-fit: cover; background: #05070a; }
+.youtube-result-copy { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.youtube-result-copy strong { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.youtube-result-copy small { color: var(--muted); }
+.youtube-result-actions { display: flex; align-items: end; gap: 7px; margin-top: auto; }
+.youtube-result-actions label { flex: 1; color: var(--muted); font-size: 10px; }
+.youtube-result-actions input { margin-top: 3px; padding: 7px; }
+.youtube-result-actions a { color: #8fd5ff; font-size: 11px; }
+@media (max-width: 800px) { .youtube-results { grid-template-columns: 1fr; } }
 
 .player-panel { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: #101318; }
 .player-title { height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #222934; color: #d9dee5; font-size: 11px; }

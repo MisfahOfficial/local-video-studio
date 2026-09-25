@@ -26,6 +26,7 @@ from .providers.base import ProviderError
 from .themes import get_theme, list_themes
 from .timeline import RenderManager, build_default_motion_registry
 from .transcription import probe_duration
+from .youtube_source import YouTubeSourceService
 
 
 DEFAULT_CAPTION_STYLE = {
@@ -473,6 +474,23 @@ def build_handler(application: StudioApplication):
             if match:
                 self._json({"assets": application.asset_payloads(match.group(1))})
                 return
+            if path == "/api/youtube/search":
+                query_values = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                scene_id = str(query_values.get("scene_id", [""])[0])
+                scene = application.db.get_scene(scene_id)
+                if not scene:
+                    raise ApiError("Select a timeline scene before searching YouTube", HTTPStatus.NOT_FOUND)
+                query = str(query_values.get("q", [""])[0]).strip() or str(scene.get("visual_subject") or scene.get("narration") or "")
+                service = YouTubeSourceService(
+                    application.settings.load().youtube_api_key,
+                    application.settings.load().ffmpeg_path,
+                )
+                try:
+                    results = service.search(query)
+                except ProviderError as error:
+                    raise ApiError(str(error)) from error
+                self._json({"query": query, "results": results})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/generation-status", path)
             if match:
                 project_id = match.group(1)
@@ -792,6 +810,49 @@ def build_handler(application: StudioApplication):
                     item for item in application.asset_payloads(str(scene["project_id"])) if item["id"] == asset["id"]
                 )
                 self._json({"asset": payload, "scene": selected_scene}, HTTPStatus.CREATED)
+                return
+            match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/youtube-source", path)
+            if match:
+                scene = application.db.get_scene(match.group(1))
+                if not scene:
+                    raise ApiError("Scene not found", HTTPStatus.NOT_FOUND)
+                body = self._read_json()
+                video_id = str(body.get("video_id") or "")
+                supplied_start = body.get("source_start_seconds")
+                try:
+                    source_start = None if supplied_start is None or supplied_start == "" else float(supplied_start)
+                except (TypeError, ValueError) as error:
+                    raise ApiError("Source start must be a number of seconds") from error
+                duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+                destination = (
+                    application.paths.project_dir(str(scene["project_id"])) / "assets" / "youtube"
+                    / f"scene-{int(scene['position']):04d}-{uuid.uuid4().hex[:10]}.mp4"
+                )
+                service = YouTubeSourceService(
+                    application.settings.load().youtube_api_key,
+                    application.settings.load().ffmpeg_path,
+                )
+                query = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
+                try:
+                    metadata = service.source_clip(
+                        video_id=video_id, query=query, duration=duration, destination=destination,
+                        source_start_seconds=source_start,
+                    )
+                except ProviderError as error:
+                    destination.unlink(missing_ok=True)
+                    raise ApiError(str(error)) from error
+                asset = application.db.add_asset(
+                    project_id=str(scene["project_id"]), scene_id=str(scene["id"]),
+                    candidate_index=application.db.next_asset_candidate_index(str(scene["id"])),
+                    media_kind="video", provider="youtube", model="creative-commons-source",
+                    local_path=str(destination), remote_url=metadata["source_url"],
+                    provider_asset_id=video_id, cost=0.0, metadata=metadata,
+                )
+                selected_scene = application.db.select_asset(str(scene["id"]), str(asset["id"]))
+                payload = next(
+                    item for item in application.asset_payloads(str(scene["project_id"])) if item["id"] == asset["id"]
+                )
+                self._json({"asset": payload, "scene": selected_scene, "source": metadata}, HTTPStatus.CREATED)
                 return
             match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/select-asset", path)
             if match:

@@ -32,6 +32,12 @@ class EditorUiTests(unittest.TestCase):
         self.assertIn('$("#videoVisibilityButton").addEventListener("click", toggleVisualVisibility)', self.javascript)
         self.assertIn('$("#audioMuteButton").addEventListener("click", toggleAudioMute)', self.javascript)
 
+    def test_youtube_source_controls_are_present_and_wired(self) -> None:
+        for control_id in ("youtubeSourceButton", "youtubeDialog", "youtubeQuery", "youtubeResults", "youtubeKey"):
+            self.assertIn(f'id="{control_id}"', self.html)
+        self.assertIn('$("#youtubeSourceButton").addEventListener("click", openYouTubeDialog)', self.javascript)
+        self.assertIn("/youtube-source", self.javascript)
+
 
 if __name__ == "__main__":
     unittest.main()

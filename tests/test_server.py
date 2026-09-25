@@ -45,7 +45,7 @@ class ServerTests(unittest.TestCase):
             try:
                 health = self._request(f"{base}/api/health")
                 self.assertEqual(health["status"], "ok")
-                self.assertEqual(health["version"], "0.6.9")
+                self.assertEqual(health["version"], "0.7.0")
                 self.assertEqual(health["schema_version"], 4)
                 font_request = urllib.request.Request(
                     f"{base}/api/fonts/upload", data=b"\x00\x01\x00\x00font-data", method="POST",
@@ -136,6 +136,32 @@ class ServerTests(unittest.TestCase):
                     uploaded = json.loads(response.read().decode("utf-8"))
                 self.assertEqual(uploaded["asset"]["provider"], "local")
                 self.assertEqual(uploaded["scene"]["selected_asset_id"], uploaded["asset"]["id"])
+                with patch("app.server.YouTubeSourceService.search", return_value=[{
+                    "video_id": "abcdefghijk", "title": "Licensed fleet footage",
+                    "channel": "Archive", "license": "creativeCommon",
+                }]):
+                    youtube_results = self._request(
+                        f"{base}/api/youtube/search?scene_id={first_scene['id']}&q=historic+fleet"
+                    )
+                self.assertEqual(youtube_results["results"][0]["video_id"], "abcdefghijk")
+
+                def fake_source_clip(**kwargs):
+                    kwargs["destination"].parent.mkdir(parents=True, exist_ok=True)
+                    kwargs["destination"].write_bytes(b"mock-youtube-video")
+                    return {
+                        "video_id": kwargs["video_id"], "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+                        "title": "Licensed fleet footage", "channel": "Archive", "license": "Creative Commons",
+                        "source_start_seconds": 12.0, "source_end_seconds": 19.5, "matched_from_captions": True,
+                    }
+
+                with patch("app.server.YouTubeSourceService.source_clip", side_effect=fake_source_clip):
+                    youtube_asset = self._request(
+                        f"{base}/api/scenes/{first_scene['id']}/youtube-source", method="POST",
+                        payload={"video_id": "abcdefghijk"},
+                    )
+                self.assertEqual(youtube_asset["asset"]["provider"], "youtube")
+                self.assertEqual(youtube_asset["asset"]["media_kind"], "video")
+                self.assertEqual(youtube_asset["asset"]["metadata"]["source_start_seconds"], 12.0)
                 range_request = urllib.request.Request(
                     f"{base}{uploaded['asset']['media_url']}", headers={"Range": "bytes=0-3"},
                 )
