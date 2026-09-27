@@ -253,7 +253,9 @@ class Database:
         now = utc_now()
         with self.connection() as db:
             db.execute(
-                "INSERT INTO projects (id, name, theme_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                # New projects cut straight between scenes; a fade on every edit reads as a glitch.
+                "INSERT INTO projects (id, name, theme_id, default_transition, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'cut', ?, ?)",
                 (project_id, name.strip() or "Untitled project", theme_id, now, now),
             )
         return self.get_project(project_id) or {}
