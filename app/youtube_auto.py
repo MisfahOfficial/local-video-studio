@@ -610,6 +610,10 @@ class AutoYouTubeManager:
                     with run.lock:
                         run.completed += 1
                         run.graphics.append(position)
+                elif is_hook and self._period_photo(run, scene, position):
+                    with run.lock:
+                        run.completed += 1
+                        run.photos.append(position)
                 elif is_hook:
                     raise ProviderError("No real footage or photo passed for this hook scene; AI images are never used in the hook")
                 else:
@@ -675,6 +679,54 @@ class AutoYouTubeManager:
             destination = self.paths.project_dir(run.project_id) / "assets" / "photos" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
             metadata = save_photo(item, photo, destination)
             metadata["search_topic"] = subject
+            asset = self.db.add_asset(
+                project_id=run.project_id, scene_id=str(scene["id"]),
+                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                media_kind="image", provider="photo", model="openverse", local_path=str(destination),
+                remote_url=metadata["source_url"], provider_asset_id=key, cost=0.0, metadata=metadata,
+            )
+            self.db.select_asset(str(scene["id"]), str(asset["id"]))
+            return True
+        return False
+
+    def _period_photo(self, run: "_Run", scene: dict[str, Any], position: int) -> bool:
+        """Last real option for a hook scene: a genuine photo of everyday life in the period."""
+        if run.verifier is None:
+            return False
+        era = run.era or "1950s"
+        words = [word for word in scene_keywords(str(scene.get("narration") or ""), "", limit=3) if not word.isdigit()]
+        queries = list(dict.fromkeys([
+            *(f"{era} {word}" for word in words[:2]), f"{era} family dinner", f"{era} kitchen", f"{era} america",
+        ]))
+        items: dict[str, dict[str, Any]] = {}
+        for query in queries:
+            with run.lock:
+                cached = run.searches.get(f"photo:{query}")
+            if cached is None:
+                cached = search_photos(query)
+                with run.lock:
+                    run.searches[f"photo:{query}"] = cached
+            for item in cached:
+                items.setdefault(str(item.get("id") or item["url"]), item)
+        with run.lock:
+            fresh = [item for key, item in items.items()
+                     if key not in run.used_photos and not _seen_title(item, run.photo_titles)][:16]
+        candidates = [(item, image) for item, image in zip(fresh, load_images(
+            [str(item.get("thumbnail") or item["url"]) for item in fresh])) if image is not None]
+        detail = f"an old photo of {' '.join(words) or 'family life'}"
+        for index, _score in run.verifier.rank_period_photos([image for _item, image in candidates], detail)[:3]:
+            item = candidates[index][0]
+            photo = load_image(str(item["url"]))
+            key = str(item.get("id") or item["url"])
+            with run.lock:
+                if photo is None or key in run.used_photos or _seen_title(item, run.photo_titles):
+                    continue
+                run.used_photos.add(key)
+                if _photo_title(item):
+                    run.photo_titles.append(_photo_title(item))
+            destination = self.paths.project_dir(run.project_id) / "assets" / "photos" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
+            metadata = save_photo(item, photo, destination)
+            metadata["search_topic"] = f"{era} period photo"
             asset = self.db.add_asset(
                 project_id=run.project_id, scene_id=str(scene["id"]),
                 candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),

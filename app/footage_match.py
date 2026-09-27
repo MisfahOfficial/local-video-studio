@@ -705,6 +705,25 @@ class FootageVerifier:
         ]
         return sorted(ranked, key=lambda item: item[1], reverse=True)
 
+    def rank_period_photos(self, photos: list[Any], detail: str) -> list[tuple[int, float]]:
+        """Real photos that plainly look like the period, for a hook with nothing more specific."""
+        if not photos:
+            return []
+        with self.lock:
+            features = self.scorer.embed_images(photos)
+            vintage = self.scorer.probabilities(features, "an old photograph from the 1950s or 1960s", (
+                "a modern digital photo", "a recent smartphone photo",
+            ))
+            fits = self.scorer.probabilities(features, detail, ("a landscape", "a building exterior", "a document"))
+            render = self.scorer.probabilities(
+                features, "a hyperrealistic AI render, overly perfect and saturated",
+                ("an ordinary real photo", "real camera footage"),
+            )
+            drawing = self.scorer.probabilities(features, "a drawing, painting or illustration", ("a photograph",))
+        ranked = [(index, 0.5 * vintage[index] + 0.5 * fits[index]) for index in range(len(photos))
+                  if vintage[index] >= 0.6 and max(render[index], drawing[index]) < SYNTHETIC_THRESHOLD]
+        return sorted(ranked, key=lambda item: item[1], reverse=True)
+
     def rank_ingredient_photos(
         self, photos: list[Any], name: str, kind: str = "a cooking ingredient",
     ) -> list[tuple[int, float]]:
