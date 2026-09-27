@@ -157,6 +157,8 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
         "shadow_y": shadow_y,
         "max_lines": max_lines,
         "words_per_line": words_per_line,
+        # "highlight": animated reference-style captions with key words in yellow boxes.
+        "animation": "highlight" if style.get("animation") == "highlight" else "none",
     }
 
 
@@ -197,6 +199,7 @@ def normalize_render_options(value: Any) -> dict[str, Any]:
         "burn_captions": bool(supplied.get("burn_captions", True)),
         "edit_package": bool(supplied.get("edit_package", False)),
         "film_look": bool(supplied.get("film_look", True)),
+        "photo_graphics": bool(supplied.get("photo_graphics", True)),
         "capcut": bool(supplied.get("capcut", False)),
         "preset": str(supplied.get("preset") or "youtube-1080p")[:50],
         "caption_style": normalize_caption_style(supplied.get("caption_style")),

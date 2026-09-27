@@ -234,6 +234,7 @@ class FFmpegRenderer:
         audio_bitrate_kbps: int = 192,
         progress: ProgressCallback | None = None,
         film_look: bool = False,
+        photo_graphics: bool = False,
     ) -> Path:
         selected = {scene["id"]: scene.get("selected_asset_id") for scene in scenes}
         scenes_by_id = {scene["id"]: scene for scene in scenes}
@@ -268,19 +269,36 @@ class FFmpegRenderer:
         clip_paths: list[Path] = []
         total = max(1, len(clips))
         encoder = self._choose_encoder()
+        animated_captions = burn_captions and (caption_style or {}).get("animation") == "highlight"
+        captioned_scenes: set[str] = set()
+        photo_index = 0
         for index, timeline_clip in enumerate(clips):
             scene = scenes_by_id[timeline_clip["scene_id"]]
             asset = by_id[selected[scene["id"]]]
             source = Path(asset["local_path"])
+            media_kind = str(asset["media_kind"])
             duration = max(0.1, float(timeline_clip["end_seconds"]) - float(timeline_clip["start_seconds"]))
             clip = clip_dir / f"timeline-{int(timeline_clip['position']):04d}.mp4"
+            clip_scene = scene
+            graphic = _photo_graphic(scene, asset, photo_index) if photo_graphics else None
+            if graphic:
+                # Photos become reference-style graphics (polaroid stack / graph-paper card).
+                photo_index += 1
+                source = self._render_graphic(graphic, source, clip_dir / f"graphic-{int(timeline_clip['position']):04d}.mp4",
+                                              duration, fps)
+                media_kind = "video"
+                clip_scene = {**scene, "timeline_actions": [{"type": "motion", "params": {"preset": "static"}}]}
             self._render_clip(
-                source, clip, str(asset["media_kind"]), duration, scene, width, height, fps, encoder,
-                source_in_seconds=float(timeline_clip.get("source_in_seconds", 0)),
-                crop=active_crop(asset),
+                source, clip, media_kind, duration, clip_scene, width, height, fps, encoder,
+                source_in_seconds=0 if graphic else float(timeline_clip.get("source_in_seconds", 0)),
+                crop=None if graphic else active_crop(asset),
                 # Chapter cards and generated stills are already period-styled.
                 film_look=film_look and asset.get("provider") not in {"chapter", "generated"},
             )
+            caption = str(scene.get("caption_text") or "").strip()
+            if animated_captions and caption and scene["id"] not in captioned_scenes:
+                captioned_scenes.add(scene["id"])
+                self._overlay_highlight_caption(clip, caption, duration, fps, encoder)
             clip_paths.append(clip)
             if progress:
                 progress(0.82 * (index + 1) / total)
@@ -314,7 +332,7 @@ class FFmpegRenderer:
             # Preserve the full voice-over even if a user trims the visual track
             # shorter; the last rendered frame is held until audio completes.
             final_filters.append("tpad=stop_mode=clone:stop_duration=86400")
-        if burn_captions:
+        if burn_captions and (caption_style or {}).get("animation") != "highlight":
             subtitle_filter = f"subtitles='{_escape_subtitle_path(ass_path)}'"
             if fonts_dir and fonts_dir.exists():
                 subtitle_filter += f":fontsdir='{_escape_subtitle_path(fonts_dir)}'"
@@ -386,6 +404,43 @@ class FFmpegRenderer:
             fallback[-2:-2] = ["-preset", "veryfast", "-crf", "20"]
             self._run(fallback)
 
+    def _render_graphic(self, graphic: str, photo: Path, destination: Path, duration: float, fps: int) -> Path:
+        from PIL import Image
+
+        from ..motion.engine import encode
+        from ..motion.templates import graph_paper_card, polaroid_stack
+
+        image = Image.open(photo)
+        frame = polaroid_stack(image, seed=len(destination.name)) if graphic == "polaroid" else graph_paper_card(image)
+        return encode(frame, duration, destination, fps=fps, ffmpeg_path=self.ffmpeg_path)
+
+    def _overlay_highlight_caption(self, clip: Path, text: str, duration: float, fps: int, encoder: str) -> None:
+        from ..motion.engine import encode
+        from ..motion.templates import caption_keywords, highlight_caption
+
+        overlay = encode(
+            highlight_caption(text, caption_keywords(text)), duration, clip.with_suffix(".caption.mov"),
+            fps=fps, alpha=True, ffmpeg_path=self.ffmpeg_path,
+        )
+        combined = clip.with_suffix(".captioned.mp4")
+        command = [
+            self.ffmpeg_path, "-y", "-i", str(clip), "-i", str(overlay), "-filter_complex",
+            "[1:v][0:v]scale2ref[caption][base];[base][caption]overlay=format=auto", "-c:v", encoder,
+        ]
+        if encoder == "libx264":
+            command += ["-preset", "veryfast", "-crf", "20"]
+        command += ["-pix_fmt", "yuv420p", "-an", str(combined)]
+        try:
+            self._run(command)
+        except RuntimeError:
+            if encoder == "libx264":
+                raise
+            fallback = ["libx264" if item == encoder else item for item in command]
+            fallback[-4:-4] = ["-preset", "veryfast", "-crf", "20"]
+            self._run(fallback)
+        combined.replace(clip)
+        overlay.unlink(missing_ok=True)
+
     def _loudnorm_filter(self, audio: Path) -> str:
         """Two-pass loudnorm to YouTube's -14 LUFS with -1.5 dB true peak; '' for silent audio."""
         target = "I=-14:TP=-1.5:LRA=11"
@@ -434,6 +489,17 @@ FILM_LOOK = (
     "colorbalance=rs=0.05:gs=0.01:bs=-0.06:rh=0.05:bh=-0.05,"
     "noise=alls=6:allf=t,vignette=angle=PI/5"
 )
+
+
+def _photo_graphic(scene: dict[str, Any], asset: dict[str, Any], photo_index: int) -> str | None:
+    """Which photo graphic a still uses: the scene's choice, else alternate polaroid / graph paper."""
+    if asset.get("media_kind") != "image" or asset.get("provider") == "chapter":
+        return None
+    for action in scene.get("timeline_actions") or []:
+        if action.get("type") == "graphic":
+            choice = str(action.get("params", {}).get("preset") or "")
+            return choice if choice in {"polaroid", "graph_card"} else None
+    return "polaroid" if photo_index % 2 == 0 else "graph_card"
 
 
 def active_crop(asset: dict[str, Any]) -> dict[str, Any] | None:
@@ -533,6 +599,7 @@ class RenderManager:
                 audio_bitrate_kbps=int(options.get("audio_bitrate_kbps", 192)),
                 progress=lambda value: self._update(job_id, progress=value),
                 film_look=bool(options.get("film_look", True)),
+                photo_graphics=bool(options.get("photo_graphics", True)),
             )
             rendered_duration = probe_duration(output, settings.ffprobe_path)
             if voiceover_path.is_file() and rendered_duration + 0.25 < voiceover_duration:

@@ -59,6 +59,10 @@ Version 0.7.2 editing upgrades:
   run, candidate metadata and storyboards load in parallel, and excerpts are cut
   straight from the stream URL with FFmpeg (yt-dlp is only a fallback). A 20-scene
   test went from about 14 minutes to about 2.
+- **Motion graphics (phase 1).** `app/motion` renders reference-style graphics frame by
+  frame with Pillow and FFmpeg: key-point captions reveal word by word with numbers
+  and ingredients in yellow boxes, and photo scenes alternate between a sepia
+  polaroid stack and a rounded card on graph paper (Export > Photo graphics).
 - **Documentary finish.** Export applies one vintage film grade to every clip (faded
   colour, warm highlights, grain, vignette) so modern and archival footage feel like
   one era; period footage is preferred when choosing moments. Scenes cut straight

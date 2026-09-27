@@ -66,7 +66,9 @@ def build_edit_package(
     if original_vo.is_file():
         voiceover = package / f"voiceover{original_vo.suffix}"
         shutil.copy2(original_vo, voiceover)
-    captions = [segment for scene in scenes for segment in caption_segments(scene, caption_style)]
+    # Animated highlight captions are already inside the rendered clips.
+    animated = (caption_style or {}).get("animation") == "highlight"
+    captions = [] if animated else [segment for scene in scenes for segment in caption_segments(scene, caption_style)]
     srt = project_dir / "captions.srt"
     if srt.is_file():
         shutil.copy2(srt, package / "captions.srt")
