@@ -48,14 +48,22 @@ def item_image(
             return cached
     if not allow_generated:
         return None
-    try:
-        generate_vintage_still(
-            settings, f"A close-up of {name} in a simple bowl on a wooden kitchen counter.", name, era, cached,
-            people=False,
-        )
-        return cached
-    except Exception:
-        return None
+    from PIL import Image
+
+    for _attempt in range(2):
+        try:
+            generate_vintage_still(
+                settings, f"A close-up of {name} in a simple bowl on a wooden kitchen counter.", name, era, cached,
+                people=False,
+            )
+        except Exception:
+            return None
+        # Generated stills are checked like photos: a cook in the background means another try.
+        with Image.open(cached) as still:
+            if verifier.rank_ingredient_photos([still.convert("RGB")], name, "food"):
+                return cached
+        cached.unlink(missing_ok=True)
+    return None
 
 
 def dish_images(

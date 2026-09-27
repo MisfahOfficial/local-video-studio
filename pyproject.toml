@@ -8,6 +8,7 @@ dependencies = ["certifi>=2024.8.30", "yt-dlp>=2025.1.15"]
 [project.optional-dependencies]
 transcription = ["faster-whisper>=1.1.0"]
 visual-match = ["torch>=2.2", "open_clip_torch>=2.24", "pillow>=10"]
+text-guard = ["pyobjc-framework-Vision>=10; sys_platform == 'darwin'"]
 packaging = ["pyinstaller>=6.0"]
 dev = ["pytest>=8.0"]
 

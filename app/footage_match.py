@@ -429,7 +429,7 @@ PERIOD_WORDS = re.compile(
 )
 NOSTALGIA_WORDS = re.compile(
     r"\b(forgotten|vanished|lost|grandma'?s?|grandmas|nobody|remember\w*|golden age|back then|used to|"
-    r"life in america|felt like|was like|why did we stop|nostalgi\w*|disappeared|gone forever|hacks)\b",
+    r"life in america|felt like|was like|looked like|really looked|why did we stop|nostalgi\w*|disappeared|gone forever|hacks)\b",
     re.IGNORECASE,
 )
 
@@ -442,6 +442,14 @@ COUNTED_DISHES = re.compile(
 MEMORY_WORDS = re.compile(
     r"\b(grandma\w*|granny|seniors?|boomers?|depression|southern|every(one|body)?|loved|knew|remembered|"
     r"church|mom|mother'?s|old[- ]fashioned|vintage|classic|retro|stories)\b",
+    re.IGNORECASE,
+)
+
+
+# Present-day content: recent years, hauls and store tours never open a period story.
+MODERN_TITLE = re.compile(
+    r"\b(20[0-3]\d|haul|shop with me|store tour|walkthrough|what'?s new at|new at|decor(ate|ating)? with me|"
+    r"vlog|day in my life|grwm|tiktok|trend(ing)?)\b",
     re.IGNORECASE,
 )
 
@@ -483,6 +491,11 @@ VINTAGE = ("old vintage film footage", ("modern digital video", "a modern smartp
 FACE = ("a close-up of a person's face", ("hands preparing food", "food on a table", "an empty kitchen"))
 PERSON = ("a person standing in a kitchen, face visible", ("only hands and food", "food with no people", "an empty kitchen"))
 FACE_LIMIT = 0.45
+# A host speaking to camera is another creator even in a vintage dress and set.
+PRESENTER = ("a person looking into the camera and talking", (
+    "people in an old home movie", "hands preparing food", "food on a table", "an empty kitchen",
+))
+PRESENTER_LIMIT = 0.6
 VINTAGE_LIMIT = 0.5
 
 
@@ -807,6 +820,7 @@ class FootageVerifier:
         people = self.scorer.probabilities(features, *PERSON)
         # Close-ups and medium shots both show whose kitchen it is: either counts as a face.
         faces = [max(a, b) for a, b in zip(close, people)]
+        presenter = self.scorer.probabilities(features, *PRESENTER)
         if prefer_vintage:
             # A period story reads best on footage that already looks old.
             combined = [value + 0.25 * old for value, old in zip(combined, vintage)]
@@ -823,7 +837,8 @@ class FootageVerifier:
             gate_average = sum(gate_scores[position] for position in window) / len(window)
             if gate_average < TOPIC_THRESHOLD:
                 continue
-            if any(modern_face(faces[position], vintage[position]) for position in window):
+            if any(modern_face(faces[position], vintage[position]) or presenter[position] > PRESENTER_LIMIT
+                   for position in window):
                 continue
             if require_vintage and sum(vintage[position] for position in window) / len(window) < VINTAGE_LIMIT:
                 continue  # the opening of a period story is always old footage

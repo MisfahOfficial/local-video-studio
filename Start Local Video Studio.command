@@ -27,6 +27,11 @@ if ! python -c "import open_clip, torch" >/dev/null 2>&1; then
   python -m pip install --disable-pip-version-check --quiet "torch>=2.2" "open_clip_torch>=2.24" "pillow>=10"
 fi
 
+if ! python -c "import Vision" >/dev/null 2>&1; then
+  echo "Installing the free on-device text reader (skips clips with other creators' captions)..."
+  python -m pip install --disable-pip-version-check --quiet "pyobjc-framework-Vision>=10"
+fi
+
 echo "Starting Local Video Studio..."
 echo "Keep this window open while you use the tool. Press Control-C here to stop it."
 python run.py

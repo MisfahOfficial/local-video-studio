@@ -185,3 +185,13 @@ class NostalgiaListicleTests(unittest.TestCase):
             self.assertTrue(looks_like_ai_slideshow({"title": title}), title)
         for title in ("3 Easy Chicken Casseroles", "Church supper 1958 home movie", "Favorite Rice | Church Lady Rice"):
             self.assertFalse(looks_like_ai_slideshow({"title": title}), title)
+
+
+class PeriodHookTests(unittest.TestCase):
+    def test_modern_and_looked_like_titles(self) -> None:
+        from app.footage_match import MODERN_TITLE, looks_like_ai_slideshow
+
+        self.assertTrue(MODERN_TITLE.search("NEW HOMEGOODS CHRISTMAS 2026! Katherine's Collection"))
+        self.assertTrue(MODERN_TITLE.search("Target Christmas haul"))
+        self.assertFalse(MODERN_TITLE.search("(1949) Grandma's kitchen organization"))
+        self.assertTrue(looks_like_ai_slideshow({"title": "What American Kitchens Really Looked Like in the 1940s"}))

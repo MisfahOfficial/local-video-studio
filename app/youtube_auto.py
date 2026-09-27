@@ -15,6 +15,7 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
+from .text_guard import has_burned_in_text
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
 from .ingredient_library import dish_images, item_image
@@ -22,7 +23,7 @@ from .stock_video import download_stock_video, search_stock_videos
 from .photo_source import load_image, load_images, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
-    NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
+    MODERN_TITLE, NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
     PLURAL_FOODS, heading_subject, hook_theme, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
@@ -402,7 +403,7 @@ class AutoYouTubeManager:
             run.searches[query] = results
         return results
 
-    def _source_scene(self, run: "_Run", scene: dict[str, Any]) -> None:
+    def _source_scene(self, run: "_Run", scene: dict[str, Any], use_theme: bool = False) -> None:
         position = int(scene.get("position") or 0)
         self._update(run.project_id, current_scene=position)
         scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
@@ -412,6 +413,8 @@ class AutoYouTubeManager:
         signature = signature_words(recipe, subject) if recipe else set()
         is_hook = str(scene["id"]) in run.hook_ids
         hook_words: list[str] = []
+        if is_hook and not subject and use_theme:
+            subject = core = run.theme
         if is_hook and not subject:
             # Each hook sentence shows its own picture ("christmas table", "grandma kitchen");
             # the video's theme ("dollar desserts") only helps the search.
@@ -458,6 +461,8 @@ class AutoYouTubeManager:
                 named = (all(mentions_topic(title, word) for word in dish_words)
                          if len(dish_words) >= 2 else mentions_topic(text, core))
             channel = str(item.get("channel") or item.get("uploader") or "")
+            if is_hook and run.era and MODERN_TITLE.search(title):
+                return False  # a period opening never shows a 2026 store haul
             return (not NON_FOOTAGE_TITLE.search(title) and not NON_FOOTAGE_TITLE.search(channel)
                     and not off_cuisine(title, run.script)
                     and str(item.get("video_id")) not in run.exclude_videos
@@ -529,6 +534,8 @@ class AutoYouTubeManager:
                     bars = content_box(destination, run.service.ffmpeg_path)
                     if bars and bars[4] < 1.25:
                         raise ProviderError("Portrait picture inside black bars")
+                    if has_burned_in_text(destination, run.service.ffmpeg_path):
+                        raise ProviderError("Another creator's captions are burned into this shot")
                     break
                 except Exception as error:
                     destination.unlink(missing_ok=True)
@@ -571,6 +578,10 @@ class AutoYouTubeManager:
                 if metadata["needs_review"]:
                     run.review.append(position)
         except Exception as error:
+            if is_hook and not use_theme and run.theme and run.theme != subject:
+                # The sentence had too little to film ("simple ingredients feed"): try the video's theme.
+                self._source_scene(run, scene, use_theme=True)
+                return
             # Never leave a gap: a real archival photo, then (outside the hook) an aged still.
             try:
                 if self._real_photo(run, scene, position, scene_text, subject, queries):
@@ -772,6 +783,8 @@ class AutoYouTubeManager:
                 if start is None:
                     raise ProviderError("No single-shot stretch")
                 trim(destination, start, duration, run.service.ffmpeg_path)
+                if has_burned_in_text(destination, run.service.ffmpeg_path):
+                    raise ProviderError("Burned-in captions")
             except Exception:
                 destination.unlink(missing_ok=True)
                 continue
