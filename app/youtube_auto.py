@@ -745,7 +745,7 @@ class AutoYouTubeManager:
         from .motion.templates import gallery_stack
 
         with run.lock:
-            if run.verifier is None or not run.theme or run.gallery_done:
+            if run.verifier is None or not run.theme or run.gallery_done or run.gallery_id:
                 return False  # one gallery per video; a second reads as a repeat
             run.gallery_done = True
         noun = next((word for word in reversed(run.theme.split()) if word in PLURAL_FOODS), "dishes")
