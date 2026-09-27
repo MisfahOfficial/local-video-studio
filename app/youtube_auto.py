@@ -23,7 +23,7 @@ from .photo_source import load_image, load_images, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    PLURAL_FOODS, heading_subject, hook_theme, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
+    PLURAL_FOODS, heading_subject, hook_theme, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -194,7 +194,7 @@ class _NoFootage(Exception):
 SHOT_PADDING = 2.0
 
 # Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
-SCENE_WORKERS = 5
+SCENE_WORKERS = 4
 
 
 @dataclass
@@ -411,8 +411,14 @@ class AutoYouTubeManager:
         core = core_subject(subject)
         signature = signature_words(recipe, subject) if recipe else set()
         is_hook = str(scene["id"]) in run.hook_ids
+        hook_words: list[str] = []
         if is_hook and not subject:
-            subject, core = run.theme, run.theme
+            # Each hook sentence shows its own picture ("christmas table", "grandma kitchen");
+            # the video's theme ("dollar desserts") only helps the search.
+            hook_words = [word for word in scene_keywords(str(scene.get("narration") or ""), "", limit=4)
+                          if word not in _GENERIC_THEME and not word.isdigit()][:3]
+            subject = " ".join(hook_words) or run.theme
+            core = subject
         if run.verifier is not None and self._motion_graphic(run, scene, position, is_hook):
             with run.lock:
                 run.completed += 1
@@ -421,13 +427,14 @@ class AutoYouTubeManager:
             return
         own = topic_queries(scene, subject, run.era, recipe) or scene_search_queries(scene)
         if is_hook and subject:
-            # Period footage first: old films, home movies and commercials of the theme.
+            # Period footage first: old films, home movies and commercials of the sentence and the theme.
             era = run.era or "vintage"
-            keys = [query for query in own if query != subject][:1]
-            own = list(dict.fromkeys([
-                f"{era} {subject} footage", *(f"{era} {query}" for query in keys),
-                f"vintage {core_subject(subject)} home movie", f"{era} {subject}", *own,
-            ]))
+            plain_theme = " ".join(word for word in run.theme.split() if word not in _GENERIC_THEME) or run.theme
+            own = list(dict.fromkeys(query for query in [
+                f"{era} {subject} footage", f"vintage {subject} home movie",
+                f"{era} {run.theme} footage" if run.theme else "", f"vintage {plain_theme}" if run.theme else "",
+                f"{era} {subject}",
+            ] if query.strip()))
         queries = list(dict.fromkeys(
             [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in run.ai_queries.get(position, [])]
             + own
@@ -441,7 +448,7 @@ class AutoYouTubeManager:
             # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
             exact = not signature or any(mentions_topic(text, word) for word in signature)
             # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
-            theme_words = [word for word in core.split() if word not in _GENERIC_THEME]
+            theme_words = [word for word in (core.split() + run.theme.split()) if word not in _GENERIC_THEME]
             if is_hook and theme_words:
                 named = any(mentions_topic(text, word) for word in theme_words)
             else:
@@ -476,7 +483,7 @@ class AutoYouTubeManager:
             )
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             choices = self._choose(
-                run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
+                run.service, run.verifier, ranked[:4 if is_hook else 3], subject, scene_text, duration, used_now, run.infos,
                 run.settings.blocked_channels, recipe, bool(run.era), is_hook,
             ) if ranked else []
             if not choices and is_hook and ranked:
