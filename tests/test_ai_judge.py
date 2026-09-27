@@ -21,3 +21,44 @@ class JudgeTests(unittest.TestCase):
         ]
         self.assertEqual(best_usable(verdicts), [2, 0])
         self.assertEqual(best_usable(None), [])
+
+
+class _FakeJudge:
+    def __init__(self, verdicts):
+        self.verdicts = verdicts
+        self.seen = []
+
+    def judge(self, need, candidates):
+        self.seen.append((need, len(candidates)))
+        return self.verdicts
+
+
+class _FakeVerifier:
+    def moment_frames(self, video_id, start, duration, count=3):
+        return [Image.new("RGB", (160, 90))] * 3
+
+
+class JudgeWiringTests(unittest.TestCase):
+    def test_videos_are_reordered_and_rejects_dropped(self) -> None:
+        from types import SimpleNamespace
+
+        from app.youtube_auto import AutoYouTubeManager
+
+        judge = _FakeJudge([
+            Verdict("A", True, 5, False, False, False, ""),
+            Verdict("B", False, 9, False, False, False, "wrong dish"),
+            Verdict("C", True, 8, False, False, False, ""),
+        ])
+        run = SimpleNamespace(judge=judge, verifier=_FakeVerifier())
+        choices = [({"video_id": "a"}, 10.0, 0.8), ({"video_id": "b"}, 5.0, 0.9), ({"video_id": "c"}, 1.0, 0.7)]
+        picked = AutoYouTubeManager._judge_videos(None, run, "need", choices, 4.0)
+        self.assertEqual([item[0]["video_id"] for item in picked], ["c", "a"])
+        self.assertEqual(judge.seen, [("need", 3)])
+
+    def test_without_a_judge_nothing_changes(self) -> None:
+        from types import SimpleNamespace
+
+        from app.youtube_auto import AutoYouTubeManager
+
+        run = SimpleNamespace(judge=None, verifier=_FakeVerifier())
+        self.assertIsNone(AutoYouTubeManager._judge_videos(None, run, "need", [({"video_id": "a"}, 0, 1)], 4.0))
