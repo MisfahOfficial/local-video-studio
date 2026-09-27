@@ -461,3 +461,18 @@ body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-s
 .review-buttons { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
 .review-note { font-size: 12px; color: var(--muted); margin-right: auto; }
 .review-buttons .button.primary { margin-right: auto; }
+
+/* Player mirrors the export effects */
+.preview-stage.film-look img, .preview-stage.film-look video { filter: sepia(0.22) saturate(0.82) contrast(0.94) brightness(0.97); }
+.preview-stage.photo-card img { box-sizing: border-box; border: 10px solid #f4efe3; border-bottom-width: 34px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .55); transform: scale(.82) rotate(-1.5deg); background: #f4efe3; }
+.preview-caption.highlight-mode { font-family: "Avenir Next", "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; }
+.preview-caption.highlight-mode mark { background: #f5c518; color: #1d1d1d; font-family: Georgia, serif; font-style: italic;
+  font-weight: 700; padding: 0 .28em; border-radius: 3px; }
+.preview-subscribe { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); display: flex; gap: .4em;
+  align-items: center; pointer-events: none; animation: subscribe-pop .5s ease-out both; }
+.preview-subscribe .subscribe-pill { background: #cc0000; color: #fff; font: 700 11px/1 Arial, sans-serif;
+  padding: .55em 1em; border-radius: 3px; letter-spacing: .04em; }
+.preview-subscribe .subscribe-bell { font-size: 14px; }
+@keyframes subscribe-pop { from { transform: translateX(-50%) scale(.6); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+[data-caption-animation].active { background: var(--accent, #c8f56a); color: #111; }

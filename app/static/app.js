@@ -472,6 +472,8 @@ async function refreshYouTubeAutoStatus() {
   if (result.photos?.length) panel.textContent += ` · Real archival photo used for scene${result.photos.length === 1 ? "" : "s"} ${result.photos.join(", ")}`;
   if (result.generated?.length) panel.textContent += ` · No real footage for scene${result.generated.length === 1 ? "" : "s"} ${result.generated.join(", ")}, so a vintage photo was made`;
   if (result.review?.length) panel.textContent += ` · Please check scene${result.review.length === 1 ? "" : "s"} ${result.review.join(", ")}`;
+  if (result.judge_calls) panel.textContent += ` · Claude checked ${result.judge_calls} picks for $${Number(result.judge_cost || 0).toFixed(2)}`;
+  if (result.judge_notice) panel.textContent += ` · ${result.judge_notice}`;
   if (result.notice) panel.textContent += ` · ${result.notice}`;
   $("#autoSourceYouTubeButton").disabled = Boolean(result.running);
   if (result.running && !state.youtubeAutoTimer) {
@@ -670,6 +672,7 @@ function fillCaptionStyle() {
   $$("[data-caption-align]").forEach(button => button.classList.toggle("active", button.dataset.captionAlign === state.captionAlignment));
   $$("[data-caption-preset]").forEach(button => button.classList.toggle("active", button.dataset.captionPreset === (style.preset || "clean")));
   updateCaptionPreviewStyle();
+  fillEffectsControls();
 }
 
 function hexToRgb(value) {
@@ -992,6 +995,8 @@ function updatePreviewAt(time, selectScene = true) {
   caption.textContent = captionTextAt(captionScene, state.previewTime);
   caption.hidden = !caption.textContent || !state.trackState.captionsVisible;
   updateCaptionPreviewStyle();
+  renderHighlightPreview(caption, captionScene);
+  applyEffectsPreview(active, asset);
   if (active && asset && visualsVisible) {
     const clipStart = Number(activeClip?.start_seconds || 0);
     const sceneDuration = Math.max(0.1, Number(activeClip?.end_seconds || 0.1) - clipStart);
@@ -999,6 +1004,62 @@ function updatePreviewAt(time, selectScene = true) {
     applyPreviewMotion(active, progress, activeClip);
   }
   updateTimelineControls();
+}
+
+const NUMBER_WORDS = new Set(["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
+  "twelve", "fifteen", "twenty", "thirty", "forty", "fifty", "hundred", "thousand", "half", "quarter", "dozen"]);
+
+// The player mirrors the export: highlight captions, film look, photo graphics and the subscribe button.
+function renderHighlightPreview(caption, scene) {
+  const highlight = state.current?.caption_style?.animation === "highlight";
+  caption.classList.toggle("highlight-mode", highlight);
+  if (!highlight || caption.hidden) return;
+  const keywords = new Set((state.current?.caption_keywords || {})[scene?.id] || []);
+  const text = caption.textContent;
+  caption.innerHTML = text.split(/\s+/).map(word => {
+    const bare = word.replace(/[^\w'$-]/g, "").toLowerCase();
+    const isKey = keywords.has(bare) || /\d/.test(bare) || NUMBER_WORDS.has(bare);
+    return isKey ? `<mark>${escapeHtml(word)}</mark>` : escapeHtml(word);
+  }).join(" ");
+  caption.style.textTransform = "none";
+  caption.style.fontWeight = "500";
+  caption.style.fontSize = `${Math.max(12, 58 * 0.42)}px`;
+  caption.style.backgroundColor = "transparent";
+}
+
+function applyEffectsPreview(scene, asset) {
+  const effects = state.current?.effects || {};
+  const stage = $("#previewStage");
+  stage.classList.toggle("film-look", effects.film_look !== false);
+  stage.classList.toggle("photo-card", effects.photo_graphics !== false && asset?.media_kind === "image");
+  const says = /\bsubscrib/i.test(scene?.narration || "");
+  $("#previewSubscribe").hidden = !(says && effects.subscribe_button !== false);
+}
+
+function fillEffectsControls() {
+  const effects = state.current?.effects || {};
+  $$("[data-effect]").forEach(input => { input.checked = effects[input.dataset.effect] !== false; });
+  const animation = state.current?.caption_style?.animation || "none";
+  $$("[data-caption-animation]").forEach(button => button.classList.toggle("active", button.dataset.captionAnimation === animation));
+}
+
+async function saveEffects() {
+  const body = Object.fromEntries($$("[data-effect]").map(input => [input.dataset.effect, input.checked]));
+  const result = await api(`/api/projects/${state.current.id}/effects`, { method: "POST", body: JSON.stringify(body) });
+  state.current.effects = result.effects;
+  updatePreviewAt(state.previewTime, false);
+  $("#autosaveStatus").textContent = "Effects saved";
+}
+
+async function setCaptionAnimation(animation) {
+  state.current.caption_style = { ...(state.current.caption_style || {}), animation };
+  const result = await api(`/api/projects/${state.current.id}/caption-style`, {
+    method: "POST", body: JSON.stringify(captionStyleFromInputs()),
+  });
+  state.current.caption_style = result.caption_style;
+  fillEffectsControls();
+  updatePreviewAt(state.previewTime, false);
+  $("#autosaveStatus").textContent = animation === "highlight" ? "Highlight captions on" : "Plain captions on";
 }
 
 function renderMediaBin() {
@@ -1295,6 +1356,7 @@ async function applyCaptionMode(mode, button) {
     state.scenes = result.scenes;
     state.captionDrafts = {};
     state.current.caption_style = result.caption_style;
+    state.current.caption_keywords = result.caption_keywords || state.current.caption_keywords;
     fillCaptionStyle();
     renderTimeline();
     toast(mode === "key_points"
@@ -1777,8 +1839,6 @@ async function startRender() {
       width, height,
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
       edit_package: $("#exportEditPackage").checked, capcut: $("#exportCapCut").checked,
-      film_look: $("#exportFilmLook").checked, photo_graphics: $("#exportPhotoGraphics").checked,
-      subscribe_button: $("#exportSubscribe").checked,
       output_name: outputName,
       output_directory: $("#exportDirectory").value,
       preset: $("#exportPreset").value,
@@ -2137,6 +2197,9 @@ $("#previewAudio").addEventListener("ended", event => {
   updatePreviewAt(Math.min(timelineDuration(), Number(event.target.duration || timelineDuration())));
 });
 $("#saveCaptionStyleButton").addEventListener("click", () => saveCaptionStyle().catch(error => toast(error.message, true)));
+$$("[data-caption-animation]").forEach(button => button.addEventListener("click", () =>
+  setCaptionAnimation(button.dataset.captionAnimation).catch(error => toast(error.message, true))));
+$$("[data-effect]").forEach(input => input.addEventListener("change", () => saveEffects().catch(error => toast(error.message, true))));
 $("#keyCaptionsButton").addEventListener("click", event => applyCaptionMode("key_points", event.currentTarget).catch(error => toast(error.message, true)));
 $("#fullCaptionsButton").addEventListener("click", event => applyCaptionMode("full", event.currentTarget).catch(error => toast(error.message, true)));
 $$("[data-inspector-tab]").forEach(button => button.addEventListener("click", () => showInspector(button.dataset.inspectorTab)));

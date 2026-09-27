@@ -32,6 +32,11 @@ if ! python -c "import Vision" >/dev/null 2>&1; then
   python -m pip install --disable-pip-version-check --quiet "pyobjc-framework-Vision>=10"
 fi
 
+if ! python -c "import anthropic" >/dev/null 2>&1; then
+  echo "Installing the Claude judge client (only used when you add an Anthropic key)..."
+  python -m pip install --disable-pip-version-check --quiet "anthropic>=1.8"
+fi
+
 echo "Starting Local Video Studio..."
 echo "Keep this window open while you use the tool. Press Control-C here to stop it."
 python run.py

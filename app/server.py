@@ -33,6 +33,7 @@ from .chapter_cards import build_chapter_cards
 from .footage_match import storyboard_frames
 from .logo_guard import analyse_clip, storyboard_stack
 from .key_captions import KEY_POINT_STYLE, key_captions
+from .motion.templates import caption_keywords
 from .footage_match import auto_topic, core_subject, detect_era, scene_subjects, topic_queries
 from .youtube_auto import AutoYouTubeManager
 
@@ -162,6 +163,15 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
     }
 
 
+EFFECT_KEYS = ("film_look", "photo_graphics", "subscribe_button")
+
+
+def normalize_effects(value: Any) -> dict[str, bool]:
+    """Timeline effects; each is on unless the project turned it off."""
+    supplied = value if isinstance(value, dict) else {}
+    return {key: bool(supplied.get(key, True)) for key in EFFECT_KEYS}
+
+
 def normalize_render_options(value: Any) -> dict[str, Any]:
     supplied = value if isinstance(value, dict) else {}
     try:
@@ -230,6 +240,11 @@ class StudioApplication:
             raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
         project = dict(project)
         project["caption_style"] = normalize_caption_style(project.get("caption_style"))
+        project["effects"] = normalize_effects(project.get("effects"))
+        project["caption_keywords"] = {
+            str(scene["id"]): sorted(caption_keywords(str(scene.get("caption_text") or "")))
+            for scene in self.db.list_scenes(project_id) if scene.get("caption_text")
+        }
         project["voiceover_media_url"] = ""
         if project.get("voiceover_path"):
             try:
@@ -355,7 +370,9 @@ class StudioApplication:
             })
         updated = [self.db.update_scene(str(scene["id"]), {"caption_text": text}) for scene, text in zip(scenes, texts)]
         self.db.update_project(project_id, caption_style=style)
-        return {"scenes": updated, "caption_style": style, "source": source, "captioned": sum(bool(text) for text in texts)}
+        keywords = {str(scene["id"]): sorted(caption_keywords(text)) for scene, text in zip(scenes, texts) if text}
+        return {"scenes": updated, "caption_style": style, "source": source, "captioned": sum(bool(text) for text in texts),
+                "caption_keywords": keywords}
 
     def logo_metadata(self, service: YouTubeSourceService, video_id: str, clip: Path) -> dict[str, Any]:
         """Logo boxes and hiding crop for one clip, using its whole source video's storyboard."""
@@ -720,6 +737,15 @@ def build_handler(application: StudioApplication):
                 application.db.update_project(project_id, caption_style=style)
                 self._json({"caption_style": style})
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/effects", path)
+            if match:
+                project_id = match.group(1)
+                if not application.db.get_project(project_id):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                effects = normalize_effects(self._read_json())
+                application.db.update_project(project_id, effects=effects)
+                self._json({"effects": effects})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/hide-logos", path)
             if match:
                 if not application.db.get_project(match.group(1)):
@@ -921,6 +947,8 @@ def build_handler(application: StudioApplication):
                 supplied = self._read_json()
                 if not supplied.get("caption_style"):
                     supplied["caption_style"] = project.get("caption_style")
+                # Effects are chosen on the timeline, not in the export dialog.
+                supplied.update(normalize_effects(project.get("effects")))
                 options = normalize_render_options(supplied)
                 style = options["caption_style"]
                 application.db.update_project(project_id, caption_style=style)

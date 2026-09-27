@@ -166,6 +166,7 @@
                   <video id="previewVideo" muted playsinline preload="metadata" hidden></video>
                   <div class="preview-empty" id="previewEmpty">Generate or import media to preview this scene</div>
                   <div class="preview-caption" id="previewCaption" hidden></div>
+                  <div class="preview-subscribe" id="previewSubscribe" hidden><span class="subscribe-pill">SUBSCRIBE</span><span class="subscribe-bell">🔔</span></div>
                   <span class="preview-scene-badge" id="previewSceneBadge">No scene</span>
                 </div>
               </div>
@@ -185,11 +186,12 @@
             </section>
 
             <aside class="timeline-inspector">
-              <div class="inspector-tabs"><button class="active" type="button" data-inspector-tab="text">Text</button><button type="button" data-inspector-tab="scene">Scene</button><button type="button" data-inspector-tab="animation">Animation</button></div>
+              <div class="inspector-tabs"><button class="active" type="button" data-inspector-tab="text">Text</button><button type="button" data-inspector-tab="scene">Scene</button><button type="button" data-inspector-tab="animation">Effects</button></div>
 
               <div class="inspector-content active" data-inspector-panel="text">
                 <div class="subtabs"><button class="active" type="button">Basic</button><button type="button">Bubble</button><button type="button">Effects</button></div>
                 <div class="caption-mode-row"><span>Captions</span><button class="button small" id="keyCaptionsButton" type="button" title="Short centred text only on key moments, like documentary channels">Key points</button><button class="button ghost small" id="fullCaptionsButton" type="button" title="Every sentence as a subtitle">Full subtitles</button></div>
+                <div class="control-row"><span>Animation</span><div class="segmented grow"><button type="button" data-caption-animation="highlight" title="Words appear one by one; numbers and ingredients in yellow boxes">Highlight words</button><button type="button" data-caption-animation="none" title="Plain caption with the style below">Plain</button></div></div>
                 <label class="sr-only" for="timelineCaption">Caption text</label>
                 <textarea id="timelineCaption" rows="4" placeholder="Caption shown during this scene"></textarea>
                 <div class="control-row"><span>Font</span><select id="captionFont"><option>Arial</option><option>Helvetica</option><option>Verdana</option><option>Georgia</option><option>Impact</option><option>Poppins</option><option>Montserrat</option><option>Amsi Pro</option></select><button class="mini-button" id="addFontButton" type="button" title="Add font">+</button></div>
@@ -234,7 +236,14 @@
                 <input id="replacementMediaInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" hidden>
                 <div class="inspector-footer"><button class="button ghost small" id="replaceMediaButton" type="button">Replace media</button><button class="button primary small" id="saveTimelineButton" type="button">Save scene</button></div>
               </div>
-              <div class="inspector-content" data-inspector-panel="animation"><p class="hint">Scene motion and transitions are available in the Scene tab. Caption animation keyframes are prepared for a later module.</p></div>
+              <div class="inspector-content" data-inspector-panel="animation">
+                <div><span class="eyebrow">Video effects</span><h3>Applied to the whole video</h3></div>
+                <div class="control-row"><span>Captions</span><div class="segmented grow"><button type="button" data-caption-animation="highlight">Highlight words</button><button type="button" data-caption-animation="none">Plain</button></div></div>
+                <label class="check"><input id="effectFilmLook" type="checkbox" data-effect="film_look"><span>Vintage film look on every clip</span></label>
+                <label class="check"><input id="effectPhotoGraphics" type="checkbox" data-effect="photo_graphics"><span>Photo graphics (polaroid stack / graph-paper card on photos)</span></label>
+                <label class="check"><input id="effectSubscribe" type="checkbox" data-effect="subscribe_button"><span>Animated subscribe button where the VO says "subscribe"</span></label>
+                <p class="hint">The player shows these while you edit; Export uses exactly the same settings.</p>
+              </div>
             </aside>
           </div>
 
@@ -347,9 +356,7 @@
           <label>Export location<div class="browse-row"><input id="exportDirectory" readonly placeholder="Project renders folder"><button class="button ghost" id="browseExportDirectory" type="button">Browse…</button></div></label>
           <p class="export-summary" id="exportSummary">1920 × 1080 · 30 fps · 12 Mbps</p>
           <label class="check"><input id="burnCaptions" type="checkbox" checked><span>Burn styled captions into video</span></label>
-          <label class="check"><input id="exportFilmLook" type="checkbox" checked><span>Vintage film look on every clip (same era feel)</span></label>
-          <label class="check"><input id="exportPhotoGraphics" type="checkbox" checked><span>Photo graphics (polaroid stack / graph-paper card)</span></label>
-          <label class="check"><input id="exportSubscribe" type="checkbox" checked><span>Animated subscribe button (where the VO says subscribe)</span></label>
+          <p class="hint">Film look, photo graphics, subscribe button and caption animation are set on the Timeline (Text and Effects tabs).</p>
           <label class="check"><input id="exportEditPackage" type="checkbox"><span>Premiere edit package (XML + clips + captions.srt)</span></label>
           <label class="check"><input id="exportCapCut" type="checkbox"><span>CapCut project (quit CapCut first; appears in its project list)</span></label>
           <button class="button primary full" id="renderButton" type="button">Export final MP4</button>
