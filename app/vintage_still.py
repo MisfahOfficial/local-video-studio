@@ -24,9 +24,16 @@ NEGATIVE = (
 )
 
 
-def still_prompt(scene_text: str, subject: str, era: str) -> str:
+def still_prompt(scene_text: str, subject: str, era: str, people: bool = True) -> str:
     period = era or "mid-century"
     about = f" Main subject: {subject}." if subject else ""
+    if not people:
+        # Ingredient cards: the item alone, filling the frame; nobody in the kitchen behind it.
+        return (
+            f"{scene_text.strip()[:220]}{about} Close-up {period} snapshot photograph of the food only, "
+            "filling the frame, on a plain wooden counter, empty background, no people. Shot on Kodachrome "
+            "slide film, natural window light, slightly soft focus, faded colours, fine film grain"
+        )
     return (
         f"{scene_text.strip()[:220]}{about} Candid {period} amateur snapshot photograph, shot on Kodachrome "
         f"slide film with a cheap camera. Period-correct {period} American home: enamel stove, rounded "
@@ -58,15 +65,16 @@ def film_finish(content: bytes, seed: int, size: tuple[int, int] = (1920, 1080))
 
 
 def generate_vintage_still(
-    settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path,
+    settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path, people: bool = True,
 ) -> dict[str, Any]:
     """Generate, age and save a still; returns asset metadata. Raises ProviderError without a key."""
     if not settings.runware_api_key:
         raise ProviderError("No real footage passed and no Runware key is set for a fallback image")
     seed = random.randint(1, 2**31 - 1)
-    prompt = still_prompt(scene_text, subject, era)
+    prompt = still_prompt(scene_text, subject, era, people)
+    negative = NEGATIVE if people else f"{NEGATIVE}, person, people, woman, man, face, hands, crowd"
     result = RunwareImageProvider(settings.runware_api_key).generate(GenerationRequest(
-        prompt=prompt, negative_prompt=NEGATIVE, model=settings.runware_default_model,
+        prompt=prompt, negative_prompt=negative, model=settings.runware_default_model,
         width=settings.width, height=settings.height, seed=seed, steps=4,
     ))
     destination.parent.mkdir(parents=True, exist_ok=True)

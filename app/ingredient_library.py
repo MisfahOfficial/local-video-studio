@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .footage_match import FootageVerifier
-from .photo_source import frame_photo, load_image, search_photos
+from .photo_source import frame_photo, load_image, load_images, search_photos
 from .vintage_still import generate_vintage_still
 
 _lock = threading.Lock()
@@ -36,7 +36,8 @@ def item_image(
             items.setdefault(str(item.get("id") or item["url"]), item)
         if len(items) >= 12:
             break
-    candidates = [(item, load_image(str(item.get("thumbnail") or item["url"]))) for item in list(items.values())[:14]]
+    pool = list(items.values())[:14]
+    candidates = list(zip(pool, load_images([str(item.get("thumbnail") or item["url"]) for item in pool])))
     candidates = [(item, image) for item, image in candidates if image is not None]
     ranked = verifier.rank_ingredient_photos([image for _item, image in candidates], name) if candidates else []
     for index, _score in ranked[:2]:
@@ -50,6 +51,7 @@ def item_image(
     try:
         generate_vintage_still(
             settings, f"A close-up of {name} in a simple bowl on a wooden kitchen counter.", name, era, cached,
+            people=False,
         )
         return cached
     except Exception:
@@ -69,7 +71,8 @@ def dish_images(
     for query in (f"{era} {noun}".strip(), f"vintage {noun}", f"homemade {noun}", noun):
         for item in search_photos(query, count=12):
             items.setdefault(str(item.get("id") or item["url"]), item)
-    candidates = [(item, load_image(str(item.get("thumbnail") or item["url"]))) for item in list(items.values())[:30]]
+    pool = list(items.values())[:30]
+    candidates = list(zip(pool, load_images([str(item.get("thumbnail") or item["url"]) for item in pool])))
     candidates = [(item, image) for item, image in candidates if image is not None]
     ranked = verifier.rank_ingredient_photos([image for _item, image in candidates], noun, "homemade food")
     library.mkdir(parents=True, exist_ok=True)

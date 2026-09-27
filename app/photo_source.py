@@ -43,6 +43,16 @@ def load_image(url: str) -> Any:
         return None
 
 
+def load_images(urls: list[str]) -> list[Any]:
+    """Several thumbnails at once (None where one fails); one by one this took most of a scene's time."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not urls:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(urls))) as pool:
+        return list(pool.map(load_image, urls))
+
+
 def frame_photo(photo: Any) -> Any:
     """Fill 16:9: landscape photos are cropped, others sit on a blurred copy of themselves."""
     from PIL import Image, ImageFilter, ImageOps

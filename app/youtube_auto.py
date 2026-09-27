@@ -19,11 +19,11 @@ from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, sho
 from .youtube_source import pick_video_stream
 from .ingredient_library import dish_images, item_image
 from .stock_video import download_stock_video, search_stock_videos
-from .photo_source import load_image, save_photo, search_photos
+from .photo_source import load_image, load_images, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    heading_subject, hook_theme, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
+    PLURAL_FOODS, heading_subject, hook_theme, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -194,7 +194,7 @@ class _NoFootage(Exception):
 SHOT_PADDING = 2.0
 
 # Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
-SCENE_WORKERS = 3
+SCENE_WORKERS = 5
 
 
 @dataclass
@@ -229,6 +229,9 @@ class _Run:
     photos: list[int] = field(default_factory=list)
     used_photos: set[str] = field(default_factory=set)
     photo_titles: list[set[str]] = field(default_factory=list)
+    card_ids: set[str] = field(default_factory=set)
+    gallery_id: str = ""
+    gallery_done: bool = False
     by_position: dict[int, str] = field(default_factory=dict)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -354,6 +357,16 @@ class AutoYouTubeManager:
             # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
             max_attempts=4 if service.fair_use else 2,
         )
+        # Graphics are planned in story order so parallel workers cannot repeat them: an ingredient
+        # card only when it shows something new, one gallery per video.
+        shown: set[str] = set()
+        for item in all_scenes:
+            items = set(ingredient_list(str(item["narration"])))
+            if items and not items <= shown:
+                run.card_ids.add(str(item["id"]))
+                shown |= items
+        run.gallery_id = next((str(item["id"]) for item in all_scenes
+                               if not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
         try:
             # Several scenes at once: most of the time is spent waiting on YouTube.
@@ -429,9 +442,17 @@ class AutoYouTubeManager:
             exact = not signature or any(mentions_topic(text, word) for word in signature)
             # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
             theme_words = [word for word in core.split() if word not in _GENERIC_THEME]
-            named = (any(mentions_topic(text, word) for word in theme_words)
-                     if is_hook and theme_words else mentions_topic(text, core))
-            return (not NON_FOOTAGE_TITLE.search(title) and not off_cuisine(title, run.script)
+            if is_hook and theme_words:
+                named = any(mentions_topic(text, word) for word in theme_words)
+            else:
+                # "Chicken and Rice Casserole" must be the video's own dish: every word of the name in its
+                # title ("Buffalo Chicken Dynamite Rice" only lists it among others in the description).
+                dish_words = [word for word in core.split() if word not in _STOPWORDS]
+                named = (all(mentions_topic(title, word) for word in dish_words)
+                         if len(dish_words) >= 2 else mentions_topic(text, core))
+            channel = str(item.get("channel") or item.get("uploader") or "")
+            return (not NON_FOOTAGE_TITLE.search(title) and not NON_FOOTAGE_TITLE.search(channel)
+                    and not off_cuisine(title, run.script)
                     and str(item.get("video_id")) not in run.exclude_videos
                     and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
                     and named and exact)
@@ -458,6 +479,12 @@ class AutoYouTubeManager:
                 run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
                 run.settings.blocked_channels, recipe, bool(run.era), is_hook,
             ) if ranked else []
+            if not choices and is_hook and ranked:
+                # No period footage passed: real modern footage of the theme still beats a repeat or a gap.
+                choices = self._choose(
+                    run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
+                    run.settings.blocked_channels, recipe, True, False,
+                )
             if not choices:
                 raise _NoFootage()
             if choices[0][2] is not None and choices[0][2] < REVIEW_BELOW and self._real_photo(
@@ -470,7 +497,8 @@ class AutoYouTubeManager:
                 self._progress(run)
                 return
             last_error: Exception | None = None
-            for candidate, start_time, topic_score in choices[:3]:
+            # Archival films cut often, so the hook tries more sources for one clean shot.
+            for candidate, start_time, topic_score in choices[:5 if is_hook else 3]:
                 video_id = str(candidate["video_id"])
                 with run.lock:
                     if start_time is not None and any(abs(start_time - used) < 15 for used in run.used.get(video_id, [])):
@@ -546,6 +574,11 @@ class AutoYouTubeManager:
                     with run.lock:
                         run.completed += 1
                         run.stock.append(position)
+                elif is_hook and self._theme_gallery(run, scene, position):
+                    # Last real option for the opening: a gallery of genuine photos of the theme's dishes.
+                    with run.lock:
+                        run.completed += 1
+                        run.graphics.append(position)
                 elif is_hook:
                     raise ProviderError("No real footage or photo passed for this hook scene; AI images are never used in the hook")
                 else:
@@ -570,16 +603,27 @@ class AutoYouTubeManager:
             ([f"{run.era} {core_subject(subject)}".strip()] if subject else [])
             + [query.replace(" footage", "") for query in queries[:2]]
         ))
+        if str(scene["id"]) in run.hook_ids and subject:
+            # Archives name photos plainly ("church supper, 1941"): search the theme without its list noun too.
+            plain = " ".join(word for word in subject.split() if word not in _GENERIC_THEME) or subject
+            photo_queries = list(dict.fromkeys([f"{run.era} {plain}".strip(), f"vintage {plain}", plain, *photo_queries]))
         items: dict[str, dict[str, Any]] = {}
-        for query in [item for item in photo_queries if item.strip()][:3]:
-            for item in search_photos(query):
+        for query in [item for item in photo_queries if item.strip()][:4]:
+            with run.lock:
+                cached = run.searches.get(f"photo:{query}")
+            if cached is None:
+                # Scenes of one section repeat the same archive searches.
+                cached = search_photos(query)
+                with run.lock:
+                    run.searches[f"photo:{query}"] = cached
+            for item in cached:
                 items.setdefault(str(item.get("id") or item["url"]), item)
             if len(items) >= 12:
                 break
         with run.lock:
             fresh = [item for key, item in items.items()
                      if key not in run.used_photos and not _seen_title(item, run.photo_titles)]
-        candidates = [(item, load_image(str(item.get("thumbnail") or item["url"]))) for item in fresh[:12]]
+        candidates = list(zip(fresh[:12], load_images([str(item.get("thumbnail") or item["url"]) for item in fresh[:12]])))
         candidates = [(item, image) for item, image in candidates if image is not None]
         for index, _score in run.verifier.rank_photos(
             [image for _item, image in candidates], subject, f"{run.era} {scene_text}".strip(),
@@ -610,6 +654,35 @@ class AutoYouTubeManager:
             return True
         return False
 
+    def _theme_gallery(self, run: "_Run", scene: dict[str, Any], position: int) -> bool:
+        """A gallery of real photos of the video's dishes, for a hook scene nothing else could fill."""
+        from PIL import Image
+
+        from .motion.engine import encode
+        from .motion.templates import gallery_stack
+
+        with run.lock:
+            if run.verifier is None or not run.theme or run.gallery_done:
+                return False  # one gallery per video; a second reads as a repeat
+            run.gallery_done = True
+        noun = next((word for word in reversed(run.theme.split()) if word in PLURAL_FOODS), "dishes")
+        dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
+        paths = dish_images(noun, [dish for dish in dishes if dish], self.paths.root / "ingredient_library",
+                            run.verifier, run.settings, run.era, False)
+        if len(paths) < 3:
+            return False
+        duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+        destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
+        encode(gallery_stack([Image.open(path) for path in paths]), duration, destination, ffmpeg_path=run.service.ffmpeg_path)
+        asset = self.db.add_asset(
+            project_id=run.project_id, scene_id=str(scene["id"]),
+            candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+            media_kind="video", provider="graphic", model="gallery", local_path=str(destination),
+            remote_url=None, provider_asset_id=None, cost=0.0, metadata={"graphic": "gallery", "items": [path.stem for path in paths]},
+        )
+        self.db.select_asset(str(scene["id"]), str(asset["id"]))
+        return True
+
     def _motion_graphic(self, run: "_Run", scene: dict[str, Any], position: int, is_hook: bool) -> bool:
         """Ingredient lists become ingredient cards and 'thirty desserts' becomes a gallery."""
         from PIL import Image
@@ -618,8 +691,8 @@ class AutoYouTubeManager:
         from .motion.templates import gallery_stack, ingredient_cards
 
         text = str(scene.get("narration") or "")
-        ingredients = ingredient_list(text)
-        many = "" if ingredients else plural_items(text)
+        ingredients = ingredient_list(text) if str(scene["id"]) in run.card_ids else []
+        many = "" if ingredients or str(scene["id"]) != run.gallery_id else plural_items(text)
         if not ingredients and not many:
             return False
         library = self.paths.root / "ingredient_library"
@@ -641,6 +714,8 @@ class AutoYouTubeManager:
                 return False
             frame = gallery_stack([Image.open(path) for path in paths])
             metadata = {"graphic": "gallery", "items": [path.stem for path in paths]}
+            with run.lock:
+                run.gallery_done = True
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
         destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
         encode(frame, duration, destination, ffmpeg_path=run.service.ffmpeg_path)
@@ -670,7 +745,7 @@ class AutoYouTubeManager:
                 break
         with run.lock:
             fresh = [item for key, item in items.items() if f"pexels-{key}" not in run.used_photos]
-        posters = [(item, load_image(str(item.get("image") or ""))) for item in fresh[:10]]
+        posters = list(zip(fresh[:10], load_images([str(item.get("image") or "") for item in fresh[:10]])))
         posters = [(item, image) for item, image in posters if image is not None]
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
         for index, _score in run.verifier.rank_photos([image for _item, image in posters], subject, scene_text, recipe)[:2]:

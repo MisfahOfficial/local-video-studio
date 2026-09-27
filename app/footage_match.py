@@ -47,7 +47,8 @@ NON_FOOTAGE_TITLE = re.compile(
     r"\b(lyrics?|lyric video|music video|official video|asmr|podcast|reacts?|reaction|prank(ed)?|karaoke|"
     r"trailer|unboxing|live ?stream|#shorts|audiobook|full album|playlist|roblox|minecraft|fortnite|gameplay|"
     r"let'?s play|video game|walkthrough|animation|animated|cartoon|no music|no talk|music|songs?|radio|"
-    r"sing[- ]?along)\b",
+    r"sing[- ]?along|saturday night live|snl|sketch|skit|comedy|comedian|stand[- ]?up|parody|sitcom|"
+    r"full episode|hulu|netflix|prime video|late show|tonight show|jimmy (fallon|kimmel)|conan)\b",
     re.IGNORECASE,
 )
 
@@ -270,7 +271,8 @@ def signature_words(recipe: str, heading: str) -> set[str]:
     """Words a matching video should mention: the dish name or its signature ingredients."""
     kind = core_subject(heading).split()[-1:] if heading else []
     # The full dish name ("poor man's cookies"), never just its kind ("cookies").
-    return {word for word in _words(recipe) if word not in kind} | ({heading} if heading else set())
+    return ({word for word in _words(recipe) if word not in kind and word not in _STOP}
+            | ({heading} if heading else set()))
 
 
 BASIC_INGREDIENTS = {"milk", "butter", "egg", "eggs", "flour", "sugar", "oil", "salt", "cream"}
@@ -419,6 +421,12 @@ AI_DISCLOSURE = re.compile(
 
 
 ERA = re.compile(r"\b(1[89]\d0s|\d0s|'\d0s|fifties|sixties|seventies|eighties|forties|thirties)\b", re.IGNORECASE)
+# "From Old America", "Back in the Day": a period named without a decade.
+PERIOD_WORDS = re.compile(
+    r"\b(old america|old[- ]time|olden days|back in the day|bygone|yesteryear|the past|old days|"
+    r"depression[- ]era|war[- ]?time|post[- ]war|mid[- ]century|grandma'?s era)\b",
+    re.IGNORECASE,
+)
 NOSTALGIA_WORDS = re.compile(
     r"\b(forgotten|vanished|lost|grandma'?s?|grandmas|nobody|remember\w*|golden age|back then|used to|"
     r"life in america|felt like|was like|why did we stop|nostalgi\w*|disappeared|gone forever|hacks)\b",
@@ -446,7 +454,7 @@ def looks_like_ai_slideshow(item: dict[str, Any], blocked_channels: str = "") ->
     if channel.lower() in blocked or NARRATOR_CHANNEL.search(channel) or AI_LIKE_TITLE.search(title):
         return True
     # "FORGOTTEN Objects in EVERY 1950s Kitchen": era + nostalgia hook is the AI-slideshow formula.
-    if ERA.search(title) and NOSTALGIA_WORDS.search(title):
+    if (ERA.search(title) or PERIOD_WORDS.search(title)) and NOSTALGIA_WORDS.search(title):
         return True
     duration = float(item.get("duration_seconds") or item.get("duration") or 0)
     if duration > 1800 and LISTICLE_TITLE.search(title):
@@ -695,8 +703,11 @@ class FootageVerifier:
                 features, "a hyperrealistic AI render, overly perfect and saturated",
                 ("an ordinary real photo", "real camera footage"),
             )
+            # An ingredient card shows the food, never a cook holding it.
+            people = [max(a, b) for a, b in zip(self.scorer.probabilities(features, *FACE),
+                                                self.scorer.probabilities(features, *PERSON))]
         ranked = [(index, plain[index]) for index in range(len(photos))
-                  if plain[index] >= 0.6 and render[index] < SYNTHETIC_THRESHOLD]
+                  if plain[index] >= 0.6 and render[index] < SYNTHETIC_THRESHOLD and people[index] < FACE_LIMIT]
         return sorted(ranked, key=lambda item: item[1], reverse=True)
 
     def has_frames(self, video_id: str) -> bool:
