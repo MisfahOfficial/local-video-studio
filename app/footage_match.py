@@ -285,11 +285,22 @@ PLURAL_FOODS = {
 }
 
 
+MEASURES = {
+    "cup", "cups", "tablespoon", "tablespoons", "teaspoon", "teaspoons", "can", "cans", "pound", "pounds", "ounce",
+    "ounces", "stick", "sticks", "pinch", "dash", "quart", "quarts", "pint", "pints", "handful", "spoonful", "packet",
+    "package", "jar", "box", "tbsp", "tsp", "lb", "oz",
+}
+# Words that describe the finished dish rather than what goes into it.
+DISH_TALK = {"finished", "served", "tasted", "taste", "texture", "flavor", "flavour", "bite"}
+
+
 def ingredient_list(scene_text: str) -> list[str]:
-    """Ingredients named in a sentence that shows no action ("butter and eggs were too expensive")."""
-    if is_process_scene(scene_text):
-        return []
+    """Ingredients a sentence talks about: two or more named ("butter and eggs were too expensive",
+    "mixed oats with sugar"), or one with a measure ("an entire can of cream of mushroom").
+    Every such scene becomes an ingredient card; sentences about the finished dish do not."""
     words = _words(scene_text)
+    if set(words) & DISH_TALK:
+        return []
     found: list[str] = []
     negated_until = -1
     for index, word in enumerate(words):
@@ -301,7 +312,10 @@ def ingredient_list(scene_text: str) -> list[str]:
             name = DISPLAY.get(word, word)
             if name not in found:
                 found.append(name)
-    return found if len(found) >= 2 else []
+    parts = {part for word in words for part in word.split("-")}  # "quarter-cup"
+    if len(found) >= 2 or (found and parts & (MEASURES | {"ingredient", "ingredients"})):
+        return found
+    return []
 
 
 def plural_items(scene_text: str) -> str:
@@ -668,6 +682,8 @@ class FootageVerifier:
         self._lookalikes: dict[str, tuple[str, ...]] = {}
         self._grey: dict[str, Any] = {}
         self._synthetic: dict[str, float] = {}
+        # Small storyboard tiles, kept so the final judge can see the chosen moment.
+        self._tiles: dict[str, list[tuple[float, Any]]] = {}
         # One model on one GPU: scene threads take turns.
         self.lock = threading.RLock()
 
@@ -771,11 +787,27 @@ class FootageVerifier:
         from .logo_guard import storyboard_stack
 
         self._frames[video_id] = ([time for time, _image in tiles], self.scorer.embed_images([image for _time, image in tiles]))
+        self._tiles[video_id] = [(time, image) for time, image in tiles]
+        while len(self._tiles) > 60:
+            self._tiles.pop(next(iter(self._tiles)))
         # Greyscale frames from across the whole video let logo detection see what never moves.
         stack = storyboard_stack(tiles)
         self._grey[video_id] = None if stack is None else stack.astype("uint8")
         while len(self._grey) > 24:
             self._grey.pop(next(iter(self._grey)))
+
+    def moment_frames(self, video_id: str, start: float, duration: float, count: int = 3) -> list[Any]:
+        """Storyboard tiles nearest the start, middle and end of a chosen moment."""
+        tiles = self._tiles.get(video_id) or []
+        if not tiles:
+            return []
+        wanted = [start + duration * index / max(1, count - 1) for index in range(count)]
+        chosen = [min(tiles, key=lambda tile: abs(tile[0] - moment))[1] for moment in wanted]
+        unique: list[Any] = []
+        for image in chosen:
+            if all(image is not other for other in unique):
+                unique.append(image)
+        return unique
 
     def grey_frames(self, video_id: str) -> Any:
         stack = self._grey.get(video_id)

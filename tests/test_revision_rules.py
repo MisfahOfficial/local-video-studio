@@ -12,7 +12,10 @@ class RevisionRuleTests(unittest.TestCase):
     def test_ingredient_lists_become_cards(self) -> None:
         self.assertEqual(ingredient_list("cents per batch when butter and eggs were too expensive."), ["butter", "eggs"])
         self.assertEqual(ingredient_list("Just oats, sugar, and determination."), ["oats", "sugar"])
-        self.assertEqual(ingredient_list("Grandmas mixed two cups of rolled oats with sugar"), [])  # a step: video
+        # Ingredient talk is always a card, recipe steps included.
+        self.assertEqual(ingredient_list("Grandmas mixed two cups of rolled oats with sugar"), ["oats", "sugar"])
+        self.assertEqual(ingredient_list("A quarter-cup of molasses was stirred in"), ["molasses"])
+        self.assertEqual(ingredient_list("The finished casserole had tender chicken pieces,"), [])
         self.assertEqual(ingredient_list("The dough came together without any eggs or butter."), [])
         self.assertEqual(ingredient_list("It used only molasses."), [])
 

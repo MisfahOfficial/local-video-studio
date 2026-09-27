@@ -14,6 +14,9 @@ class StudioSettings:
     gemini_api_key: str = ""
     youtube_api_key: str = ""
     pexels_api_key: str = ""
+    # Claude looks at the best few candidates per scene and picks the one that truly fits.
+    anthropic_api_key: str = ""
+    judge_model: str = "claude-sonnet-5"
     youtube_license_mode: str = "creative_commons"
     # Your own channels and others whose footage should never be reused (comma separated).
     blocked_channels: str = "Vintage Life of USA, Forgotten Flavors of USA, Britain We Lived In, Canada We Lived In"
@@ -32,7 +35,8 @@ class StudioSettings:
 
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key", "pexels_api_key"):
+        for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key", "pexels_api_key",
+                    "anthropic_api_key"):
             data[f"{key}_set"] = bool(data.pop(key))
         return data
 
@@ -57,6 +61,7 @@ class SettingsStore:
         settings.gemini_api_key = os.getenv("GEMINI_API_KEY", settings.gemini_api_key)
         settings.youtube_api_key = os.getenv("YOUTUBE_API_KEY", settings.youtube_api_key)
         settings.pexels_api_key = os.getenv("PEXELS_API_KEY", settings.pexels_api_key)
+        settings.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", settings.anthropic_api_key)
         return settings
 
     def update(self, changes: dict[str, Any]) -> StudioSettings:

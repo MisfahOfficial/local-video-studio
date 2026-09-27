@@ -18,6 +18,7 @@ from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
 from .text_guard import has_burned_in_text, sample_frames
+from .ai_judge import ClaudeJudge, best_usable
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
 from .ingredient_library import dish_images, item_image
@@ -26,7 +27,7 @@ from .photo_source import load_image, load_images, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     MODERN_TITLE, NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    PLURAL_FOODS, heading_subject, hook_theme, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
+    PLURAL_FOODS, heading_subject, hook_theme, is_process_scene, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -235,6 +236,8 @@ class _Run:
     card_ids: set[str] = field(default_factory=set)
     gallery_id: str = ""
     gallery_done: bool = False
+    judge: Any = None
+    photo_budget: int = 0
     by_position: dict[int, str] = field(default_factory=dict)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -360,14 +363,11 @@ class AutoYouTubeManager:
             # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
             max_attempts=4 if service.fair_use else 2,
         )
-        # Graphics are planned in story order so parallel workers cannot repeat them: an ingredient
-        # card only when it shows something new, one gallery per video.
-        shown: set[str] = set()
+        # Graphics are planned in story order: one gallery per video.
+        # Every scene that talks about ingredients is an ingredient card (motion graphics, never a clip).
         for item in all_scenes:
-            items = set(ingredient_list(str(item["narration"])))
-            if items and not items <= shown:
+            if ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"])):
                 run.card_ids.add(str(item["id"]))
-                shown |= items
         run.gallery_id = next((str(item["id"]) for item in all_scenes
                                if not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
         # A gallery already on the timeline (outside this run) counts as the video's one gallery.
@@ -379,6 +379,12 @@ class AutoYouTubeManager:
         )
         if run.gallery_id in redo:
             run.gallery_done = False
+        run.judge = ClaudeJudge.from_settings(settings)
+        # 80:20 - four of five filmable scenes are real video; photos may replace a weak clip only
+        # while they stay under a fifth (a scene with no usable video still gets a photo).
+        filmable = [item for item in all_scenes if not heading_subject(str(item["narration"]))
+                    and str(item["id"]) not in run.card_ids and str(item["id"]) != run.gallery_id]
+        run.photo_budget = len(filmable) // 5
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
         try:
             # Several scenes at once: most of the time is spent waiting on YouTube.
@@ -400,6 +406,9 @@ class AutoYouTubeManager:
                     project_id, running=False, current_scene=None, completed=run.completed, failed=run.failed,
                     errors=list(run.errors), review=sorted(run.review), generated=sorted(run.generated),
                     photos=sorted(run.photos), graphics=sorted(run.graphics), stock=sorted(run.stock),
+                    judge_cost=round(run.judge.cost, 3) if run.judge else 0.0,
+                    judge_calls=run.judge.calls if run.judge else 0,
+                    judge_notice=run.judge.disabled if run.judge else "",
                 )
             with self._lock:
                 self._threads.pop(project_id, None)
@@ -508,9 +517,16 @@ class AutoYouTubeManager:
                     run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
                     run.settings.blocked_channels, recipe, True, False,
                 )
+            need = self._need(run, scene, subject, recipe, is_hook)
+            judged = self._judge_videos(run, need, choices, duration)
+            if judged is not None:
+                choices = judged
             if not choices:
                 raise _NoFootage()
-            if choices[0][2] is not None and choices[0][2] < REVIEW_BELOW and self._real_photo(
+            with run.lock:
+                photo_room = len(run.photos) < run.photo_budget
+            weak = (choices[0][2] is not None and choices[0][2] < REVIEW_BELOW) if judged is None else False
+            if weak and photo_room and self._real_photo(
                 run, scene, position, scene_text, subject, queries,
             ):
                 # Order is video, image, stock, AI: a weak clip loses to a photo that clearly fits.
@@ -660,10 +676,13 @@ class AutoYouTubeManager:
                      if key not in run.used_photos and not _seen_title(item, run.photo_titles)]
         candidates = list(zip(fresh[:12], load_images([str(item.get("thumbnail") or item["url"]) for item in fresh[:12]])))
         candidates = [(item, image) for item, image in candidates if image is not None]
-        for index, _score in run.verifier.rank_photos(
+        ranked = run.verifier.rank_photos(
             [image for _item, image in candidates], subject, f"{run.era} {scene_text}".strip(),
             run.recipe_by_id.get(str(scene["id"]), ""),
-        )[:2]:
+        )
+        is_hook = str(scene["id"]) in run.hook_ids
+        need = self._need(run, scene, subject, run.recipe_by_id.get(str(scene["id"]), ""), is_hook)
+        for index in self._judge_photos(run, need, [image for _item, image in candidates], [i for i, _ in ranked])[:2]:
             item = candidates[index][0]
             photo = load_image(str(item["url"]))
             if photo is None:
@@ -688,6 +707,43 @@ class AutoYouTubeManager:
             self.db.select_asset(str(scene["id"]), str(asset["id"]))
             return True
         return False
+
+    @staticmethod
+    def _need(run: "_Run", scene: dict[str, Any], subject: str, recipe: str, is_hook: bool) -> str:
+        """What the judge should see, in plain words."""
+        sentence = str(scene.get("narration") or "").strip()
+        era = run.era or "mid-century"
+        if is_hook:
+            return (f'The opening of a nostalgic documentary about {run.theme or subject}. Narration: "{sentence}". '
+                    f"Needs genuinely old footage or photos from the {era} (modern footage does not fit), showing "
+                    "what the sentence is about.")
+        dish = recipe or subject
+        step = " It is a recipe step, so the action itself should be visible." if is_process_scene(sentence) else ""
+        return f'A documentary section about {dish}. Narration: "{sentence}".{step} Show {dish} or this exact moment.'
+
+    def _judge_videos(
+        self, run: "_Run", need: str, choices: list[tuple[dict[str, Any], float | None, float | None]], duration: float,
+    ) -> list[tuple[dict[str, Any], float | None, float | None]] | None:
+        """Claude's order of the best few video choices (unusable ones dropped); None without a judge."""
+        if run.judge is None or run.verifier is None or not choices:
+            return None
+        top = choices[:4]
+        rows = [run.verifier.moment_frames(str(item["video_id"]), float(start or 0), duration) for item, start, _ in top]
+        keep = [index for index, frames in enumerate(rows) if frames]
+        verdicts = run.judge.judge(need, [rows[index] for index in keep])
+        if verdicts is None:
+            return None
+        return [top[keep[index]] for index in best_usable(verdicts)]
+
+    def _judge_photos(self, run: "_Run", need: str, images: list[Any], order: list[int]) -> list[int]:
+        """Claude's pick among the CLIP-ranked photos; the CLIP order when there is no judge."""
+        if run.judge is None or not order:
+            return order
+        top = order[:4]
+        verdicts = run.judge.judge(need, [[images[index]] for index in top])
+        if verdicts is None:
+            return order
+        return [top[index] for index in best_usable(verdicts)]
 
     def _period_photo(self, run: "_Run", scene: dict[str, Any], position: int) -> bool:
         """Last real option for a hook scene: a genuine photo of everyday life in the period."""
@@ -714,7 +770,10 @@ class AutoYouTubeManager:
         candidates = [(item, image) for item, image in zip(fresh, load_images(
             [str(item.get("thumbnail") or item["url"]) for item in fresh])) if image is not None]
         detail = f"an old photo of {' '.join(words) or 'family life'}"
-        for index, _score in run.verifier.rank_period_photos([image for _item, image in candidates], detail)[:3]:
+        ranked = run.verifier.rank_period_photos([image for _item, image in candidates], detail)
+        need = (f'The opening of a nostalgic documentary. Narration: "{scene.get("narration")}". A genuine old '
+                f"photo of everyday life in the {era} that suits this sentence.")
+        for index in self._judge_photos(run, need, [image for _item, image in candidates], [i for i, _ in ranked])[:3]:
             item = candidates[index][0]
             photo = load_image(str(item["url"]))
             key = str(item.get("id") or item["url"])
@@ -751,7 +810,7 @@ class AutoYouTubeManager:
         noun = next((word for word in reversed(run.theme.split()) if word in PLURAL_FOODS), "dishes")
         dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
         paths = dish_images(noun, [dish for dish in dishes if dish], self.paths.root / "ingredient_library",
-                            run.verifier, run.settings, run.era, False)
+                            run.verifier, run.settings, run.era, False, judge=run.judge)
         if len(paths) < 3:
             return False
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
@@ -782,8 +841,8 @@ class AutoYouTubeManager:
         # The hook never shows generated images, so there only real photos may fill a graphic.
         allow_generated = not is_hook
         if ingredients:
-            pictures = [(name, item_image(name, library, run.verifier, run.settings, run.era, allow_generated))
-                        for name in ingredients]
+            pictures = [(name, item_image(name, library, run.verifier, run.settings, run.era, allow_generated,
+                                          judge=run.judge)) for name in ingredients]
             pictures = [(name, path) for name, path in pictures if path is not None]
             if len(pictures) < 2:
                 return False
@@ -792,7 +851,7 @@ class AutoYouTubeManager:
         else:
             dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
             paths = dish_images(many, [dish for dish in dishes if dish], library, run.verifier, run.settings,
-                                run.era, allow_generated)
+                                run.era, allow_generated, judge=run.judge)
             if len(paths) < 3:
                 return False
             frame = gallery_stack([Image.open(path) for path in paths])
