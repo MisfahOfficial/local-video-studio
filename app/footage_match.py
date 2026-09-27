@@ -33,7 +33,8 @@ _STOP = {
     "hard", "harsh", "harshest", "best", "worst", "less", "least", "able", "within", "hours", "hour", "minutes",
     "survive", "survived", "survives", "changed", "change", "changes", "happen", "happened", "happens",
     # Narration verbs and channel talk.
-    "remind", "reminds", "reminded", "subscribe", "subscribed", "answer", "answers", "bring", "bringing",
+    "remind", "reminds", "reminded", "subscribe", "subscribed", "hit", "channel", "comment", "comments", "bell",
+    "notification", "notifications", "share", "video", "videos", "watch", "watching", "answer", "answers", "bring", "bringing",
     "brought", "back", "forgotten", "fill", "filled", "proved", "prove", "appeared", "require", "required",
     "didn", "don", "doesn", "wasn", "weren", "isn", "aren", "won", "ll", "ve", "re", "determination",
     "delicious", "tight", "expensive", "cheap", "every", "everyone", "anyone", "between", "straight",
@@ -48,7 +49,7 @@ NON_FOOTAGE_TITLE = re.compile(
     r"trailer|unboxing|live ?stream|#shorts|audiobook|full album|playlist|roblox|minecraft|fortnite|gameplay|"
     r"let'?s play|video game|walkthrough|animation|animated|cartoon|no music|no talk|music|songs?|radio|"
     r"sing[- ]?along|saturday night live|snl|sketch|skit|comedy|comedian|stand[- ]?up|parody|sitcom|"
-    r"full episode|hulu|netflix|prime video|late show|tonight show|jimmy (fallon|kimmel)|conan)\b",
+    r"full episode|full movie|hulu|netflix|prime video|late show|tonight show|jimmy (fallon|kimmel)|conan)\b",
     re.IGNORECASE,
 )
 
@@ -208,6 +209,7 @@ FOREIGN_CUISINE = {
     "hainanese", "fried rice", "kimchi", "korean", "chinese", "thai", "vietnamese", "japanese", "filipino",
     "adobo", "jollof", "nigerian", "mexican", "arroz", "bibimbap", "ramen", "sushi", "dim sum", "pho",
     "shawarma", "arabic", "arabian", "mandi", "kabsa", "turkish", "persian", "afghani", "sri lankan",
+    "bollywood", "tollywood", "tamil", "telugu", "hindi movie", "shemaroo",
 }
 
 
@@ -496,6 +498,10 @@ PRESENTER = ("a person looking into the camera and talking", (
     "people in an old home movie", "hands preparing food", "food on a table", "an empty kitchen",
 ))
 PRESENTER_LIMIT = 0.6
+HOST = ("a TV cooking show host speaking to the audience", (
+    "people in an old home movie", "hands preparing food", "food on a table", "an empty kitchen", "a crowd of people",
+))
+HOST_LIMIT = 0.7
 VINTAGE_LIMIT = 0.5
 
 
@@ -722,6 +728,18 @@ class FootageVerifier:
         ranked = [(index, plain[index]) for index in range(len(photos))
                   if plain[index] >= 0.6 and render[index] < SYNTHETIC_THRESHOLD and people[index] < FACE_LIMIT]
         return sorted(ranked, key=lambda item: item[1], reverse=True)
+
+    def shows_creator(self, frames: list[Any]) -> bool:
+        """True when full-size frames of a downloaded clip show a present-day person or a host on camera."""
+        if not frames:
+            return False
+        with self.lock:
+            features = self.scorer.embed_images(frames)
+            faces = [max(a, b) for a, b in zip(self.scorer.probabilities(features, *FACE),
+                                                self.scorer.probabilities(features, *PERSON))]
+            vintage = self.scorer.probabilities(features, *VINTAGE)
+            host = self.scorer.probabilities(features, *HOST)
+        return any(modern_face(face, old) or on_camera > HOST_LIMIT for face, old, on_camera in zip(faces, vintage, host))
 
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames

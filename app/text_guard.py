@@ -45,27 +45,29 @@ def is_overlay(lines: list[tuple[str, float]]) -> bool:
     return sum(len(re.findall(r"[A-Za-z]", text)) for text in readable) >= MIN_LETTERS
 
 
+def sample_frames(clip: Path, folder: Path, ffmpeg_path: str = "ffmpeg", samples: int = 3) -> list[Path]:
+    """Full-resolution stills from across the clip (storyboards are too small to show a host or a caption)."""
+    probe = subprocess.run([ffmpeg_path, "-i", str(clip)], capture_output=True, text=True, timeout=30).stderr
+    match = re.search(r"Duration: (\d+):(\d+):([\d.]+)", probe)
+    duration = int(match[1]) * 3600 + int(match[2]) * 60 + float(match[3]) if match else 0.0
+    frames = []
+    for index in range(samples):
+        frame = folder / f"frame-{index}.jpg"
+        subprocess.run(
+            [ffmpeg_path, "-v", "error", "-y", "-ss", f"{duration * (index + 0.5) / samples:.2f}", "-i", str(clip),
+             "-frames:v", "1", "-vf", "scale=1280:-2", str(frame)],
+            capture_output=True, timeout=30, check=True,
+        )
+        frames.append(frame)
+    return frames
+
+
 def has_burned_in_text(clip: Path, ffmpeg_path: str = "ffmpeg", samples: int = 3) -> bool:
     """True when frames across the clip carry written captions; False if unsure or unsupported."""
     if not available():
         return False
     try:
-        probe = subprocess.run(
-            [ffmpeg_path, "-i", str(clip)], capture_output=True, text=True, timeout=30,
-        ).stderr
-        match = re.search(r"Duration: (\d+):(\d+):([\d.]+)", probe)
-        duration = int(match[1]) * 3600 + int(match[2]) * 60 + float(match[3]) if match else 0.0
         with tempfile.TemporaryDirectory() as folder:
-            for index in range(samples):
-                moment = duration * (index + 0.5) / samples
-                frame = Path(folder) / f"frame-{index}.jpg"
-                subprocess.run(
-                    [ffmpeg_path, "-v", "error", "-y", "-ss", f"{moment:.2f}", "-i", str(clip),
-                     "-frames:v", "1", "-vf", "scale=1280:-2", str(frame)],
-                    capture_output=True, timeout=30, check=True,
-                )
-                if is_overlay(read_text(frame)):
-                    return True
+            return any(is_overlay(read_text(frame)) for frame in sample_frames(clip, Path(folder), ffmpeg_path, samples))
     except (OSError, subprocess.SubprocessError, ValueError):
         return False
-    return False

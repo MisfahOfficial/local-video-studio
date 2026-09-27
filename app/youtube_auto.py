@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import tempfile
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +17,7 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
-from .text_guard import has_burned_in_text
+from .text_guard import has_burned_in_text, sample_frames
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
 from .ingredient_library import dish_images, item_image
@@ -368,6 +370,15 @@ class AutoYouTubeManager:
                 shown |= items
         run.gallery_id = next((str(item["id"]) for item in all_scenes
                                if not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
+        # A gallery already on the timeline (outside this run) counts as the video's one gallery.
+        redo = {str(item["id"]) for item in scenes}
+        selected = {str(item.get("selected_asset_id") or "") for item in all_scenes if str(item["id"]) not in redo}
+        run.gallery_done = any(
+            str(asset["id"]) in selected and asset.get("provider") == "graphic" and asset.get("model") == "gallery"
+            for asset in self.db.list_assets(project_id)
+        )
+        if run.gallery_id in redo:
+            run.gallery_done = False
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
         try:
             # Several scenes at once: most of the time is spent waiting on YouTube.
@@ -536,6 +547,8 @@ class AutoYouTubeManager:
                         raise ProviderError("Portrait picture inside black bars")
                     if has_burned_in_text(destination, run.service.ffmpeg_path):
                         raise ProviderError("Another creator's captions are burned into this shot")
+                    if run.verifier is not None and self._shows_creator(run, destination):
+                        raise ProviderError("A present-day person or show host is on camera")
                     break
                 except Exception as error:
                     destination.unlink(missing_ok=True)
@@ -797,6 +810,18 @@ class AutoYouTubeManager:
             self.db.select_asset(str(scene["id"]), str(asset["id"]))
             return True
         return False
+
+    @staticmethod
+    def _shows_creator(run: "_Run", clip: Path) -> bool:
+        from PIL import Image
+
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                frames = [Image.open(path).convert("RGB")
+                          for path in sample_frames(clip, Path(folder), run.service.ffmpeg_path)]
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return False
+        return run.verifier.shows_creator(frames)
 
     @staticmethod
     def _single_shot(run: "_Run", clip: Path, metadata: dict[str, Any], wanted: float | None, duration: float) -> None:
