@@ -624,6 +624,8 @@ function captionStyleFromInputs() {
     shadow_y: Number($("#captionShadowY").value),
     max_lines: Number($("#captionMaxLines").value),
     words_per_line: Number($("#captionWordsPerLine").value),
+    // Key-point captions animate (highlight); the style panel has no control for it, so keep the project's.
+    animation: state.current?.caption_style?.animation || "none",
   };
 }
 

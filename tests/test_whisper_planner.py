@@ -88,3 +88,12 @@ class WhisperPlannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadingSceneTests(unittest.TestCase):
+    def test_heading_is_its_own_scene(self) -> None:
+        from app.whisper_planner import _group_by_pacing
+
+        sentences = ["Chicken and Rice Casserole", "Chicken and Rice Casserole was the staple."]
+        groups = _group_by_pacing(sentences, [(10.0, 11.5), (11.6, 13.0)])
+        self.assertEqual(groups, [[0], [1]])

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .domain import SceneDraft
+from .footage_match import heading_subject
 from .scene_planner import (
     _classify_emotion, _compose_prompt, _importance, _is_pop_insert, _narrative_role, _sentences,
     _timeline_actions, _visual_subject, _word_count, scene_duration_limit,
@@ -159,7 +160,8 @@ def _group_by_pacing(sentences: list[str], spans: list[tuple[float, float]]) -> 
     groups: list[list[int]] = []
     current: list[int] = []
     for index, (start, end) in enumerate(spans):
-        if _is_pop_insert(sentences[index], end - start):
+        # A list heading is always its own scene: it becomes the chapter card.
+        if _is_pop_insert(sentences[index], end - start) or heading_subject(sentences[index]):
             if current:
                 groups.append(current)
                 current = []

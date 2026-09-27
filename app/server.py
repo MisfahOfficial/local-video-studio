@@ -351,7 +351,7 @@ class StudioApplication:
             texts = [str(scene["narration"]) for scene in scenes]
             style = normalize_caption_style({
                 **current, "position": "bottom", "case": "normal", "size": 54, "max_lines": 2,
-                "words_per_line": 7, "background_enabled": True,
+                "words_per_line": 7, "background_enabled": True, "animation": "none",
             })
         updated = [self.db.update_scene(str(scene["id"]), {"caption_text": text}) for scene, text in zip(scenes, texts)]
         self.db.update_project(project_id, caption_style=style)

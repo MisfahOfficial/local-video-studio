@@ -118,7 +118,15 @@ def heading_subject(sentence: str) -> str:
     letters = "".join(words)
     if (letters.isupper() and len(letters) > 3) or (numbered and not sentence.strip().endswith("?")):
         return text.lower().replace("\u2019", "'")
+    # A Title Case line with no closing punctuation ("Chicken and Rice Casserole").
+    capitalised = [word for word in words if word[0].isupper()]
+    if (len(words) >= 2 and not sentence.strip().endswith((".", "!", "?", ",", ";", ":", "\u2014", "-"))
+            and len(capitalised) >= 2 and all(word[0].isupper() or word.lower() in _TITLE_SMALL for word in words)):
+        return text.lower().replace("\u2019", "'")
     return ""
+
+
+_TITLE_SMALL = {"a", "an", "and", "or", "of", "the", "in", "on", "with", "for", "to", "de", "au"}
 
 
 def core_subject(subject: str) -> str:
@@ -159,6 +167,58 @@ def auto_topic(script: str, project_name: str = "") -> str:
     return topic if share >= 0.3 else ""
 
 
+def hook_theme(hook_text: str) -> str:
+    """What the opening is about: the promised list ('thirty church potluck casseroles'), else its two
+    most repeated nouns in spoken order."""
+    from .key_captions import NUMBER_WORDS
+
+    tokens = re.findall(r"[a-z0-9'-]+", hook_text.lower().replace("\u2019", "'"))
+    phrases: list[tuple[bool, str]] = []
+    for index, token in enumerate(tokens):
+        if token in PLURAL_FOODS and index:
+            before = tokens[max(0, index - 5):index]
+            counted = next((position for position in range(len(before) - 1, -1, -1)
+                            if (before[position].isdigit() and not re.fullmatch(r"1[89]\d\d|20\d\d", before[position]))
+                            or before[position] in NUMBER_WORDS), None)
+            words = [word for word in before[(counted + 1) if counted is not None else -2:] if word not in _STOP]
+            if words:
+                phrases.append((counted is not None, " ".join([*words[-3:], token])))
+    if phrases:
+        # "thirty church potluck casseroles" is the video's promise; prefer a counted list.
+        return max(phrases, key=lambda item: item[0])[1]
+    words = [word for word in _words(hook_text) if word not in _STOP and len(word) >= 3 and word not in NUMBER_LIKE]
+    counts = Counter(_singular(word) for word in words)
+    top = [word for word, count in counts.most_common(2) if count >= 2]
+    if not top:
+        return ""
+    order = [_singular(word) for word in words]
+    return " ".join(sorted(top, key=order.index))
+
+
+NUMBER_LIKE = {"hundred", "thousand", "million"}
+
+# Other cuisines' home-cooking videos (pulao, karahi, fried rice) never fit an American,
+# British or Canadian vintage story unless the script itself names the dish.
+FOREIGN_CUISINE = {
+    "pulao", "pulav", "biryani", "karahi", "tandoori", "tikka", "masala", "curry", "dal", "daal", "paneer",
+    "haleem", "nihari", "korma", "handi", "chaat", "roti", "paratha", "naan", "desi", "pakistani", "indian",
+    "hindi", "urdu", "bengali", "punjabi", "tadka", "tarka", "achar", "kebab", "kabab", "qorma", "sabzi",
+    "khana", "banaye", "banane", "tarika", "itna", "jise", "wala", "wali", "recipe by", "food fusion",
+    "hainanese", "fried rice", "kimchi", "korean", "chinese", "thai", "vietnamese", "japanese", "filipino",
+    "adobo", "jollof", "nigerian", "mexican", "arroz", "bibimbap", "ramen", "sushi", "dim sum", "pho",
+    "shawarma", "arabic", "arabian", "mandi", "kabsa", "turkish", "persian", "afghani", "sri lankan",
+}
+
+
+def off_cuisine(title: str, script: str) -> bool:
+    """True for another cuisine's video (or a non-Latin title) that the script never mentions."""
+    if re.search(r"[\u0590-\u08ff\u0900-\u0dff\u0e00-\u0eff\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]", title):
+        return True
+    lowered = f" {' '.join(_words(title))} "
+    story = f" {' '.join(_words(script))} "
+    return any(f" {word} " in lowered and f" {word} " not in story for word in FOREIGN_CUISINE)
+
+
 INGREDIENTS = {
     "oats", "oat", "oatmeal", "molasses", "shortening", "lard", "vinegar", "jello", "jell-o", "gelatin", "raisins",
     "cinnamon", "nutmeg", "ginger", "cloves", "peanut", "chocolate", "cocoa", "coconut", "banana", "bananas",
@@ -167,7 +227,7 @@ INGREDIENTS = {
     "walnut", "pecans", "pecan", "almonds", "dates", "prunes", "honey", "syrup", "maple", "lemon", "lime", "orange",
     "pineapple", "cherries", "cherry", "strawberries", "blueberries", "cranberries", "cranberry", "rhubarb",
     "buttermilk", "cream", "cheese", "cottage", "sour", "evaporated", "condensed", "spam", "bologna", "beans",
-    "noodles", "macaroni", "tuna", "chicken", "beef", "pork", "ham", "bacon", "sausage", "hotdogs", "tomato",
+    "noodles", "macaroni", "tuna", "mushroom", "chicken", "beef", "pork", "ham", "bacon", "sausage", "hotdogs", "tomato",
     "soup", "cabbage", "carrot", "carrots", "onion", "onions", "zucchini", "yeast", "biscuit", "biscuits",
     "pudding", "custard", "caramel", "toffee", "fudge", "butterscotch", "vanilla", "nuts", "sprinkles", "icing",
     "frosting", "jam", "jelly", "preserves", "figs", "persimmon", "sweet", "yams", "hominy", "grits", "sorghum",
@@ -199,6 +259,8 @@ def recipe_phrase(section_text: str, heading: str) -> str:
         if word in INGREDIENTS and word not in GENERIC_INGREDIENTS:
             counts[ADJECTIVE_FORM.get(word, word)] += 1
     core = core_subject(heading) if heading else ""
+    if any(word in INGREDIENTS for word in _words(core)):
+        return core  # the name already says what it is: "chicken and rice casserole"
     kind = core.split()[-1] if core else ""
     signature = [word for word, _count in counts.most_common(2) if word not in core.split()]
     return " ".join([*signature, kind]).strip() if signature and kind else ""
@@ -358,8 +420,20 @@ AI_DISCLOSURE = re.compile(
 
 ERA = re.compile(r"\b(1[89]\d0s|\d0s|'\d0s|fifties|sixties|seventies|eighties|forties|thirties)\b", re.IGNORECASE)
 NOSTALGIA_WORDS = re.compile(
-    r"\b(forgotten|vanished|lost|grandma'?s?|grandmas|nobody|remember|golden age|back then|used to|"
+    r"\b(forgotten|vanished|lost|grandma'?s?|grandmas|nobody|remember\w*|golden age|back then|used to|"
     r"life in america|felt like|was like|why did we stop|nostalgi\w*|disappeared|gone forever|hacks)\b",
+    re.IGNORECASE,
+)
+
+
+COUNTED_DISHES = re.compile(
+    r"\b\d{1,3}\s+(?:[\w'&-]+\s+){0,4}(dishes|recipes|foods|desserts|dinners|meals|casseroles|snacks|treats|"
+    r"cookies|cakes|pies|sides|suppers|salads|breakfasts|lunches)\b",
+    re.IGNORECASE,
+)
+MEMORY_WORDS = re.compile(
+    r"\b(grandma\w*|granny|seniors?|boomers?|depression|southern|every(one|body)?|loved|knew|remembered|"
+    r"church|mom|mother'?s|old[- ]fashioned|vintage|classic|retro|stories)\b",
     re.IGNORECASE,
 )
 
@@ -377,6 +451,9 @@ def looks_like_ai_slideshow(item: dict[str, Any], blocked_channels: str = "") ->
     duration = float(item.get("duration_seconds") or item.get("duration") or 0)
     if duration > 1800 and LISTICLE_TITLE.search(title):
         return True
+    # "10 Church Potluck Dishes Every Southern Grandma Knew": a counted list of dishes told as memories.
+    if COUNTED_DISHES.search(title) and (ERA.search(title) or NOSTALGIA_WORDS.search(title) or MEMORY_WORDS.search(title)):
+        return True
     return bool(AI_DISCLOSURE.search(str(item.get("description") or "")))
 
 
@@ -391,11 +468,14 @@ NEGATIVE_PROMPTS = (
     "a black screen", "a nutrition facts label", "text printed on a food package",
     "a channel logo intro animation",
 )
+# Photos with the subject's name written on them (a "Chicken Basket" diner sign) are not the subject.
+PHOTO_NEGATIVES = ("a shop sign or neon sign", "a building exterior or storefront", "a street with parked cars")
 VINTAGE = ("old vintage film footage", ("modern digital video", "a modern smartphone video"))
 # Faceless channels never show a present-day person's face (often another creator).
 FACE = ("a close-up of a person's face", ("hands preparing food", "food on a table", "an empty kitchen"))
 PERSON = ("a person standing in a kitchen, face visible", ("only hands and food", "food with no people", "an empty kitchen"))
 FACE_LIMIT = 0.45
+VINTAGE_LIMIT = 0.5
 
 
 def modern_face(face: float, vintage: float) -> bool:
@@ -480,6 +560,9 @@ class ClipScorer:
         return tuple(f"a {name}" for name in ranked[:count])
 
 
+MAX_SHEETS = 12
+
+
 def storyboard_frames(info: dict[str, Any], max_frames: int = 80) -> list[tuple[float, Any]]:
     """Return (timestamp, PIL image) tiles from YouTube's storyboard sprites."""
     from PIL import Image
@@ -495,20 +578,25 @@ def storyboard_frames(info: dict[str, Any], max_frames: int = 80) -> list[tuple[
     fps = float(board.get("fps") or 0) or 0.5
     duration = float(info.get("duration") or 0)
     per_sheet = rows * columns
-    stride = max(1, round(len(board["fragments"]) * per_sheet / max_frames))
-    jobs: list[tuple[float, str, list[int]]] = []
-    fragment_start = 0.0
-    for number, fragment in enumerate(board["fragments"]):
-        wanted = [cell for cell in range(per_sheet) if (number * per_sheet + cell) % stride == 0]
-        if wanted:
-            jobs.append((fragment_start, str(fragment["url"]), wanted))
-        fragment_start += float(fragment.get("duration") or per_sheet / fps)
+    fragments = board["fragments"]
+    starts: list[float] = []
+    cursor = 0.0
+    for fragment in fragments:
+        starts.append(cursor)
+        cursor += float(fragment.get("duration") or per_sheet / fps)
+    # Each sprite sheet is one download: take several frames from a few evenly spaced
+    # sheets instead of one frame from each of 80 (long sources took minutes).
+    sheets = min(len(fragments), MAX_SHEETS)
+    chosen = sorted({round(index * (len(fragments) - 1) / max(1, sheets - 1)) for index in range(sheets)})
+    quota = max(1, -(-max_frames // len(chosen)))
+    step = max(1, per_sheet // quota)
+    jobs = [(starts[number], str(fragments[number]["url"]), list(range(0, per_sheet, step))[:quota]) for number in chosen]
 
     def fetch(job: tuple[float, str, list[int]]) -> list[tuple[float, Any]]:
         sheet_start, url, wanted = job
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(request, timeout=30, context=verified_ssl_context()) as response:
+            with urllib.request.urlopen(request, timeout=10, context=verified_ssl_context()) as response:
                 sheet = Image.open(io.BytesIO(response.read())).convert("RGB")
         except (OSError, ValueError):
             return []
@@ -524,7 +612,7 @@ def storyboard_frames(info: dict[str, Any], max_frames: int = 80) -> list[tuple[
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         tiles = [tile for sheet in pool.map(fetch, jobs) for tile in sheet]
-    return tiles
+    return sorted(tiles, key=lambda tile: tile[0])
 
 
 def best_window(frames: list[tuple[float, float]], clip_duration: float) -> tuple[float, float]:
@@ -570,7 +658,8 @@ class FootageVerifier:
             # Same rule as for footage: recipe steps must show the step, not a finished dish.
             process = is_process_scene(scene_text) and bool(keys)
             gate = self.scorer.probabilities(
-                features, " ".join(keys) if process else (core or detail), self.negatives(core, scene_text),
+                features, " ".join(keys) if process else (core or detail),
+                self.negatives(core, scene_text) + PHOTO_NEGATIVES,
             )
             scene = self.scorer.probabilities(features, detail, (core,)) if core and keys else [0.5] * len(photos)
             render = self.scorer.probabilities(
@@ -671,14 +760,18 @@ class FootageVerifier:
     def best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
         avoid: list[float] | None = None, recipe: str = "", prefer_vintage: bool = False,
+        require_vintage: bool = False,
     ) -> tuple[float, float, float] | None:
         """Return (start, subject_score, scene_score) for the best unused window, or None."""
         with self.lock:
-            return self._best_moment(video_id, info, subject, scene_text, clip_duration, avoid, recipe, prefer_vintage)
+            return self._best_moment(
+                video_id, info, subject, scene_text, clip_duration, avoid, recipe, prefer_vintage, require_vintage,
+            )
 
     def _best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
         avoid: list[float] | None = None, recipe: str = "", prefer_vintage: bool = False,
+        require_vintage: bool = False,
     ) -> tuple[float, float, float] | None:
         times, features = self._video_frames(video_id, info)
         if not times:
@@ -721,6 +814,8 @@ class FootageVerifier:
                 continue
             if any(modern_face(faces[position], vintage[position]) for position in window):
                 continue
+            if require_vintage and sum(vintage[position] for position in window) / len(window) < VINTAGE_LIMIT:
+                continue  # the opening of a period story is always old footage
             score = sum(combined[position] for position in window) / len(window)
             if best is None or score > best[2]:
                 best = (start, gate_average, score)

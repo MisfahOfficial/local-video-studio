@@ -125,6 +125,12 @@ def _is_pop_insert(text: str, duration_seconds: float) -> bool:
     )
 
 
+def _is_heading(unit: str) -> bool:
+    from .footage_match import heading_subject
+
+    return bool(heading_subject(unit))
+
+
 def _group_units_by_pacing(units: list[str], duration_seconds: float) -> list[str]:
     """Group complete sentences using the requested time-based pacing curve."""
     total_words = sum(_word_count(unit) for unit in units)
@@ -138,7 +144,8 @@ def _group_units_by_pacing(units: list[str], duration_seconds: float) -> list[st
         unit_end = elapsed + unit_duration
         pop_insert = _is_pop_insert(unit, unit_duration)
 
-        if pop_insert:
+        # A list heading is always its own scene: it becomes the chapter card.
+        if pop_insert or _is_heading(unit):
             if current:
                 groups.append(" ".join(current))
                 current = []

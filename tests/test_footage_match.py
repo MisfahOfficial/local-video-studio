@@ -117,8 +117,9 @@ class RecipeIdentityTests(unittest.TestCase):
 
     def test_negated_ingredients_are_ignored(self) -> None:
         text = "Mayonnaise cake used mayonnaise instead of eggs. It was made without any chocolate or cocoa."
-        # Only the dish's own name is distinctive, so no extra recipe filter is applied.
-        self.assertEqual(recipe_phrase(text, "mayonnaise cake"), "")
+        # The name already says what it is; "chocolate" and "cocoa" were negated.
+        self.assertEqual(recipe_phrase(text, "mayonnaise cake"), "mayonnaise cake")
+        self.assertEqual(recipe_phrase("It was made without any chocolate or cocoa.", "depression cake"), "")
 
     def test_signature_words_accept_name_or_ingredients(self) -> None:
         words = signature_words("oatmeal molasses cookies", "poor man's cookies")
@@ -146,3 +147,41 @@ class RecipeIdentityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListVideoRulesTests(unittest.TestCase):
+    def test_title_case_line_is_a_heading(self) -> None:
+        from app.footage_match import heading_subject
+
+        self.assertEqual(heading_subject("Chicken and Rice Casserole"), "chicken and rice casserole")
+        self.assertEqual(heading_subject("Chicken and Rice Casserole was the staple"), "")
+        self.assertEqual(heading_subject("Hit the like and subscribe to the channel."), "")
+
+    def test_hook_theme_is_the_promised_list(self) -> None:
+        from app.footage_match import hook_theme
+
+        hook = ("The answer takes us into church basement kitchens between 1950 and 1979, when potluck dinners "
+                "meant something homemade. We're bringing back thirty forgotten church potluck casseroles.")
+        self.assertEqual(hook_theme(hook), "church potluck casseroles")
+
+    def test_other_cuisines_are_rejected_unless_named(self) -> None:
+        from app.footage_match import off_cuisine
+
+        script = "Chicken and rice casserole baked with cream of mushroom soup."
+        self.assertTrue(off_cuisine("Chicken Pulao Recipe By Ijaz Ansari", script))
+        self.assertTrue(off_cuisine("Tandoori Chicken Rice Itna Tasty", script))
+        self.assertTrue(off_cuisine("चिकन राइस", script))
+        self.assertFalse(off_cuisine("Favorite Rice | Aka: Church Lady Rice", script))
+        self.assertFalse(off_cuisine("Chicken Curry Casserole", "An old chicken curry casserole."))
+
+
+class NostalgiaListicleTests(unittest.TestCase):
+    def test_counted_memory_listicles_are_slideshows(self) -> None:
+        from app.footage_match import looks_like_ai_slideshow
+
+        for title in ("10 Church Potluck Dishes Every Southern Grandma Knew By Heart",
+                      "30 lazy 'dump & bake' dinners seniors loved in the 1960s",
+                      "The 1960s Kitchen Potluck: The Dishes Everyone Remembered"):
+            self.assertTrue(looks_like_ai_slideshow({"title": title}), title)
+        for title in ("3 Easy Chicken Casseroles", "Church supper 1958 home movie", "Favorite Rice | Church Lady Rice"):
+            self.assertFalse(looks_like_ai_slideshow({"title": title}), title)
