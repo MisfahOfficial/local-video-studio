@@ -200,6 +200,7 @@ def normalize_render_options(value: Any) -> dict[str, Any]:
         "edit_package": bool(supplied.get("edit_package", False)),
         "film_look": bool(supplied.get("film_look", True)),
         "photo_graphics": bool(supplied.get("photo_graphics", True)),
+        "subscribe_button": bool(supplied.get("subscribe_button", True)),
         "capcut": bool(supplied.get("capcut", False)),
         "preset": str(supplied.get("preset") or "youtube-1080p")[:50],
         "caption_style": normalize_caption_style(supplied.get("caption_style")),

@@ -235,6 +235,7 @@ class FFmpegRenderer:
         progress: ProgressCallback | None = None,
         film_look: bool = False,
         photo_graphics: bool = False,
+        subscribe_button: bool = False,
     ) -> Path:
         selected = {scene["id"]: scene.get("selected_asset_id") for scene in scenes}
         scenes_by_id = {scene["id"]: scene for scene in scenes}
@@ -270,6 +271,7 @@ class FFmpegRenderer:
         total = max(1, len(clips))
         encoder = self._choose_encoder()
         animated_captions = burn_captions and (caption_style or {}).get("animation") == "highlight"
+        subscribe_clip = _subscribe_clip(clips, scenes_by_id) if subscribe_button else None
         captioned_scenes: set[str] = set()
         photo_index = 0
         for index, timeline_clip in enumerate(clips):
@@ -299,6 +301,10 @@ class FFmpegRenderer:
             if animated_captions and caption and scene["id"] not in captioned_scenes:
                 captioned_scenes.add(scene["id"])
                 self._overlay_highlight_caption(clip, caption, duration, fps, encoder)
+            if subscribe_button and timeline_clip is subscribe_clip:
+                from ..motion.templates import subscribe_overlay
+
+                self._overlay(clip, subscribe_overlay(), duration, fps, encoder, "subscribe")
             clip_paths.append(clip)
             if progress:
                 progress(0.82 * (index + 1) / total)
@@ -415,17 +421,19 @@ class FFmpegRenderer:
         return encode(frame, duration, destination, fps=fps, ffmpeg_path=self.ffmpeg_path)
 
     def _overlay_highlight_caption(self, clip: Path, text: str, duration: float, fps: int, encoder: str) -> None:
-        from ..motion.engine import encode
         from ..motion.templates import caption_keywords, highlight_caption
 
-        overlay = encode(
-            highlight_caption(text, caption_keywords(text)), duration, clip.with_suffix(".caption.mov"),
-            fps=fps, alpha=True, ffmpeg_path=self.ffmpeg_path,
-        )
-        combined = clip.with_suffix(".captioned.mp4")
+        self._overlay(clip, highlight_caption(text, caption_keywords(text)), duration, fps, encoder, "caption")
+
+    def _overlay(self, clip: Path, frame: Any, duration: float, fps: int, encoder: str, name: str) -> None:
+        """Composite an animated transparent graphic over a rendered clip, in place."""
+        from ..motion.engine import encode
+
+        overlay = encode(frame, duration, clip.with_suffix(f".{name}.mov"), fps=fps, alpha=True, ffmpeg_path=self.ffmpeg_path)
+        combined = clip.with_suffix(f".{name}.mp4")
         command = [
             self.ffmpeg_path, "-y", "-i", str(clip), "-i", str(overlay), "-filter_complex",
-            "[1:v][0:v]scale2ref[caption][base];[base][caption]overlay=format=auto", "-c:v", encoder,
+            "[1:v][0:v]scale2ref[layer][base];[base][layer]overlay=format=auto", "-c:v", encoder,
         ]
         if encoder == "libx264":
             command += ["-preset", "veryfast", "-crf", "20"]
@@ -489,6 +497,18 @@ FILM_LOOK = (
     "colorbalance=rs=0.05:gs=0.01:bs=-0.06:rh=0.05:bh=-0.05,"
     "noise=alls=6:allf=t,vignette=angle=PI/5"
 )
+
+
+def _subscribe_clip(clips: list[dict[str, Any]], scenes_by_id: dict[str, Any]) -> dict[str, Any] | None:
+    """Where the subscribe button goes: when the narration says 'subscribe', else about a quarter in."""
+    long_enough = [clip for clip in clips if float(clip["end_seconds"]) - float(clip["start_seconds"]) >= 2.5]
+    for clip in long_enough:
+        if "subscribe" in str(scenes_by_id[clip["scene_id"]].get("narration") or "").lower():
+            return clip
+    if not long_enough:
+        return None
+    total = max(float(clip["end_seconds"]) for clip in clips)
+    return min(long_enough, key=lambda clip: abs(float(clip["start_seconds"]) - total * 0.25))
 
 
 def _photo_graphic(scene: dict[str, Any], asset: dict[str, Any], photo_index: int) -> str | None:
@@ -600,6 +620,7 @@ class RenderManager:
                 progress=lambda value: self._update(job_id, progress=value),
                 film_look=bool(options.get("film_look", True)),
                 photo_graphics=bool(options.get("photo_graphics", True)),
+                subscribe_button=bool(options.get("subscribe_button", True)),
             )
             rendered_duration = probe_duration(output, settings.ffprobe_path)
             if voiceover_path.is_file() and rendered_duration + 0.25 < voiceover_duration:

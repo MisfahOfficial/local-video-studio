@@ -211,6 +211,47 @@ def signature_words(recipe: str, heading: str) -> set[str]:
     return {word for word in _words(recipe) if word not in kind} | ({heading} if heading else set())
 
 
+BASIC_INGREDIENTS = {"milk", "butter", "egg", "eggs", "flour", "sugar", "oil", "salt", "cream"}
+DISPLAY = {"egg": "eggs", "oat": "oats", "oatmeal": "oats"}
+PLURAL_FOODS = {
+    "desserts", "recipes", "cookies", "cakes", "pies", "dishes", "dinners", "treats", "candies", "meals",
+    "snacks", "breads", "casseroles", "salads", "soups", "puddings", "sweets", "foods",
+}
+
+
+def ingredient_list(scene_text: str) -> list[str]:
+    """Ingredients named in a sentence that shows no action ("butter and eggs were too expensive")."""
+    if is_process_scene(scene_text):
+        return []
+    words = _words(scene_text)
+    found: list[str] = []
+    negated_until = -1
+    for index, word in enumerate(words):
+        if word in {"without", "no", "instead"}:
+            negated_until = index + 5
+        if index <= negated_until:
+            continue
+        if word in (INGREDIENTS | BASIC_INGREDIENTS) - {"sweet", "sour", "cream", "cheese", "cottage", "soup"}:
+            name = DISPLAY.get(word, word)
+            if name not in found:
+                found.append(name)
+    return found if len(found) >= 2 else []
+
+
+def plural_items(scene_text: str) -> str:
+    """'thirty forgotten dollar desserts' -> 'desserts': a count of many dishes deserves many pictures."""
+    from .key_captions import NUMBER_WORDS
+
+    words = _words(scene_text) + re.findall(r"\d+", scene_text)
+    tokens = re.findall(r"[a-z0-9']+", scene_text.lower())
+    for index, token in enumerate(tokens):
+        if token.isdigit() or token in NUMBER_WORDS:
+            for following in tokens[index + 1:index + 5]:
+                if following in PLURAL_FOODS:
+                    return following
+    return ""
+
+
 def is_process_scene(scene_text: str) -> bool:
     """A recipe step shows an action ("mixed", "stirred", "dropped onto sheets").
 
@@ -351,6 +392,15 @@ NEGATIVE_PROMPTS = (
     "a channel logo intro animation",
 )
 VINTAGE = ("old vintage film footage", ("modern digital video", "a modern smartphone video"))
+# Faceless channels never show a present-day person's face (often another creator).
+FACE = ("a close-up of a person's face", ("hands preparing food", "food on a table", "an empty kitchen"))
+PERSON = ("a person standing in a kitchen, face visible", ("only hands and food", "food with no people", "an empty kitchen"))
+FACE_LIMIT = 0.45
+
+
+def modern_face(face: float, vintage: float) -> bool:
+    """A clear face in modern footage; archival people from the period are fine."""
+    return face > FACE_LIMIT and vintage < 0.5
 # Channel intros and end screens live here; skip them in longer sources.
 EDGE_SKIP_SECONDS = 8.0
 
@@ -528,11 +578,36 @@ class FootageVerifier:
                 ("an ordinary real photo", "real camera footage"),
             )
             drawing = self.scorer.probabilities(features, "a drawing, painting or illustration", ("a photograph",))
+            faces = [max(a, b) for a, b in zip(self.scorer.probabilities(features, *FACE),
+                                               self.scorer.probabilities(features, *PERSON))]
+            vintage = self.scorer.probabilities(features, *VINTAGE)
         ranked = [
             (index, 0.4 * gate[index] + 0.6 * scene[index])
             for index in range(len(photos))
             if gate[index] >= TOPIC_THRESHOLD and max(render[index], drawing[index]) < SYNTHETIC_THRESHOLD
+            and not modern_face(faces[index], vintage[index])
         ]
+        return sorted(ranked, key=lambda item: item[1], reverse=True)
+
+    def rank_ingredient_photos(
+        self, photos: list[Any], name: str, kind: str = "a cooking ingredient",
+    ) -> list[tuple[int, float]]:
+        """Photos that plainly show the item itself, not a factory, field, poster or unrelated dish."""
+        if not photos:
+            return []
+        with self.lock:
+            features = self.scorer.embed_images(photos)
+            plain = self.scorer.probabilities(features, f"a close-up photo of {name}, {kind}", (
+                "a factory or industrial building", "a farm field or growing plants", "an advertisement or poster",
+                *(("a decorated plate of finished food",) if "ingredient" in kind else ()),
+                "a landscape", "a page of text", "a person",
+            ))
+            render = self.scorer.probabilities(
+                features, "a hyperrealistic AI render, overly perfect and saturated",
+                ("an ordinary real photo", "real camera footage"),
+            )
+        ranked = [(index, plain[index]) for index in range(len(photos))
+                  if plain[index] >= 0.6 and render[index] < SYNTHETIC_THRESHOLD]
         return sorted(ranked, key=lambda item: item[1], reverse=True)
 
     def has_frames(self, video_id: str) -> bool:
@@ -623,9 +698,13 @@ class FootageVerifier:
             self.scorer.probabilities(features, detail, (core,)) if core and keys else [0.5] * len(times)
         )
         combined = [0.4 * gate + 0.6 * scene for gate, scene in zip(gate_scores, scene_scores)]
+        vintage = self.scorer.probabilities(features, *VINTAGE)
+        close = self.scorer.probabilities(features, *FACE)
+        people = self.scorer.probabilities(features, *PERSON)
+        # Close-ups and medium shots both show whose kitchen it is: either counts as a face.
+        faces = [max(a, b) for a, b in zip(close, people)]
         if prefer_vintage:
             # A period story reads best on footage that already looks old.
-            vintage = self.scorer.probabilities(features, *VINTAGE)
             combined = [value + 0.25 * old for value, old in zip(combined, vintage)]
         source_length = float(info.get("duration") or 0)
         best: tuple[float, float, float] | None = None
@@ -639,6 +718,8 @@ class FootageVerifier:
             window = [position for position in range(index, len(times)) if times[position] < start + max(clip_duration, 0.1)]
             gate_average = sum(gate_scores[position] for position in window) / len(window)
             if gate_average < TOPIC_THRESHOLD:
+                continue
+            if any(modern_face(faces[position], vintage[position]) for position in window):
                 continue
             score = sum(combined[position] for position in window) / len(window)
             if best is None or score > best[2]:

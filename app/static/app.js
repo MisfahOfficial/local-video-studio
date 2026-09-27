@@ -467,6 +467,8 @@ async function refreshYouTubeAutoStatus() {
   panel.textContent = result.running
     ? `Finding and visually checking footage${result.topic ? ` of ${result.topic}` : ""} · scene ${result.current_scene || "…"} · ${finished}/${result.total}`
     : `YouTube sourcing finished · ${result.completed || 0} added · ${result.failed || 0} need review`;
+  if (result.graphics?.length) panel.textContent += ` · Motion graphics for scene${result.graphics.length === 1 ? "" : "s"} ${result.graphics.join(", ")}`;
+  if (result.stock?.length) panel.textContent += ` · Free stock video for scene${result.stock.length === 1 ? "" : "s"} ${result.stock.join(", ")}`;
   if (result.photos?.length) panel.textContent += ` · Real archival photo used for scene${result.photos.length === 1 ? "" : "s"} ${result.photos.join(", ")}`;
   if (result.generated?.length) panel.textContent += ` · No real footage for scene${result.generated.length === 1 ? "" : "s"} ${result.generated.join(", ")}, so a vintage photo was made`;
   if (result.review?.length) panel.textContent += ` · Please check scene${result.review.length === 1 ? "" : "s"} ${result.review.join(", ")}`;
@@ -1774,6 +1776,7 @@ async function startRender() {
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
       edit_package: $("#exportEditPackage").checked, capcut: $("#exportCapCut").checked,
       film_look: $("#exportFilmLook").checked, photo_graphics: $("#exportPhotoGraphics").checked,
+      subscribe_button: $("#exportSubscribe").checked,
       output_name: outputName,
       output_directory: $("#exportDirectory").value,
       preset: $("#exportPreset").value,
@@ -1818,7 +1821,7 @@ function fillSettings() {
   $("#budgetInput").value = state.settings.max_project_cost || 3;
   $("#youtubeLicenseMode").value = youtubeFairUse() ? "fair_use" : "creative_commons";
   $("#blockedChannels").value = state.settings.blocked_channels || "";
-  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"}`;
+  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"} · Pexels ${state.settings.pexels_api_key_set ? "connected" : "not connected"}`;
 }
 
 async function saveSettings(event) {
@@ -1836,10 +1839,11 @@ async function saveSettings(event) {
   if ($("#togetherKey").value) body.together_api_key = $("#togetherKey").value;
   if ($("#geminiKey").value) body.gemini_api_key = $("#geminiKey").value;
   if ($("#youtubeKey").value) body.youtube_api_key = $("#youtubeKey").value;
+  if ($("#pexelsKey").value) body.pexels_api_key = $("#pexelsKey").value;
   try {
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
     $("#settingsDialog").close();
-    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey").forEach(input => input.value = "");
+    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey,#pexelsKey").forEach(input => input.value = "");
     fillSettings(); toast("Settings saved locally");
   } catch (error) { toast(error.message, true); }
 }

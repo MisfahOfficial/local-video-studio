@@ -59,6 +59,15 @@ Version 0.7.2 editing upgrades:
   run, candidate metadata and storyboards load in parallel, and excerpts are cut
   straight from the stream URL with FFmpeg (yt-dlp is only a fallback). A 20-scene
   test went from about 14 minutes to about 2.
+- **Revision rules (every video).** Clips are a single shot: excerpts are downloaded
+  with padding and trimmed to a stretch with no hard cut or fade to black, and the
+  same source never appears in neighbouring scenes. Present-day faces (close-ups or
+  medium shots) are rejected; archival people are fine. Order of sources is YouTube
+  video, real photo, free Pexels stock video (optional free key), then an aged AI
+  still; a weak clip loses to a photo that clearly fits. Sentences that list
+  ingredients without an action become animated ingredient cards (pictures cached in
+  an ingredient library); "thirty desserts"-style counts become a photo gallery. An
+  animated subscribe button appears where the narration says "subscribe".
 - **Motion graphics (phase 1).** `app/motion` renders reference-style graphics frame by
   frame with Pillow and FFmpeg: key-point captions reveal word by word with numbers
   and ingredients in yellow boxes, and photo scenes alternate between a sepia

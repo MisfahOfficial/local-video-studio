@@ -15,13 +15,15 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
-from .logo_guard import analyse_clip, content_box, fit_crop
+from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
+from .ingredient_library import dish_images, item_image
+from .stock_video import download_stock_video, search_stock_videos
 from .photo_source import load_image, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    heading_subject, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
+    heading_subject, ingredient_list, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -185,6 +187,9 @@ class _NoFootage(Exception):
     """No real YouTube footage passed the checks for a scene."""
 
 
+# Seconds downloaded either side of a moment, so a cut-free stretch can be chosen.
+SHOT_PADDING = 2.0
+
 # Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
 SCENE_WORKERS = 3
 
@@ -218,6 +223,9 @@ class _Run:
     generated: list[int] = field(default_factory=list)
     photos: list[int] = field(default_factory=list)
     used_photos: set[str] = field(default_factory=set)
+    by_position: dict[int, str] = field(default_factory=dict)
+    stock: list[int] = field(default_factory=list)
+    graphics: list[int] = field(default_factory=list)
 
 
 class AutoYouTubeManager:
@@ -345,7 +353,7 @@ class AutoYouTubeManager:
                 self._update(
                     project_id, running=False, current_scene=None, completed=run.completed, failed=run.failed,
                     errors=list(run.errors), review=sorted(run.review), generated=sorted(run.generated),
-                    photos=sorted(run.photos),
+                    photos=sorted(run.photos), graphics=sorted(run.graphics), stock=sorted(run.stock),
                 )
             with self._lock:
                 self._threads.pop(project_id, None)
@@ -369,6 +377,12 @@ class AutoYouTubeManager:
         core = core_subject(subject)
         signature = signature_words(recipe, subject) if recipe else set()
         is_hook = str(scene["id"]) in run.hook_ids
+        if run.verifier is not None and self._motion_graphic(run, scene, position, is_hook):
+            with run.lock:
+                run.completed += 1
+                run.graphics.append(position)
+            self._progress(run)
+            return
         own = topic_queries(scene, subject, run.era, recipe) or scene_search_queries(scene)
         queries = list(dict.fromkeys(
             [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in run.ai_queries.get(position, [])]
@@ -411,13 +425,25 @@ class AutoYouTubeManager:
             ) if ranked else []
             if not choices:
                 raise _NoFootage()
+            if choices[0][2] is not None and choices[0][2] < REVIEW_BELOW and self._real_photo(
+                run, scene, position, scene_text, subject, queries,
+            ):
+                # Order is video, image, stock, AI: a weak clip loses to a photo that clearly fits.
+                with run.lock:
+                    run.completed += 1
+                    run.photos.append(position)
+                self._progress(run)
+                return
             last_error: Exception | None = None
             for candidate, start_time, topic_score in choices[:3]:
                 video_id = str(candidate["video_id"])
                 with run.lock:
                     if start_time is not None and any(abs(start_time - used) < 15 for used in run.used.get(video_id, [])):
                         continue  # another scene took this moment meanwhile
+                    if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
+                        continue  # the same source in neighbouring scenes reads as a jump cut
                     run.used.setdefault(video_id, []).append(float(start_time or 0))
+                    run.by_position[position] = video_id
                 destination = (
                     self.paths.project_dir(run.project_id) / "assets" / "youtube"
                     / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4"
@@ -427,8 +453,9 @@ class AutoYouTubeManager:
                         video_id=video_id,
                         query=" ".join(filter(None, [query, str(scene.get("narration") or "")])),
                         duration=duration, destination=destination, source_start_seconds=start_time,
-                        info=run.infos.get(video_id),
+                        info=run.infos.get(video_id), padding=SHOT_PADDING,
                     )
+                    self._single_shot(run, destination, metadata, start_time, duration)
                     bars = content_box(destination, run.service.ffmpeg_path)
                     if bars and bars[4] < 1.25:
                         raise ProviderError("Portrait picture inside black bars")
@@ -436,6 +463,9 @@ class AutoYouTubeManager:
                 except Exception as error:
                     destination.unlink(missing_ok=True)
                     last_error = error
+                    with run.lock:
+                        if run.by_position.get(position) == video_id:
+                            run.by_position.pop(position, None)
             else:
                 raise ProviderError(str(last_error or "No downloadable result was found"))
             metadata.update({
@@ -477,6 +507,10 @@ class AutoYouTubeManager:
                     with run.lock:
                         run.completed += 1
                         run.photos.append(position)
+                elif self._stock_video(run, scene, position, scene_text, subject, queries):
+                    with run.lock:
+                        run.completed += 1
+                        run.stock.append(position)
                 elif is_hook:
                     raise ProviderError("No real footage or photo passed for this hook scene; AI images are never used in the hook")
                 else:
@@ -537,11 +571,120 @@ class AutoYouTubeManager:
             return True
         return False
 
+    def _motion_graphic(self, run: "_Run", scene: dict[str, Any], position: int, is_hook: bool) -> bool:
+        """Ingredient lists become ingredient cards and 'thirty desserts' becomes a gallery."""
+        from PIL import Image
+
+        from .motion.engine import encode
+        from .motion.templates import gallery_stack, ingredient_cards
+
+        text = str(scene.get("narration") or "")
+        ingredients = ingredient_list(text)
+        many = "" if ingredients else plural_items(text)
+        if not ingredients and not many:
+            return False
+        library = self.paths.root / "ingredient_library"
+        # The hook never shows generated images, so there only real photos may fill a graphic.
+        allow_generated = not is_hook
+        if ingredients:
+            pictures = [(name, item_image(name, library, run.verifier, run.settings, run.era, allow_generated))
+                        for name in ingredients]
+            pictures = [(name, path) for name, path in pictures if path is not None]
+            if len(pictures) < 2:
+                return False
+            frame = ingredient_cards([(name, Image.open(path)) for name, path in pictures])
+            metadata = {"graphic": "ingredients", "items": [name for name, _path in pictures]}
+        else:
+            dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
+            paths = dish_images(many, [dish for dish in dishes if dish], library, run.verifier, run.settings,
+                                run.era, allow_generated)
+            if len(paths) < 3:
+                return False
+            frame = gallery_stack([Image.open(path) for path in paths])
+            metadata = {"graphic": "gallery", "items": [path.stem for path in paths]}
+        duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+        destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
+        encode(frame, duration, destination, ffmpeg_path=run.service.ffmpeg_path)
+        asset = self.db.add_asset(
+            project_id=run.project_id, scene_id=str(scene["id"]),
+            candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+            media_kind="video", provider="graphic", model=str(metadata["graphic"]), local_path=str(destination),
+            remote_url=None, provider_asset_id=None, cost=0.0, metadata=metadata,
+        )
+        self.db.select_asset(str(scene["id"]), str(asset["id"]))
+        return True
+
+    def _stock_video(
+        self, run: "_Run", scene: dict[str, Any], position: int, scene_text: str, subject: str, queries: list[str],
+    ) -> bool:
+        """Free Pexels footage, checked like everything else; False without a key or a match."""
+        if run.verifier is None or not run.settings.pexels_api_key:
+            return False
+        recipe = run.recipe_by_id.get(str(scene["id"]), "")
+        items: dict[str, dict[str, Any]] = {}
+        for query in list(dict.fromkeys([recipe or core_subject(subject), *(q.replace(" footage", "") for q in queries[:2])])):
+            if not query.strip():
+                continue
+            for item in search_stock_videos(run.settings.pexels_api_key, query):
+                items.setdefault(str(item.get("id")), item)
+            if len(items) >= 10:
+                break
+        with run.lock:
+            fresh = [item for key, item in items.items() if f"pexels-{key}" not in run.used_photos]
+        posters = [(item, load_image(str(item.get("image") or ""))) for item in fresh[:10]]
+        posters = [(item, image) for item, image in posters if image is not None]
+        duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+        for index, _score in run.verifier.rank_photos([image for _item, image in posters], subject, scene_text, recipe)[:2]:
+            item = posters[index][0]
+            if float(item.get("duration") or 0) < duration + 0.5:
+                continue
+            key = f"pexels-{item.get('id')}"
+            with run.lock:
+                if key in run.used_photos:
+                    continue
+                run.used_photos.add(key)
+            destination = self.paths.project_dir(run.project_id) / "assets" / "stock" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
+            try:
+                metadata = download_stock_video(item, destination)
+                cuts = shot_cuts(destination, run.service.ffmpeg_path)
+                start = cut_free_start(cuts, float(metadata["duration"]), duration, 1.0)
+                if start is None:
+                    raise ProviderError("No single-shot stretch")
+                trim(destination, start, duration, run.service.ffmpeg_path)
+            except Exception:
+                destination.unlink(missing_ok=True)
+                continue
+            asset = self.db.add_asset(
+                project_id=run.project_id, scene_id=str(scene["id"]),
+                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                media_kind="video", provider="stock", model="pexels", local_path=str(destination),
+                remote_url=metadata["source_url"], provider_asset_id=key, cost=0.0, metadata=metadata,
+            )
+            self.db.select_asset(str(scene["id"]), str(asset["id"]))
+            return True
+        return False
+
+    @staticmethod
+    def _single_shot(run: "_Run", clip: Path, metadata: dict[str, Any], wanted: float | None, duration: float) -> None:
+        """Trim a padded download to one continuous shot; raise when the moment has no such stretch."""
+        downloaded_from = float(metadata.get("source_start_seconds") or 0)
+        total = float(metadata.get("source_end_seconds") or downloaded_from + duration) - downloaded_from
+        preferred = max(0.0, float(wanted if wanted is not None else downloaded_from) - downloaded_from)
+        cuts = shot_cuts(clip, run.service.ffmpeg_path)
+        start = cut_free_start(cuts, total, duration, preferred)
+        if start is None:
+            raise ProviderError("Every stretch of this moment contains a cut")
+        trim(clip, start, duration, run.service.ffmpeg_path)
+        metadata["source_start_seconds"] = round(downloaded_from + start, 3)
+        metadata["source_end_seconds"] = round(downloaded_from + start + duration, 3)
+        metadata["single_shot"] = True
+
     def _progress(self, run: "_Run") -> None:
         with run.lock:
             self._update(
                 run.project_id, completed=run.completed, failed=run.failed, errors=list(run.errors),
-                review=sorted(run.review), generated=sorted(run.generated),
+                review=sorted(run.review), generated=sorted(run.generated), photos=sorted(run.photos),
+                graphics=sorted(run.graphics), stock=sorted(run.stock),
             )
 
     def _fallback_still(

@@ -247,7 +247,7 @@ class YouTubeSourceService:
 
     def source_clip(
         self, *, video_id: str, query: str, duration: float, destination: Path,
-        source_start_seconds: float | None = None, info: dict[str, Any] | None = None,
+        source_start_seconds: float | None = None, info: dict[str, Any] | None = None, padding: float = 0.0,
     ) -> dict[str, Any]:
         if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
             raise ProviderError("Invalid YouTube video identifier")
@@ -265,6 +265,13 @@ class YouTubeSourceService:
         source_duration = float(info.get("duration") or 0)
         if source_duration > 0:
             start = min(max(0.0, start), max(0.0, source_duration - duration))
+        # Extra seconds either side let the caller pick a stretch without a hard cut.
+        if padding > 0:
+            padded_start = max(0.0, start - padding)
+            padded_end = start + duration + padding
+            if source_duration > 0:
+                padded_end = min(padded_end, source_duration)
+            start, duration = padded_start, max(duration, padded_end - padded_start)
         end = start + duration
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Fast path: cut straight from the stream URL already in `info`, instead of

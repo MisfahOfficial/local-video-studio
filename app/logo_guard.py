@@ -235,3 +235,64 @@ def fit_crop(content: tuple[float, ...], crop: dict[str, float] | None) -> dict[
     size = min(x1 - x0, y1 - y0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     return {"x": round(cx - size / 2, 4), "y": round(cy - size / 2, 4), "w": round(size, 4), "h": round(size, 4)}
+
+
+def shot_cuts(path: Path, ffmpeg_path: str = "ffmpeg", threshold: float = 10.0) -> list[float]:
+    """Times (seconds) of hard cuts inside a clip, from FFmpeg's scene-change detector."""
+    import re
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-i", str(path), "-vf", f"scdet=threshold={threshold}", "-an",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    cuts = [float(value) for value in re.findall(r"lavfi\.scd\.time:\s*([0-9.]+)", result.stderr)]
+    return sorted(cuts + black_edges(path, ffmpeg_path))
+
+
+def black_edges(path: Path, ffmpeg_path: str = "ffmpeg") -> list[float]:
+    """Start and end of every black stretch (fades from black count as cuts)."""
+    import re
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-i", str(path), "-vf", "blackdetect=d=0.08:pix_th=0.12", "-an",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    edges: list[float] = []
+    for start, end in re.findall(r"black_start:([0-9.]+) black_end:([0-9.]+)", result.stderr):
+        edges += [float(start), float(end)]
+    return edges
+
+
+def cut_free_start(cuts: list[float], total: float, duration: float, preferred: float,
+                   margin: float = 0.2) -> float | None:
+    """Start of a `duration` window inside [0, total] that contains no cut, nearest `preferred`."""
+    edges = [0.0, *sorted(cut for cut in cuts if 0 < cut < total), total]
+    best: float | None = None
+    for left, right in zip(edges, edges[1:]):
+        low = left + (margin if left > 0 else 0)
+        high = right - (margin if right < total else 0) - duration
+        if high < low:
+            continue
+        start = min(max(preferred, low), high)
+        if best is None or abs(start - preferred) < abs(best - preferred):
+            best = start
+    return best
+
+
+def trim(path: Path, start: float, duration: float, ffmpeg_path: str = "ffmpeg") -> None:
+    """Cut `path` in place to [start, start + duration] (re-encoded for frame accuracy)."""
+    temporary = path.with_suffix(".trim.mp4")
+    subprocess.run(
+        [ffmpeg_path, "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", str(path), "-t", f"{duration:.3f}",
+         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(temporary)],
+        check=True, capture_output=True, timeout=180,
+    )
+    temporary.replace(path)
