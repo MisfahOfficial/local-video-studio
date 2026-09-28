@@ -895,18 +895,19 @@ class FootageVerifier:
     def best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
         avoid: list[float] | None = None, recipe: str = "", prefer_vintage: bool = False,
-        require_vintage: bool = False,
+        require_vintage: bool = False, avoid_radius: float = 15.0,
     ) -> tuple[float, float, float] | None:
         """Return (start, subject_score, scene_score) for the best unused window, or None."""
         with self.lock:
             return self._best_moment(
                 video_id, info, subject, scene_text, clip_duration, avoid, recipe, prefer_vintage, require_vintage,
+                avoid_radius,
             )
 
     def _best_moment(
         self, video_id: str, info: dict[str, Any], subject: str, scene_text: str, clip_duration: float,
         avoid: list[float] | None = None, recipe: str = "", prefer_vintage: bool = False,
-        require_vintage: bool = False,
+        require_vintage: bool = False, avoid_radius: float = 15.0,
     ) -> tuple[float, float, float] | None:
         times, features = self._video_frames(video_id, info)
         if not times:
@@ -938,7 +939,7 @@ class FootageVerifier:
         source_length = float(info.get("duration") or 0)
         best: tuple[float, float, float] | None = None
         for index, start in enumerate(times):
-            if any(abs(start - used) < 15 for used in avoid or []):
+            if any(abs(start - used) < avoid_radius for used in avoid or []):
                 continue
             if source_length > 60 and (
                 start < EDGE_SKIP_SECONDS or start + clip_duration > source_length - EDGE_SKIP_SECONDS

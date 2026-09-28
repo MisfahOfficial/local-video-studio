@@ -517,7 +517,7 @@ class AutoYouTubeManager:
                     for _extra in range(3):
                         moment = run.verifier.best_moment(
                             video_id, run.infos[video_id], subject, f"a finished {dish} served on a table", duration,
-                            avoid=avoid, recipe=recipe, prefer_vintage=True,
+                            avoid=avoid, recipe=recipe, prefer_vintage=True, avoid_radius=6.0,
                         )
                         if moment is None:
                             break
@@ -698,7 +698,7 @@ class AutoYouTubeManager:
             if teasers_only:
                 planned = [
                     (candidate, start, topic) for candidate, start, topic in run.teasers.get(str(scene["id"]), [])
-                    if not any(abs(float(start or 0) - used) < 15 for used in run.used.get(str(candidate["video_id"]), []))
+                    if not any(abs(float(start or 0) - used) < 6 for used in run.used.get(str(candidate["video_id"]), []))
                 ]
             for attempt in ([] if planned or teasers_only else queries[:run.max_attempts]):
                 for item in self._search(run, attempt):
@@ -724,7 +724,7 @@ class AutoYouTubeManager:
                 # Nothing fits the sentence: a teaser shot of the dishes to come.
                 planned = [
                     (candidate, start, topic) for candidate, start, topic in run.teasers.get(str(scene["id"]), [])
-                    if not any(abs(float(start or 0) - used) < 15 for used in run.used.get(str(candidate["video_id"]), []))
+                    if not any(abs(float(start or 0) - used) < 6 for used in run.used.get(str(candidate["video_id"]), []))
                 ]
                 choices = planned
             need = self._need(run, scene, subject, recipe, is_hook)
@@ -752,7 +752,8 @@ class AutoYouTubeManager:
             for candidate, start_time, topic_score in choices[:5 if is_hook else 3]:
                 video_id = str(candidate["video_id"])
                 with run.lock:
-                    if start_time is not None and any(abs(start_time - used) < 15 for used in run.used.get(video_id, [])):
+                    radius = 6 if teasers_only else 15  # a teaser previews a later shot, never repeats it
+                    if start_time is not None and any(abs(start_time - used) < radius for used in run.used.get(video_id, [])):
                         continue  # another scene took this moment meanwhile
                     if not planned and video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
                         continue  # unplanned: the same source in neighbouring scenes may repeat a shot
