@@ -39,4 +39,4 @@ fi
 
 echo "Starting Local Video Studio..."
 echo "Keep this window open while you use the tool. Press Control-C here to stop it."
-python run.py
+python run.py --port 8767
