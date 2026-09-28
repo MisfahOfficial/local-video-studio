@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .channel_styles import get_style
 from .database import Database
 import re
 
@@ -58,11 +59,14 @@ def video_frame(path: Path, at_seconds: float, ffmpeg_path: str = "ffmpeg") -> A
         return None
 
 
-def render_card(background: Any, title: str, number: int, theme_id: str) -> Any:
-    """Dark, blurred, theme-tinted background with a centred chapter title."""
+def render_card(background: Any, title: str, number: int, theme_id: str, style: Any = None) -> Any:
+    """Dark, blurred, tinted background with a centred chapter title in the channel's style."""
     from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-    tint = THEME_TINTS.get(theme_id, THEME_TINTS["history_documentary"])
+    from .channel_styles import get_style
+
+    style = style or get_style(None)
+    tint = style.chapter_tint
     if background is None:
         card = Image.new("RGB", SIZE, tuple(int(channel * 0.35) for channel in tint))
     else:
@@ -76,10 +80,12 @@ def render_card(background: Any, title: str, number: int, theme_id: str) -> Any:
 
     draw = ImageDraw.Draw(card)
     width, height = SIZE
-    words = title.upper().split()
+    # Script lettering (V2) is unreadable in capitals; every other style keeps the capitals.
+    words = (title.title() if style.chapter_title_fonts[0].endswith(("SnellRoundhand.ttc", "Brush Script.ttf"))
+             else title.upper()).split()
     size = 132
     while True:
-        title_font = _font(TITLE_FONTS, size)
+        title_font = _font(style.chapter_title_fonts, size)
         lines = _wrap(draw, words, title_font, width * 0.78)
         if len(lines) <= 2 or size <= 64:
             break
@@ -87,10 +93,10 @@ def render_card(background: Any, title: str, number: int, theme_id: str) -> Any:
     line_height = int(size * 1.15)
     block = line_height * len(lines)
     top = height // 2 - block // 2 + 30
-    label_font = _font(LABEL_FONTS, 34)
-    label = "   ".join(f"CHAPTER {number}")
+    label_font = _font(style.chapter_label_fonts, 34)
+    label = "   ".join(f"{style.chapter_label} {number}")
     label_width = draw.textlength(label, font=label_font)
-    accent = tuple(min(255, int(channel * 1.35)) for channel in tint)
+    accent = style.chapter_accent
     draw.text(((width - label_width) / 2, top - 110), label, font=label_font, fill=accent)
     rule = 220
     draw.line(((width - rule) / 2, top - 45, (width + rule) / 2, top - 45), fill=accent, width=3)
@@ -152,7 +158,8 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
                     background = None
             if background is not None:
                 break
-        card = render_card(background, title, number, str(project.get("theme_id") or ""))
+        card = render_card(background, title, number, str(project.get("theme_id") or ""),
+                           get_style((project.get("effects") or {}).get("channel_style")))
         destination = paths.project_dir(project_id) / "assets" / "chapters" / f"chapter-{number:03d}.png"
         destination.parent.mkdir(parents=True, exist_ok=True)
         card.save(destination)
