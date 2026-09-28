@@ -718,7 +718,7 @@ class AutoYouTubeManager:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             choices = planned or (self._choose(
                 run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
-                run.settings.blocked_channels, recipe, bool(run.era) or is_hook, False,
+                run.settings.blocked_channels, recipe, bool(run.era) or is_hook, is_hook,
             ) if ranked else [])
             if not choices and is_hook and not planned and not skip_plan:
                 # Nothing fits the sentence: a teaser shot of the dishes to come.
@@ -836,7 +836,8 @@ class AutoYouTubeManager:
             with run.lock:
                 run.notes[position] = "no matching clip" if isinstance(error, _NoFootage) else str(error)[:300]
             try:
-                if self._real_photo(run, scene, position, scene_text, subject, queries):
+                photo_subject = subject or (run.section_pools[0][1] or run.section_pools[0][0] if run.section_pools else run.theme)
+                if self._real_photo(run, scene, position, scene_text, photo_subject, queries):
                     with run.lock:
                         run.completed += 1
                         run.photos.append(position)

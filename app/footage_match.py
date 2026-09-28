@@ -50,6 +50,7 @@ NON_FOOTAGE_TITLE = re.compile(
     r"let'?s play|video game|walkthrough|animation|animated|cartoon|no music|no talk|music|songs?|radio|"
     r"sing[- ]?along|saturday night live|snl|sketch|skit|comedy|comedian|stand[- ]?up|parody|sitcom|"
     r"full episode|full movie|film history|long takes?|best scenes|movie scenes?|movie clips?|film clips?|"
+    r"filmmaking|cinematography|movie look|one long shot|how to film|"
     r"hulu|netflix|prime video|late show|tonight show|jimmy (fallon|kimmel)|conan)\b",
     re.IGNORECASE,
 )
