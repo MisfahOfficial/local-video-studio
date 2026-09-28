@@ -516,6 +516,9 @@ HOST = ("a TV cooking show host speaking to the audience", (
     "people in an old home movie", "hands preparing food", "food on a table", "an empty kitchen", "a crowd of people",
 ))
 HOST_LIMIT = 0.7
+# Only footage that truly looks like old film may show period people (the hook's home movies).
+OLD_FILM = ("an old black and white or faded film photograph", ("a modern colour digital photo",))
+OLD_FILM_LIMIT = 0.7
 VINTAGE_LIMIT = 0.5
 
 
@@ -693,6 +696,8 @@ class FootageVerifier:
         self._synthetic: dict[str, float] = {}
         # Small storyboard tiles, kept so the final judge can see the chosen moment.
         self._tiles: dict[str, list[tuple[float, Any]]] = {}
+        # Storyboard times where macOS Vision sees a clear face (someone on camera).
+        self._face_times: dict[str, set[float]] = {}
         # One model on one GPU: scene threads take turns.
         self.lock = threading.RLock()
 
@@ -754,8 +759,11 @@ class FootageVerifier:
                   if plain[index] >= 0.6 and render[index] < SYNTHETIC_THRESHOLD and people[index] < FACE_LIMIT]
         return sorted(ranked, key=lambda item: item[1], reverse=True)
 
-    def shows_creator(self, frames: list[Any]) -> bool:
-        """True when full-size frames of a downloaded clip show a present-day person or a host on camera."""
+    def shows_creator(self, frames: list[Any], face_areas: list[list[float]] | None = None, archival_ok: bool = False) -> bool:
+        """True when full-size frames of a downloaded clip show a present-day person or a host on camera.
+
+        `face_areas` (macOS Vision) is trusted first: any clear face means someone is on camera. Genuinely
+        old film may keep its people only where `archival_ok` (the hook)."""
         if not frames:
             return False
         with self.lock:
@@ -764,7 +772,17 @@ class FootageVerifier:
                                                 self.scorer.probabilities(features, *PERSON))]
             vintage = self.scorer.probabilities(features, *VINTAGE)
             host = self.scorer.probabilities(features, *HOST)
-        return any(modern_face(face, old) or on_camera > HOST_LIMIT for face, old, on_camera in zip(faces, vintage, host))
+            old_film = self.scorer.probabilities(features, *OLD_FILM)
+        from .text_guard import MIN_FACE_AREA
+
+        for index, (face, old, on_camera) in enumerate(zip(faces, vintage, host)):
+            if on_camera > HOST_LIMIT:
+                return True
+            seen = face_areas[index] if face_areas and index < len(face_areas) else None
+            clear_face = any(area >= MIN_FACE_AREA for area in seen) if seen is not None else modern_face(face, old)
+            if clear_face and not (archival_ok and old_film[index] >= OLD_FILM_LIMIT):
+                return True
+        return False
 
     def has_frames(self, video_id: str) -> bool:
         return video_id in self._frames
@@ -785,6 +803,26 @@ class FootageVerifier:
         self._grey[video_id] = None if stack is None else stack.astype("uint8")
         while len(self._grey) > 24:
             self._grey.pop(next(iter(self._grey)))
+
+    def mark_faces(self, video_id: str) -> None:
+        """Find storyboard moments with a clear face once per source, so they are never picked."""
+        if video_id in self._face_times:
+            return
+        import tempfile
+        from pathlib import Path
+
+        from .text_guard import MIN_FACE_AREA, available, face_areas
+
+        tiles = self._tiles.get(video_id) or []
+        found: set[float] = set()
+        if available() and tiles:
+            with tempfile.TemporaryDirectory() as folder:
+                for index, (time, image) in enumerate(tiles):
+                    path = Path(folder) / f"tile-{index}.jpg"
+                    image.convert("RGB").save(path, quality=85)
+                    if any(area >= MIN_FACE_AREA for area in face_areas(path)):
+                        found.add(time)
+        self._face_times[video_id] = found
 
     def moment_frames(self, video_id: str, start: float, duration: float, count: int = 3) -> list[Any]:
         """Storyboard tiles nearest the start, middle and end of a chosen moment."""
@@ -899,6 +937,8 @@ class FootageVerifier:
             if any(modern_face(faces[position], vintage[position]) or presenter[position] > PRESENTER_LIMIT
                    for position in window):
                 continue
+            if not require_vintage and any(times[position] in self._face_times.get(video_id, ()) for position in window):
+                continue  # someone on camera (Vision saw a clear face in the storyboard)
             if require_vintage and sum(vintage[position] for position in window) / len(window) < VINTAGE_LIMIT:
                 continue  # the opening of a period story is always old footage
             score = sum(combined[position] for position in window) / len(window)

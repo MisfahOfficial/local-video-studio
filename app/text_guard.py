@@ -38,6 +38,27 @@ def read_text(image_path: Path) -> list[tuple[str, float]]:
     return lines
 
 
+# A face this big (share of the frame) is someone on camera, not a distant crowd.
+MIN_FACE_AREA = 0.008
+MIN_FACE_CONFIDENCE = 0.6
+
+
+def face_areas(image_path: Path) -> list[float]:
+    """Frame share of every face macOS Vision finds (reliable where CLIP misses a cook at the stove)."""
+    if not available():
+        return []
+    import Vision
+    from Foundation import NSURL
+
+    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
+    request = Vision.VNDetectFaceRectanglesRequest.alloc().init()
+    handler.performRequests_error_([request], None)
+    return [
+        float(face.boundingBox().size.width * face.boundingBox().size.height)
+        for face in request.results() or [] if float(face.confidence()) >= MIN_FACE_CONFIDENCE
+    ]
+
+
 def is_overlay(lines: list[tuple[str, float]]) -> bool:
     readable = [text for text, confidence in lines if confidence >= MIN_CONFIDENCE]
     if any(len(re.findall(r"[A-Za-z]{2,}", text)) >= MIN_LINE_WORDS for text in readable):

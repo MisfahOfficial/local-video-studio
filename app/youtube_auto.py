@@ -17,7 +17,7 @@ from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
-from .text_guard import has_burned_in_text, sample_frames
+from .text_guard import available as text_guard_available, face_areas, has_burned_in_text, sample_frames
 from .ai_judge import ClaudeJudge, best_usable
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
@@ -548,6 +548,7 @@ class AutoYouTubeManager:
                 if not tiles:
                     return None
                 run.verifier.add_frames(video_id, tiles)
+            run.verifier.mark_faces(video_id)
             return candidate
 
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -699,7 +700,7 @@ class AutoYouTubeManager:
                         raise ProviderError("Portrait picture inside black bars")
                     if has_burned_in_text(destination, run.service.ffmpeg_path):
                         raise ProviderError("Another creator's captions are burned into this shot")
-                    if run.verifier is not None and self._shows_creator(run, destination):
+                    if run.verifier is not None and self._shows_creator(run, destination, archival_ok=is_hook):
                         raise ProviderError("A present-day person or show host is on camera")
                     break
                 except Exception as error:
@@ -1014,16 +1015,17 @@ class AutoYouTubeManager:
         return False
 
     @staticmethod
-    def _shows_creator(run: "_Run", clip: Path) -> bool:
+    def _shows_creator(run: "_Run", clip: Path, archival_ok: bool = False) -> bool:
         from PIL import Image
 
         try:
             with tempfile.TemporaryDirectory() as folder:
-                frames = [Image.open(path).convert("RGB")
-                          for path in sample_frames(clip, Path(folder), run.service.ffmpeg_path)]
+                paths = sample_frames(clip, Path(folder), run.service.ffmpeg_path)
+                frames = [Image.open(path).convert("RGB") for path in paths]
+                areas = [face_areas(path) for path in paths] if text_guard_available() else None
         except (OSError, subprocess.SubprocessError, ValueError):
             return False
-        return run.verifier.shows_creator(frames)
+        return run.verifier.shows_creator(frames, areas, archival_ok)
 
     @staticmethod
     def _single_shot(run: "_Run", clip: Path, metadata: dict[str, Any], wanted: float | None, duration: float) -> None:
@@ -1096,6 +1098,7 @@ class AutoYouTubeManager:
                 infos[video_id] = info
                 if tiles:
                     verifier.add_frames(video_id, tiles)
+                verifier.mark_faces(video_id)
         passing: list[tuple[float, dict[str, Any], float, float]] = []
         for candidate in candidates:
             video_id = str(candidate["video_id"])
