@@ -166,10 +166,15 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
 EFFECT_KEYS = ("film_look", "photo_graphics", "subscribe_button")
 
 
-def normalize_effects(value: Any) -> dict[str, bool]:
-    """Timeline effects; each is on unless the project turned it off."""
+def normalize_effects(value: Any) -> dict[str, Any]:
+    """Timeline effects (each on unless turned off) and the project's channel style."""
+    from .channel_styles import DEFAULT_STYLE, STYLES
+
     supplied = value if isinstance(value, dict) else {}
-    return {key: bool(supplied.get(key, True)) for key in EFFECT_KEYS}
+    effects: dict[str, Any] = {key: bool(supplied.get(key, True)) for key in EFFECT_KEYS}
+    style = str(supplied.get("channel_style") or DEFAULT_STYLE).lower()
+    effects["channel_style"] = style if style in STYLES else DEFAULT_STYLE
+    return effects
 
 
 def normalize_render_options(value: Any) -> dict[str, Any]:
@@ -232,6 +237,9 @@ class StudioApplication:
         self.generation = GenerationManager(self.db, paths, self.settings)
         self.rendering = RenderManager(self.db, paths, self.settings)
         self.youtube_auto = AutoYouTubeManager(self.db, paths, self.settings)
+        from .auto_build import AutoBuildManager
+
+        self.auto_build = AutoBuildManager(self)
         self.planner = RuleBasedScenePlanner()
 
     def project_payload(self, project_id: str) -> dict[str, Any]:
@@ -630,6 +638,15 @@ def build_handler(application: StudioApplication):
                 queries = topic_queries(scene, subjects.get(str(scene["id"]), ""), detect_era(str(project.get("script") or "")))
                 self._json({"query": queries[0] if queries else str(scene.get("narration") or "")[:120]})
                 return
+            if path == "/api/channel-styles":
+                from .channel_styles import STYLES
+
+                self._json({"styles": [{"key": key, "name": style.name} for key, style in STYLES.items()]})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/auto-build-status", path)
+            if match:
+                self._json(application.auto_build.status(match.group(1)))
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-status", path)
             if match:
                 if not application.db.get_project(match.group(1)):
@@ -789,6 +806,21 @@ def build_handler(application: StudioApplication):
                 queued = application.db.queue_generation(project_id, scene_ids, bool(body.get("force", False)))
                 application.generation.start(project_id)
                 self._json({"queued": queued})
+                return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/auto-build", path)
+            if match:
+                project_id = match.group(1)
+                project = application.db.get_project(project_id)
+                if not project:
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                body = self._read_json()
+                if not str(body.get("script") or project.get("script") or "").strip():
+                    raise ApiError("Paste a script before creating the video")
+                if not project.get("voiceover_path"):
+                    raise ApiError("Upload the finished voice-over first")
+                effects = {**(project.get("effects") or {}), "channel_style": body.get("channel_style")}
+                application.db.update_project(project_id, effects=normalize_effects(effects))
+                self._json(application.auto_build.start(project_id, body), HTTPStatus.ACCEPTED)
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-source", path)
             if match:

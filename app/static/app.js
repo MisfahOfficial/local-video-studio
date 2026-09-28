@@ -108,6 +108,10 @@ async function boot() {
     const [health, themeData, settings, projectData, fontData] = await Promise.all([
       api("/api/health"), api("/api/themes"), api("/api/settings"), api("/api/projects"), api("/api/fonts"),
     ]);
+    const styleData = await api("/api/channel-styles");
+    const styleOptions = styleData.styles.map(item => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.name)}</option>`).join("");
+    $("#channelStyleSelect").innerHTML = styleOptions;
+    $("#effectChannelStyle").innerHTML = styleOptions;
     state.themes = themeData.themes;
     state.motions = themeData.motions;
     state.settings = settings;
@@ -201,7 +205,9 @@ async function openProject(projectId, keepTab = false) {
   fillCaptionStyle();
   configurePreviewAudio();
   renderTimeline();
-  if (!keepTab) activateTab(state.scenes.length ? "scenes" : "script");
+  $("#channelStyleSelect").value = state.current.effects?.channel_style || "v3";
+  $("#effectChannelStyle").value = state.current.effects?.channel_style || "v3";
+  if (!keepTab) activateTab(state.scenes.length ? "timeline" : "script");
   await refreshGenerationStatus();
   await refreshYouTubeAutoStatus();
   fillFootageTopic().catch(() => {});
@@ -259,6 +265,52 @@ async function uploadVoiceover(file) {
     $("#voiceoverStatus").textContent = "Voice-over upload failed";
     toast(error.message, true);
   } finally { setTimeout(() => { progress.hidden = true; progress.value = 0; }, 700); }
+}
+
+// One click: plan + auto-source + chapter cards + realistic fill for anything missing.
+async function createVideo() {
+  if (!state.current) return;
+  const button = $("#createPlanButton");
+  button.disabled = true;
+  button.textContent = "Creating video…";
+  startPlanningProgress("whisper");
+  try {
+    await api(`/api/projects/${state.current.id}/auto-build`, {
+      method: "POST",
+      body: JSON.stringify({
+        script: $("#scriptInput").value,
+        theme_id: $("#themeSelect").value,
+        planner: $("#plannerSelect").value,
+        channel_style: $("#channelStyleSelect").value,
+        image_count: Number($("#imageCountInput").value || 0),
+        duration_seconds: Number($("#durationInput").value || 0) * 60,
+      }),
+    });
+    let status;
+    for (;;) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      status = await api(`/api/projects/${state.current.id}/auto-build-status`);
+      if (status.step >= 2) {
+        clearInterval(state.planningTimer);
+        const sourcing = status.sourcing || {};
+        const done = Number(sourcing.completed || 0) + Number(sourcing.failed || 0);
+        $("#planningStage").textContent = `Step ${status.step} of 3 · ${status.stage}`;
+        $("#planningDetail").textContent = status.step === 2
+          ? `Real footage, chapter cards and motion graphics · ${done}/${sourcing.total || status.scenes || "…"} scenes`
+          : "Making realistic period images for scenes no real footage could fill…";
+        $("#planningElapsed").textContent = clock((Date.now() / 1000) - Number(status.started || Date.now() / 1000));
+      }
+      if (!status.running) break;
+    }
+    if (status.error) throw new Error(status.error);
+    finishPlanningProgress("Video created");
+    const filled = (status.filled || []).length;
+    toast(`Video ready · ${status.scenes || 0} scenes${filled ? ` · ${filled} filled with realistic images` : ""}. Review it on the Timeline.`);
+    await refreshProjects();
+    await openProject(state.current.id, true);
+    activateTab("timeline");
+  } catch (error) { finishPlanningProgress(error.message, true); toast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "Create video"; }
 }
 
 async function createPlan() {
@@ -1045,6 +1097,7 @@ function fillEffectsControls() {
 
 async function saveEffects() {
   const body = Object.fromEntries($$("[data-effect]").map(input => [input.dataset.effect, input.checked]));
+  body.channel_style = $("#effectChannelStyle").value;
   const result = await api(`/api/projects/${state.current.id}/effects`, { method: "POST", body: JSON.stringify(body) });
   state.current.effects = result.effects;
   updatePreviewAt(state.previewTime, false);
@@ -1928,7 +1981,8 @@ $$(".tab[data-tab]").forEach(tab => tab.addEventListener("click", () => activate
 $("#workflowExportButton").addEventListener("click", openExportDialog);
 $("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
-$("#createPlanButton").addEventListener("click", createPlan);
+$("#createPlanButton").addEventListener("click", createVideo);
+$("#effectChannelStyle").addEventListener("change", () => saveEffects().catch(error => toast(error.message, true)));
 $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; renderScenes(); });
 $("#scenePageSelect").addEventListener("change", event => { state.scenePage = Number(event.target.value); renderScenes(); });
 $("#generateAllButton").addEventListener("click", () => generateScenes());

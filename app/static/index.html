@@ -51,9 +51,9 @@
 
         <nav class="tabs" aria-label="Project workflow">
           <button class="tab active" data-tab="script" type="button">1. Script & VO</button>
-          <button class="tab" data-tab="scenes" type="button">2. Visual plan</button>
-          <button class="tab" data-tab="timeline" type="button">3. Timeline</button>
-          <button class="tab" id="workflowExportButton" type="button">4. Export</button>
+          <button class="tab" data-tab="scenes" type="button" hidden>Visual plan</button>
+          <button class="tab" data-tab="timeline" type="button">2. Timeline</button>
+          <button class="tab" id="workflowExportButton" type="button">3. Export</button>
         </nav>
 
         <section class="tab-panel active" data-panel="script">
@@ -61,6 +61,7 @@
             <div><span class="eyebrow">Input</span><h2>Script and finished voice-over</h2></div>
           </div>
           <div class="form-grid">
+            <label>Channel style (motion graphics look)<select id="channelStyleSelect"></select></label>
             <label>Channel theme<select id="themeSelect"></select></label>
             <label>Visual planning<select id="plannerSelect"><option value="whisper" selected>Whisper Sync (free, runs on this computer)</option><option value="precision">Gemini Precision Sync (VO + script)</option><option value="gemini">Gemini Text Smart (estimated timing)</option><option value="local">Local Free (estimated timing)</option></select></label>
             <label>Target images (optional)<input id="imageCountInput" type="number" min="1" max="3000" placeholder="Auto pacing"></label>
@@ -70,8 +71,8 @@
           <div class="upload-line"><span id="voiceoverStatus">No voice-over uploaded</span><progress id="uploadProgress" max="100" value="0" hidden></progress></div>
           <label class="script-field">Complete script<textarea id="scriptInput" rows="18" placeholder="Paste the complete narration script here…"></textarea></label>
           <div class="action-row">
-            <button class="button primary" id="createPlanButton" type="button">Create visual plan</button>
-            <span class="hint">Leave Target images blank for automatic 5s / 8s / 10s pacing. You can review every prompt before generation.</span>
+            <button class="button primary" id="createPlanButton" type="button">Create video</button>
+            <span class="hint">One click: syncs the voice-over, finds real footage (2 videos per item), adds chapter cards and motion graphics in the channel's style, and fills any scene still empty with a realistic period image. Then opens the Timeline.</span>
           </div>
           <div class="planning-progress panel" id="planningProgress" hidden role="status" aria-live="polite">
             <div class="planning-progress-heading"><strong id="planningStage">Preparing voice-over…</strong><span id="planningElapsed">00:00</span></div>
@@ -238,6 +239,8 @@
               </div>
               <div class="inspector-content" data-inspector-panel="animation">
                 <div><span class="eyebrow">Video effects</span><h3>Applied to the whole video</h3></div>
+                <label>Channel style<select id="effectChannelStyle"></select></label>
+                <p class="hint">Changing the style re-draws cards and chapter titles the next time footage is sourced; captions and the subscribe button follow it on export.</p>
                 <div class="control-row"><span>Captions</span><div class="segmented grow"><button type="button" data-caption-animation="highlight">Highlight words</button><button type="button" data-caption-animation="none">Plain</button></div></div>
                 <label class="check"><input id="effectFilmLook" type="checkbox" data-effect="film_look"><span>Vintage film look on every clip</span></label>
                 <label class="check"><input id="effectPhotoGraphics" type="checkbox" data-effect="photo_graphics"><span>Photo graphics (polaroid stack / graph-paper card on photos)</span></label>

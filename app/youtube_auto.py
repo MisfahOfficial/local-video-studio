@@ -19,6 +19,7 @@ from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
 from .text_guard import available as text_guard_available, face_areas, has_burned_in_text, sample_frames
 from .ai_judge import ClaudeJudge, best_usable
+from .channel_styles import get_style
 from .source_library import analysis_copy, clean_cache, read_source
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
@@ -241,6 +242,7 @@ class _Run:
     photo_budget: int = 0
     notes: dict[int, str] = field(default_factory=dict)
     photo_slots: set[str] = field(default_factory=set)
+    style: Any = None  # the project's channel style (motion graphics look)
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
@@ -424,6 +426,7 @@ class AutoYouTubeManager:
         if run.gallery_id in redo:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
+        run.style = get_style((project.get("effects") or {}).get("channel_style"))
         # 80:20 - four of five filmable scenes are real video; photos may replace a weak clip only
         # while they stay under a fifth (a scene with no usable video still gets a photo).
         filmable = [item for item in all_scenes if not heading_subject(str(item["narration"]))
@@ -984,7 +987,8 @@ class AutoYouTubeManager:
             return False
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
         destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
-        encode(gallery_stack([Image.open(path) for path in paths]), duration, destination, ffmpeg_path=run.service.ffmpeg_path)
+        encode(gallery_stack([Image.open(path) for path in paths], run.style), duration, destination,
+               ffmpeg_path=run.service.ffmpeg_path)
         asset = self.db.add_asset(
             project_id=run.project_id, scene_id=str(scene["id"]),
             candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
@@ -1015,7 +1019,7 @@ class AutoYouTubeManager:
             pictures = [(name, path) for name, path in pictures if path is not None]
             if len(pictures) < 2:
                 return False
-            frame = ingredient_cards([(name, Image.open(path)) for name, path in pictures])
+            frame = ingredient_cards([(name, Image.open(path)) for name, path in pictures], run.style)
             metadata = {"graphic": "ingredients", "items": [name for name, _path in pictures]}
         else:
             dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
@@ -1023,7 +1027,7 @@ class AutoYouTubeManager:
                                 run.era, allow_generated, judge=run.judge)
             if len(paths) < 3:
                 return False
-            frame = gallery_stack([Image.open(path) for path in paths])
+            frame = gallery_stack([Image.open(path) for path in paths], run.style)
             metadata = {"graphic": "gallery", "items": [path.stem for path in paths]}
             with run.lock:
                 run.gallery_done = True

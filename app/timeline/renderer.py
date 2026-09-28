@@ -272,6 +272,9 @@ class FFmpegRenderer:
         encoder = self._choose_encoder()
         animated_captions = burn_captions and (caption_style or {}).get("animation") == "highlight"
         subscribe_clip = _subscribe_clip(clips, scenes_by_id) if subscribe_button else None
+        from ..channel_styles import get_style
+
+        self._style = get_style((project.get("effects") or {}).get("channel_style"))
         captioned_scenes: set[str] = set()
         photo_index = 0
         for index, timeline_clip in enumerate(clips):
@@ -304,7 +307,7 @@ class FFmpegRenderer:
             if subscribe_button and timeline_clip is subscribe_clip:
                 from ..motion.templates import subscribe_overlay
 
-                self._overlay(clip, subscribe_overlay(), duration, fps, encoder, "subscribe")
+                self._overlay(clip, subscribe_overlay(style=self._style), duration, fps, encoder, "subscribe")
             clip_paths.append(clip)
             if progress:
                 progress(0.82 * (index + 1) / total)
@@ -417,13 +420,16 @@ class FFmpegRenderer:
         from ..motion.templates import graph_paper_card, polaroid_stack
 
         image = Image.open(photo)
-        frame = polaroid_stack(image, seed=len(destination.name)) if graphic == "polaroid" else graph_paper_card(image)
+        style = getattr(self, "_style", None)
+        frame = (polaroid_stack(image, seed=len(destination.name), style=style) if graphic == "polaroid"
+                 else graph_paper_card(image))
         return encode(frame, duration, destination, fps=fps, ffmpeg_path=self.ffmpeg_path)
 
     def _overlay_highlight_caption(self, clip: Path, text: str, duration: float, fps: int, encoder: str) -> None:
         from ..motion.templates import caption_keywords, highlight_caption
 
-        self._overlay(clip, highlight_caption(text, caption_keywords(text)), duration, fps, encoder, "caption")
+        self._overlay(clip, highlight_caption(text, caption_keywords(text), style=getattr(self, "_style", None)),
+                      duration, fps, encoder, "caption")
 
     def _overlay(self, clip: Path, frame: Any, duration: float, fps: int, encoder: str, name: str) -> None:
         """Composite an animated transparent graphic over a rendered clip, in place."""
