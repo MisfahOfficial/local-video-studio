@@ -601,7 +601,7 @@ class ClipScorer:
         return tuple(f"a {name}" for name in ranked[:count])
 
 
-MAX_SHEETS = 12
+MAX_SHEETS = 40
 
 
 def storyboard_frames(info: dict[str, Any], max_frames: int = 80) -> list[tuple[float, Any]]:
@@ -625,13 +625,22 @@ def storyboard_frames(info: dict[str, Any], max_frames: int = 80) -> list[tuple[
     for fragment in fragments:
         starts.append(cursor)
         cursor += float(fragment.get("duration") or per_sheet / fps)
-    # Each sprite sheet is one download: take several frames from a few evenly spaced
-    # sheets instead of one frame from each of 80 (long sources took minutes).
-    sheets = min(len(fragments), MAX_SHEETS)
-    chosen = sorted({round(index * (len(fragments) - 1) / max(1, sheets - 1)) for index in range(sheets)})
-    quota = max(1, -(-max_frames // len(chosen)))
-    step = max(1, per_sheet // quota)
-    jobs = [(starts[number], str(fragments[number]["url"]), list(range(0, per_sheet, step))[:quota]) for number in chosen]
+    # Frames evenly spread over the WHOLE video (a moment anywhere can be found), but never
+    # more than MAX_SHEETS sprite downloads: long sources get fewer, still evenly spaced frames.
+    cells = [(number, cell) for number in range(len(fragments)) for cell in range(per_sheet)
+             if not duration or starts[number] + cell / fps < duration]
+    if not cells:
+        return []
+    count = min(len(cells), max_frames)
+    picked = [cells[int((index + 0.5) * len(cells) / count)] for index in range(count)]
+    sheets = sorted({number for number, _cell in picked})
+    if len(sheets) > MAX_SHEETS:
+        keep = {sheets[round(index * (len(sheets) - 1) / (MAX_SHEETS - 1))] for index in range(MAX_SHEETS)}
+        picked = [item for item in picked if item[0] in keep]
+    wanted_by_sheet: dict[int, list[int]] = {}
+    for number, cell in picked:
+        wanted_by_sheet.setdefault(number, []).append(cell)
+    jobs = [(starts[number], str(fragments[number]["url"]), cells_wanted) for number, cells_wanted in sorted(wanted_by_sheet.items())]
 
     def fetch(job: tuple[float, str, list[int]]) -> list[tuple[float, Any]]:
         sheet_start, url, wanted = job
@@ -719,25 +728,6 @@ class FootageVerifier:
             if gate[index] >= TOPIC_THRESHOLD and max(render[index], drawing[index]) < SYNTHETIC_THRESHOLD
             and not modern_face(faces[index], vintage[index])
         ]
-        return sorted(ranked, key=lambda item: item[1], reverse=True)
-
-    def rank_period_photos(self, photos: list[Any], detail: str) -> list[tuple[int, float]]:
-        """Real photos that plainly look like the period, for a hook with nothing more specific."""
-        if not photos:
-            return []
-        with self.lock:
-            features = self.scorer.embed_images(photos)
-            vintage = self.scorer.probabilities(features, "an old photograph from the 1950s or 1960s", (
-                "a modern digital photo", "a recent smartphone photo",
-            ))
-            fits = self.scorer.probabilities(features, detail, ("a landscape", "a building exterior", "a document"))
-            render = self.scorer.probabilities(
-                features, "a hyperrealistic AI render, overly perfect and saturated",
-                ("an ordinary real photo", "real camera footage"),
-            )
-            drawing = self.scorer.probabilities(features, "a drawing, painting or illustration", ("a photograph",))
-        ranked = [(index, 0.5 * vintage[index] + 0.5 * fits[index]) for index in range(len(photos))
-                  if vintage[index] >= 0.6 and max(render[index], drawing[index]) < SYNTHETIC_THRESHOLD]
         return sorted(ranked, key=lambda item: item[1], reverse=True)
 
     def rank_ingredient_photos(

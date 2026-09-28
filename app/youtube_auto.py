@@ -238,6 +238,8 @@ class _Run:
     gallery_done: bool = False
     judge: Any = None
     photo_budget: int = 0
+    # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
+    planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     by_position: dict[int, str] = field(default_factory=dict)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -253,6 +255,41 @@ def _seen_title(item: dict[str, Any], seen_titles: list[set[str]]) -> bool:
     return bool(title) and any(
         len(title & seen) >= max(2, 0.6 * min(len(title), len(seen))) for seen in seen_titles
     )
+
+
+def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, signature: set[str]) -> bool:
+    """One rule for every search: the right subject, real footage, not another cuisine or a slideshow."""
+    text = f"{item.get('title')} {item.get('description')}"
+    title = str(item.get("title") or "")
+    # A list section's clips must be that exact dish: its name or signature
+    # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
+    exact = not signature or any(mentions_topic(text, word) for word in signature)
+    # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
+    theme_words = [word for word in (core.split() + run.theme.split()) if word not in _GENERIC_THEME]
+    if is_hook and theme_words:
+        named = any(mentions_topic(text, word) for word in theme_words)
+    else:
+        # "Chicken and Rice Casserole" must be the video's own dish: every word of the name in its
+        # title ("Buffalo Chicken Dynamite Rice" only lists it among others in the description).
+        dish_words = [word for word in core.split() if word not in _STOPWORDS]
+        named = (all(mentions_topic(title, word) for word in dish_words)
+                 if len(dish_words) >= 2 else mentions_topic(text, core))
+    channel = str(item.get("channel") or item.get("uploader") or "")
+    if is_hook and run.era and MODERN_TITLE.search(title):
+        return False  # a period opening never shows a 2026 store haul
+    return (not NON_FOOTAGE_TITLE.search(title) and not NON_FOOTAGE_TITLE.search(channel)
+            and not off_cuisine(title, run.script)
+            and str(item.get("video_id")) not in run.exclude_videos
+            and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
+            and named and exact)
+
+
+# Titles that promise a whole, period-style recipe: better pool sources than quick hacks.
+_CLASSIC_TITLE = re.compile(
+    r"\b(old[- ]fashioned|vintage|classic|grandma'?s?|homemade|from scratch|original|19[3-7]0s|retro|church|potluck)\b",
+    re.IGNORECASE,
+)
+POOL_SIZE = 5
 
 
 class AutoYouTubeManager:
@@ -386,6 +423,11 @@ class AutoYouTubeManager:
                     and str(item["id"]) not in run.card_ids and str(item["id"]) != run.gallery_id]
         run.photo_budget = len(filmable) // 5
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
+        if verifier is not None:
+            try:
+                self._plan_sections(run, scenes)
+            except Exception as error:  # planning only improves continuity; per-scene search still works
+                run.errors.append({"scene": 0, "error": f"Section planning skipped: {str(error)[:200]}", "query": ""})
         try:
             # Several scenes at once: most of the time is spent waiting on YouTube.
             with ThreadPoolExecutor(max_workers=SCENE_WORKERS) as pool:
@@ -412,6 +454,115 @@ class AutoYouTubeManager:
                 )
             with self._lock:
                 self._threads.pop(project_id, None)
+
+    # ------------------------------------------------------------------ section footage pools
+    def _plan_sections(self, run: "_Run", scenes: list[dict[str, Any]]) -> None:
+        """Edit like a person: pick the few best source videos for each section (the hook, each dish),
+        then cut every sentence from them in story order, so the steps follow one cook's video."""
+        sections: dict[str, list[dict[str, Any]]] = {}
+        for scene in sorted(scenes, key=lambda item: int(item.get("position") or 0)):
+            scene_id = str(scene["id"])
+            if (scene_id in run.card_ids or scene_id == run.gallery_id
+                    or heading_subject(str(scene.get("narration") or ""))):
+                continue
+            key = "hook" if scene_id in run.hook_ids else (
+                run.recipe_by_id.get(scene_id) or run.subject_by_id.get(scene_id) or "")
+            if key:
+                sections.setdefault(key, []).append(scene)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(lambda item: self._plan_section(run, item[0], item[1]), sections.items()))
+
+    def _plan_section(self, run: "_Run", key: str, members: list[dict[str, Any]]) -> None:
+        is_hook = key == "hook"
+        first = str(members[0]["id"])
+        era = run.era or "vintage"
+        if is_hook:
+            if not run.theme:
+                return
+            subject = " ".join(word for word in run.theme.split() if word not in _GENERIC_THEME) or run.theme
+            recipe, signature = "", set()
+            queries = [f"{era} {run.theme} footage", f"vintage {subject} home movie", f"{era} {subject}",
+                       f"{subject} {era} film"]
+        else:
+            subject = run.subject_by_id.get(first, "")
+            recipe = run.recipe_by_id.get(first, "")
+            signature = signature_words(recipe, subject) if recipe else set()
+            dish = recipe or core_subject(subject)
+            queries = [f"{dish} recipe", f"old fashioned {dish}", f"{era} {dish}", dish]
+        core = subject if is_hook else core_subject(subject)
+        found: dict[str, dict[str, Any]] = {}
+        for query in dict.fromkeys(queries):
+            for item in self._search(run, query):
+                found.setdefault(str(item.get("video_id")), {**item, "_query": query})
+        usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
+
+        def rank(item: dict[str, Any]) -> float:
+            title = str(item.get("title") or "")
+            length = float(item.get("duration_seconds") or item.get("duration") or 0)
+            return (2.0 * mentions_topic(title, recipe or core) + 1.0 * bool(_CLASSIC_TITLE.search(title))
+                    + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
+
+        sources = self._prepare_sources(run, sorted(usable, key=rank, reverse=True)[:POOL_SIZE + 2])[:POOL_SIZE]
+        if not sources:
+            return
+        taken: dict[str, list[float]] = {vid: list(times) for vid, times in run.used.items()}
+        previous: tuple[str, float] | None = None
+        for scene in members:
+            duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+            scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
+            options: list[tuple[float, dict[str, Any], float, float]] = []
+            for candidate in sources:
+                video_id = str(candidate["video_id"])
+                moment = run.verifier.best_moment(
+                    video_id, run.infos[video_id], subject, scene_text, duration, avoid=taken.get(video_id),
+                    recipe=recipe, prefer_vintage=bool(run.era) or is_hook, require_vintage=is_hook,
+                )
+                if moment is None:
+                    continue
+                start, topic_score, score = moment
+                if previous and previous[0] == video_id:
+                    # The next step comes later in the same cook's video; going backwards looks wrong.
+                    score += 0.06 if start > previous[1] else -0.08
+                options.append((score, candidate, start, topic_score))
+            options.sort(key=lambda item: item[0], reverse=True)
+            if not options:
+                continue
+            run.planned[str(scene["id"])] = [(candidate, start, topic) for _score, candidate, start, topic in options]
+            _score, best, start, _topic = options[0]
+            taken.setdefault(str(best["video_id"]), []).append(start)
+            previous = (str(best["video_id"]), start)
+
+    def _prepare_sources(self, run: "_Run", candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Inspect candidates in parallel, keep landscape, real (non-AI) footage with storyboards."""
+        def prepare(candidate: dict[str, Any]) -> dict[str, Any] | None:
+            video_id = str(candidate["video_id"])
+            try:
+                info = run.infos.get(video_id) or run.service.inspect(video_id)
+            except ProviderError:
+                return None
+            run.infos[video_id] = info
+            if not run.verifier.has_frames(video_id):
+                tiles = storyboard_frames(info)
+                if not tiles:
+                    return None
+                run.verifier.add_frames(video_id, tiles)
+            return candidate
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            prepared = [item for item in pool.map(prepare, candidates) if item is not None]
+        kept = []
+        for candidate in prepared:
+            video_id = str(candidate["video_id"])
+            info = run.infos[video_id]
+            stream = pick_video_stream(info) or {}
+            if int(stream.get("height") or info.get("height") or 0) > int(stream.get("width") or info.get("width") or 1):
+                continue
+            if looks_like_ai_slideshow({**candidate, "description": info.get("description")}, run.settings.blocked_channels):
+                continue
+            if run.verifier.synthetic_score(video_id) >= SYNTHETIC_THRESHOLD:
+                continue
+            kept.append(candidate)
+        return kept
 
     def _search(self, run: "_Run", query: str) -> list[dict[str, Any]]:
         """Searches are cached per run: scenes in one list section repeat the same queries."""
@@ -465,33 +616,15 @@ class AutoYouTubeManager:
         query = queries[0] if queries else subject
 
         def usable(item: dict[str, Any]) -> bool:
-            text = f"{item.get('title')} {item.get('description')}"
-            title = str(item.get("title") or "")
-            # A list section's clips must be that exact dish: its name or signature
-            # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
-            exact = not signature or any(mentions_topic(text, word) for word in signature)
-            # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
-            theme_words = [word for word in (core.split() + run.theme.split()) if word not in _GENERIC_THEME]
-            if is_hook and theme_words:
-                named = any(mentions_topic(text, word) for word in theme_words)
-            else:
-                # "Chicken and Rice Casserole" must be the video's own dish: every word of the name in its
-                # title ("Buffalo Chicken Dynamite Rice" only lists it among others in the description).
-                dish_words = [word for word in core.split() if word not in _STOPWORDS]
-                named = (all(mentions_topic(title, word) for word in dish_words)
-                         if len(dish_words) >= 2 else mentions_topic(text, core))
-            channel = str(item.get("channel") or item.get("uploader") or "")
-            if is_hook and run.era and MODERN_TITLE.search(title):
-                return False  # a period opening never shows a 2026 store haul
-            return (not NON_FOOTAGE_TITLE.search(title) and not NON_FOOTAGE_TITLE.search(channel)
-                    and not off_cuisine(title, run.script)
-                    and str(item.get("video_id")) not in run.exclude_videos
-                    and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
-                    and named and exact)
+            return usable_source(run, item, is_hook, core, signature)
 
+        planned = [
+            (candidate, start, topic) for candidate, start, topic in run.planned.get(str(scene["id"]), [])
+            if not any(abs(float(start or 0) - used) < 15 for used in run.used.get(str(candidate["video_id"]), []))
+        ]
         try:
             pool: dict[str, dict[str, Any]] = {}
-            for attempt in queries[:run.max_attempts]:
+            for attempt in ([] if planned else queries[:run.max_attempts]):
                 for item in self._search(run, attempt):
                     pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
                 good = [item for item in pool.values() if usable(item)]
@@ -507,11 +640,11 @@ class AutoYouTubeManager:
                 reverse=True,
             )
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
-            choices = self._choose(
+            choices = planned or self._choose(
                 run.service, run.verifier, ranked[:4 if is_hook else 3], subject, scene_text, duration, used_now, run.infos,
                 run.settings.blocked_channels, recipe, bool(run.era), is_hook,
             ) if ranked else []
-            if not choices and is_hook and ranked:
+            if not choices and is_hook and ranked and not planned:
                 # No period footage passed: real modern footage of the theme still beats a repeat or a gap.
                 choices = self._choose(
                     run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
@@ -542,8 +675,8 @@ class AutoYouTubeManager:
                 with run.lock:
                     if start_time is not None and any(abs(start_time - used) < 15 for used in run.used.get(video_id, [])):
                         continue  # another scene took this moment meanwhile
-                    if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
-                        continue  # the same source in neighbouring scenes reads as a jump cut
+                    if not planned and video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
+                        continue  # unplanned: the same source in neighbouring scenes may repeat a shot
                     run.used.setdefault(video_id, []).append(float(start_time or 0))
                     run.by_position[position] = video_id
                 destination = (
@@ -626,10 +759,6 @@ class AutoYouTubeManager:
                     with run.lock:
                         run.completed += 1
                         run.graphics.append(position)
-                elif is_hook and self._period_photo(run, scene, position):
-                    with run.lock:
-                        run.completed += 1
-                        run.photos.append(position)
                 elif is_hook:
                     raise ProviderError("No real footage or photo passed for this hook scene; AI images are never used in the hook")
                 else:
@@ -744,57 +873,6 @@ class AutoYouTubeManager:
         if verdicts is None:
             return order
         return [top[index] for index in best_usable(verdicts)]
-
-    def _period_photo(self, run: "_Run", scene: dict[str, Any], position: int) -> bool:
-        """Last real option for a hook scene: a genuine photo of everyday life in the period."""
-        if run.verifier is None:
-            return False
-        era = run.era or "1950s"
-        words = [word for word in scene_keywords(str(scene.get("narration") or ""), "", limit=3) if not word.isdigit()]
-        queries = list(dict.fromkeys([
-            *(f"{era} {word}" for word in words[:2]), f"{era} family dinner", f"{era} kitchen", f"{era} america",
-        ]))
-        items: dict[str, dict[str, Any]] = {}
-        for query in queries:
-            with run.lock:
-                cached = run.searches.get(f"photo:{query}")
-            if cached is None:
-                cached = search_photos(query)
-                with run.lock:
-                    run.searches[f"photo:{query}"] = cached
-            for item in cached:
-                items.setdefault(str(item.get("id") or item["url"]), item)
-        with run.lock:
-            fresh = [item for key, item in items.items()
-                     if key not in run.used_photos and not _seen_title(item, run.photo_titles)][:16]
-        candidates = [(item, image) for item, image in zip(fresh, load_images(
-            [str(item.get("thumbnail") or item["url"]) for item in fresh])) if image is not None]
-        detail = f"an old photo of {' '.join(words) or 'family life'}"
-        ranked = run.verifier.rank_period_photos([image for _item, image in candidates], detail)
-        need = (f'The opening of a nostalgic documentary. Narration: "{scene.get("narration")}". A genuine old '
-                f"photo of everyday life in the {era} that suits this sentence.")
-        for index in self._judge_photos(run, need, [image for _item, image in candidates], [i for i, _ in ranked])[:3]:
-            item = candidates[index][0]
-            photo = load_image(str(item["url"]))
-            key = str(item.get("id") or item["url"])
-            with run.lock:
-                if photo is None or key in run.used_photos or _seen_title(item, run.photo_titles):
-                    continue
-                run.used_photos.add(key)
-                if _photo_title(item):
-                    run.photo_titles.append(_photo_title(item))
-            destination = self.paths.project_dir(run.project_id) / "assets" / "photos" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
-            metadata = save_photo(item, photo, destination)
-            metadata["search_topic"] = f"{era} period photo"
-            asset = self.db.add_asset(
-                project_id=run.project_id, scene_id=str(scene["id"]),
-                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
-                media_kind="image", provider="photo", model="openverse", local_path=str(destination),
-                remote_url=metadata["source_url"], provider_asset_id=key, cost=0.0, metadata=metadata,
-            )
-            self.db.select_asset(str(scene["id"]), str(asset["id"]))
-            return True
-        return False
 
     def _theme_gallery(self, run: "_Run", scene: dict[str, Any], position: int) -> bool:
         """A gallery of real photos of the video's dishes, for a hook scene nothing else could fill."""
