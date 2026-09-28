@@ -993,7 +993,7 @@ class AutoYouTubeManager:
             project_id=run.project_id, scene_id=str(scene["id"]),
             candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
             media_kind="video", provider="graphic", model="gallery", local_path=str(destination),
-            remote_url=None, provider_asset_id=None, cost=0.0, metadata={"graphic": "gallery", "items": [path.stem for path in paths]},
+            remote_url=None, provider_asset_id=None, cost=0.0, metadata={"graphic": "gallery", "items": [{"label": path.stem, "image": str(path)} for path in paths]},
         )
         self.db.select_asset(str(scene["id"]), str(asset["id"]))
         return True
@@ -1020,7 +1020,7 @@ class AutoYouTubeManager:
             if len(pictures) < 2:
                 return False
             frame = ingredient_cards([(name, Image.open(path)) for name, path in pictures], run.style)
-            metadata = {"graphic": "ingredients", "items": [name for name, _path in pictures]}
+            metadata = {"graphic": "ingredients", "items": [{"label": name, "image": str(path)} for name, path in pictures]}
         else:
             dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
             paths = dish_images(many, [dish for dish in dishes if dish], library, run.verifier, run.settings,
@@ -1028,7 +1028,7 @@ class AutoYouTubeManager:
             if len(paths) < 3:
                 return False
             frame = gallery_stack([Image.open(path) for path in paths], run.style)
-            metadata = {"graphic": "gallery", "items": [path.stem for path in paths]}
+            metadata = {"graphic": "gallery", "items": [{"label": path.stem, "image": str(path)} for path in paths]}
             with run.lock:
                 run.gallery_done = True
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))

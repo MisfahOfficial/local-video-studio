@@ -476,3 +476,7 @@ body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-s
 .preview-subscribe .subscribe-bell { font-size: 14px; }
 @keyframes subscribe-pop { from { transform: translateX(-50%) scale(.6); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
 [data-caption-animation].active { background: var(--accent, #c8f56a); color: #111; }
+
+.graphic-editor { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.08); }
+.graphic-item { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; }
+.graphic-item input { min-width: 0; }

@@ -234,6 +234,12 @@
                 <label>Motion<select id="timelineMotion"></select></label>
                 <label>Transition<select id="timelineTransition"><option value="fade">Fade</option><option value="cut">Cut</option></select></label>
                 <label>Fade duration<input id="timelineTransitionDuration" type="number" min="0" max="1.5" step="0.05" value="0.32"></label>
+                <div class="graphic-editor" id="graphicEditor" hidden>
+                  <span class="eyebrow">Motion graphic</span>
+                  <p class="hint">Rename, reorder or remove items, then redraw. The channel style comes from the Effects tab.</p>
+                  <div id="graphicItems"></div>
+                  <button class="button small" id="redrawGraphicButton" type="button">Redraw graphic</button>
+                </div>
                 <input id="replacementMediaInput" type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" hidden>
                 <div class="inspector-footer"><button class="button ghost small" id="replaceMediaButton" type="button">Replace media</button><button class="button primary small" id="saveTimelineButton" type="button">Save scene</button></div>
               </div>

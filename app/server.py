@@ -1003,6 +1003,21 @@ def build_handler(application: StudioApplication):
                     "auto_fitted": auto_fitted,
                 }, HTTPStatus.ACCEPTED)
                 return
+            match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/graphic", path)
+            if match:
+                from .graphics_editor import redraw_scene_graphic
+
+                body = self._read_json()
+                items = body.get("items") if isinstance(body.get("items"), list) else []
+                try:
+                    asset = redraw_scene_graphic(
+                        application.db, application.paths, match.group(1), items,
+                        application.settings.load().ffmpeg_path, body.get("channel_style"),
+                    )
+                except ValueError as error:
+                    raise ApiError(str(error)) from error
+                self._json({"asset": asset}, HTTPStatus.CREATED)
+                return
             match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/asset", path)
             if match:
                 scene = application.db.get_scene(match.group(1))

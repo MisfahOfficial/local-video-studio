@@ -961,6 +961,37 @@ function actionFor(scene, type, defaults) {
   return (scene?.timeline_actions || []).find(action => action.type === type)?.params || defaults;
 }
 
+// Ingredient cards and galleries keep their items, so they can be edited and drawn again.
+function fillGraphicEditor(scene) {
+  const asset = state.assets.find(item => item.id === scene?.selected_asset_id);
+  const items = asset?.provider === "graphic" ? (asset.metadata?.items || []).filter(item => item && item.image) : [];
+  $("#graphicEditor").hidden = !items.length;
+  state.graphicItems = items.map(item => ({ label: item.label || "", image: item.image }));
+  renderGraphicItems();
+}
+
+function renderGraphicItems() {
+  $("#graphicItems").innerHTML = (state.graphicItems || []).map((item, index) => `
+    <div class="graphic-item" data-index="${index}">
+      <input value="${escapeHtml(item.label)}" maxlength="40" data-graphic-label="${index}" aria-label="Item ${index + 1} label">
+      <button class="mini-button" type="button" data-graphic-move="-1" title="Move up">↑</button>
+      <button class="mini-button" type="button" data-graphic-move="1" title="Move down">↓</button>
+      <button class="mini-button" type="button" data-graphic-remove title="Remove">✕</button>
+    </div>`).join("");
+}
+
+async function redrawGraphic() {
+  const scene = state.scenes.find(item => item.id === state.activeTimelineSceneId);
+  if (!scene) return;
+  $("#redrawGraphicButton").disabled = true;
+  try {
+    await api(`/api/scenes/${scene.id}/graphic`, { method: "POST", body: JSON.stringify({ items: state.graphicItems }) });
+    await openProject(state.current.id, true);
+    selectTimelineScene(scene.id);
+    toast("Graphic redrawn");
+  } finally { $("#redrawGraphicButton").disabled = false; }
+}
+
 function fillTimelineInspector(scene, clip = null) {
   const controls = ["#timelineDuration", "#timelineCaption", "#timelineMotion", "#timelineTransition", "#timelineTransitionDuration", "#replaceMediaButton", "#saveTimelineButton"];
   controls.forEach(selector => { $(selector).disabled = !scene; });
@@ -972,6 +1003,7 @@ function fillTimelineInspector(scene, clip = null) {
     $("#timelineCaption").value = "";
     return;
   }
+  fillGraphicEditor(scene);
   const motion = actionFor(scene, "motion", { preset: "slow_push" });
   const transition = actionFor(scene, "transition", { preset: "fade", duration: 0.32 });
   $("#timelineDuration").value = clip
@@ -1982,6 +2014,24 @@ $("#workflowExportButton").addEventListener("click", openExportDialog);
 $("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
 $("#createPlanButton").addEventListener("click", createVideo);
+$("#redrawGraphicButton").addEventListener("click", () => redrawGraphic().catch(error => toast(error.message, true)));
+$("#graphicItems").addEventListener("input", event => {
+  const index = event.target.dataset.graphicLabel;
+  if (index !== undefined) state.graphicItems[Number(index)].label = event.target.value;
+});
+$("#graphicItems").addEventListener("click", event => {
+  const row = event.target.closest(".graphic-item");
+  if (!row) return;
+  const index = Number(row.dataset.index);
+  if (event.target.dataset.graphicMove) {
+    const target = index + Number(event.target.dataset.graphicMove);
+    if (target < 0 || target >= state.graphicItems.length) return;
+    [state.graphicItems[index], state.graphicItems[target]] = [state.graphicItems[target], state.graphicItems[index]];
+  } else if (event.target.dataset.graphicRemove !== undefined) {
+    state.graphicItems.splice(index, 1);
+  } else return;
+  renderGraphicItems();
+});
 $("#effectChannelStyle").addEventListener("change", () => saveEffects().catch(error => toast(error.message, true)));
 $("#emotionFilter").addEventListener("change", () => { state.scenePage = 1; renderScenes(); });
 $("#scenePageSelect").addEventListener("change", event => { state.scenePage = Number(event.target.value); renderScenes(); });
