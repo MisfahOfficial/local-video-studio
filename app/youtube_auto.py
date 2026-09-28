@@ -246,6 +246,7 @@ class _Run:
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
     section_pools: list[tuple[str, str, list[dict[str, Any]]]] = field(default_factory=list)
     teasers: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
+    plan_for: set[str] = field(default_factory=set)
     by_position: dict[int, str] = field(default_factory=dict)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -432,7 +433,7 @@ class AutoYouTubeManager:
         clean_cache(self.paths.root / "source_cache")
         if verifier is not None:
             try:
-                self._plan_sections(run, scenes)
+                self._plan_sections(run, scenes, all_scenes)
             except Exception as error:  # planning only improves continuity; per-scene search still works
                 run.errors.append({"scene": 0, "error": f"Section planning skipped: {str(error)[:200]}", "query": ""})
         try:
@@ -464,11 +465,17 @@ class AutoYouTubeManager:
                 self._threads.pop(project_id, None)
 
     # ------------------------------------------------------------------ section footage pools
-    def _plan_sections(self, run: "_Run", scenes: list[dict[str, Any]]) -> None:
+    def _plan_sections(
+        self, run: "_Run", scenes: list[dict[str, Any]], all_scenes: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Edit like a person: pick the few best source videos for each section (the hook, each dish),
-        then cut every sentence from them in story order, so the steps follow one cook's video."""
+        then cut every sentence from them in story order, so the steps follow one cook's video.
+
+        Sources come from the whole video's sections (the hook's teasers need them even when only
+        the hook is re-sourced); moments are only planned for the scenes being sourced now."""
+        wanted = {str(scene["id"]) for scene in scenes}
         sections: dict[str, list[dict[str, Any]]] = {}
-        for scene in sorted(scenes, key=lambda item: int(item.get("position") or 0)):
+        for scene in sorted(all_scenes or scenes, key=lambda item: int(item.get("position") or 0)):
             scene_id = str(scene["id"])
             if (scene_id in run.card_ids or scene_id == run.gallery_id
                     or heading_subject(str(scene.get("narration") or ""))):
@@ -477,7 +484,8 @@ class AutoYouTubeManager:
                 run.recipe_by_id.get(scene_id) or run.subject_by_id.get(scene_id) or "")
             if key:
                 sections.setdefault(key, []).append(scene)
-        hook = sections.pop("hook", [])
+        hook = [scene for scene in sections.pop("hook", []) if str(scene["id"]) in wanted]
+        run.plan_for = wanted
         with ThreadPoolExecutor(max_workers=3) as pool:
             list(pool.map(lambda item: self._plan_section(run, item[0], item[1]), sections.items()))
         order = {key: index for index, key in enumerate(sections)}
@@ -496,18 +504,25 @@ class AutoYouTubeManager:
             for candidate, start, _topic in plans[:1]:
                 taken.setdefault(str(candidate["video_id"]), []).append(float(start or 0))
         for index, scene in enumerate(members):
-            subject, recipe, sources = pools[index % len(pools)]
-            dish = recipe or core_subject(subject)
+            # This sentence's own dish first (dishes in story order), then the others as spares.
+            ordered = pools[index % len(pools):] + pools[:index % len(pools)]
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             options: list[tuple[float, dict[str, Any], float, float]] = []
-            for candidate in sources:
-                video_id = str(candidate["video_id"])
-                moment = run.verifier.best_moment(
-                    video_id, run.infos[video_id], subject, f"a finished {dish} served on a table", duration,
-                    avoid=taken.get(video_id), recipe=recipe, prefer_vintage=True,
-                )
-                if moment is not None:
-                    options.append((moment[2], candidate, moment[0], moment[1]))
+            for rank, (subject, recipe, sources) in enumerate(ordered):
+                dish = recipe or core_subject(subject)
+                for candidate in sources:
+                    video_id = str(candidate["video_id"])
+                    avoid = list(taken.get(video_id, []))
+                    # Up to three different moments per source, so one failed check never empties the scene.
+                    for _extra in range(3):
+                        moment = run.verifier.best_moment(
+                            video_id, run.infos[video_id], subject, f"a finished {dish} served on a table", duration,
+                            avoid=avoid, recipe=recipe, prefer_vintage=True,
+                        )
+                        if moment is None:
+                            break
+                        options.append((moment[2] - 0.1 * rank, candidate, moment[0], moment[1]))
+                        avoid.append(moment[0])
             options.sort(key=lambda item: item[0], reverse=True)
             if not options:
                 continue
@@ -581,7 +596,8 @@ class AutoYouTubeManager:
             options.sort(key=lambda item: item[0], reverse=True)
             if not options:
                 continue
-            run.planned[str(scene["id"])] = [(candidate, start, topic) for _score, candidate, start, topic in options]
+            if not run.plan_for or str(scene["id"]) in run.plan_for:
+                run.planned[str(scene["id"])] = [(candidate, start, topic) for _score, candidate, start, topic in options]
             best_scores[str(scene["id"])] = options[0][0]
             _score, best, start, _topic = options[0]
             taken.setdefault(str(best["video_id"]), []).append(start)
@@ -643,7 +659,10 @@ class AutoYouTubeManager:
             run.searches[query] = results
         return results
 
-    def _source_scene(self, run: "_Run", scene: dict[str, Any], use_theme: bool = False, skip_plan: bool = False) -> None:
+    def _source_scene(
+        self, run: "_Run", scene: dict[str, Any], use_theme: bool = False, skip_plan: bool = False,
+        teasers_only: bool = False,
+    ) -> None:
         position = int(scene.get("position") or 0)
         self._update(run.project_id, current_scene=position)
         scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
@@ -676,7 +695,12 @@ class AutoYouTubeManager:
         ]
         try:
             pool: dict[str, dict[str, Any]] = {}
-            for attempt in ([] if planned else queries[:run.max_attempts]):
+            if teasers_only:
+                planned = [
+                    (candidate, start, topic) for candidate, start, topic in run.teasers.get(str(scene["id"]), [])
+                    if not any(abs(float(start or 0) - used) < 15 for used in run.used.get(str(candidate["video_id"]), []))
+                ]
+            for attempt in ([] if planned or teasers_only else queries[:run.max_attempts]):
                 for item in self._search(run, attempt):
                     pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
                 good = [item for item in pool.values() if usable(item)]
@@ -762,7 +786,11 @@ class AutoYouTubeManager:
                         if run.by_position.get(position) == video_id:
                             run.by_position.pop(position, None)
             else:
-                if planned:
+                if is_hook and not teasers_only and run.teasers.get(str(scene["id"])):
+                    # The sentence's clips all cut too fast or failed a check: a teaser shot instead.
+                    self._source_scene(run, scene, teasers_only=True)
+                    return
+                if planned and not teasers_only:
                     # The section's own sources failed the clip checks here: search for this sentence instead.
                     with run.lock:
                         run.errors.append({"scene": position, "error": "Planned clips rejected: " + " | ".join(rejected[:3]), "query": ""})
