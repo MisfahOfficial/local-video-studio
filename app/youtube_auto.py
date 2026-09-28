@@ -241,6 +241,8 @@ class _Run:
     notes: dict[int, str] = field(default_factory=dict)
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
+    # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
+    section_pools: list[tuple[str, str, list[dict[str, Any]]]] = field(default_factory=list)
     by_position: dict[int, str] = field(default_factory=dict)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -471,8 +473,45 @@ class AutoYouTubeManager:
                 run.recipe_by_id.get(scene_id) or run.subject_by_id.get(scene_id) or "")
             if key:
                 sections.setdefault(key, []).append(scene)
+        hook = sections.pop("hook", [])
         with ThreadPoolExecutor(max_workers=3) as pool:
             list(pool.map(lambda item: self._plan_section(run, item[0], item[1]), sections.items()))
+        order = {key: index for index, key in enumerate(sections)}
+        run.section_pools.sort(key=lambda item: order.get(item[1] or item[0], 0))
+        if hook:
+            self._plan_section(run, "hook", hook)
+            self._plan_teasers(run, hook)
+
+    def _plan_teasers(self, run: "_Run", members: list[dict[str, Any]]) -> None:
+        """The opening shows the dishes to come (finished, served), like a trailer; genuine period footage
+        planned for a sentence stays first, the teasers follow as the reliable next choice."""
+        pools = [item for item in run.section_pools if item[2]]
+        if not pools:
+            return
+        taken: dict[str, list[float]] = {vid: list(times) for vid, times in run.used.items()}
+        for plans in run.planned.values():
+            for candidate, start, _topic in plans[:1]:
+                taken.setdefault(str(candidate["video_id"]), []).append(float(start or 0))
+        for index, scene in enumerate(members):
+            subject, recipe, sources = pools[index % len(pools)]
+            dish = recipe or core_subject(subject)
+            duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+            options: list[tuple[float, dict[str, Any], float, float]] = []
+            for candidate in sources:
+                video_id = str(candidate["video_id"])
+                moment = run.verifier.best_moment(
+                    video_id, run.infos[video_id], subject, f"a finished {dish} served on a table", duration,
+                    avoid=taken.get(video_id), recipe=recipe, prefer_vintage=True,
+                )
+                if moment is not None:
+                    options.append((moment[2], candidate, moment[0], moment[1]))
+            options.sort(key=lambda item: item[0], reverse=True)
+            if not options:
+                continue
+            _score, best, start, _topic = options[0]
+            taken.setdefault(str(best["video_id"]), []).append(start)
+            vintage = run.planned.get(str(scene["id"]), [])[:2]
+            run.planned[str(scene["id"])] = vintage + [(candidate, start, topic) for _s, candidate, start, topic in options]
 
     def _plan_section(self, run: "_Run", key: str, members: list[dict[str, Any]]) -> None:
         is_hook = key == "hook"
@@ -505,6 +544,9 @@ class AutoYouTubeManager:
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
 
         sources = self._prepare_sources(run, sorted(usable, key=rank, reverse=True)[:POOL_SIZE + 2])[:POOL_SIZE]
+        if not is_hook:
+            with run.lock:
+                run.section_pools.append((subject, recipe, sources))
         if not sources:
             return
         taken: dict[str, list[float]] = {vid: list(times) for vid, times in run.used.items()}
