@@ -245,6 +245,7 @@ class _Run:
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
     section_pools: list[tuple[str, str, list[dict[str, Any]]]] = field(default_factory=list)
+    teasers: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     by_position: dict[int, str] = field(default_factory=dict)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -270,9 +271,8 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
     # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
     exact = not signature or any(mentions_topic(text, word) for word in signature)
     # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
-    theme_words = [word for word in (core.split() + run.theme.split()) if word not in _GENERIC_THEME]
-    if is_hook and theme_words:
-        named = any(mentions_topic(text, word) for word in theme_words)
+    if is_hook:
+        named = True  # the hook matches the sentence visually; titles need not name the theme
     else:
         # "Chicken and Rice Casserole" must be the video's own dish: every word of the name in its
         # title ("Buffalo Chicken Dynamite Rice" only lists it among others in the description).
@@ -483,7 +483,6 @@ class AutoYouTubeManager:
         order = {key: index for index, key in enumerate(sections)}
         run.section_pools.sort(key=lambda item: order.get(item[1] or item[0], 0))
         if hook:
-            self._plan_section(run, "hook", hook)
             self._plan_teasers(run, hook)
 
     def _plan_teasers(self, run: "_Run", members: list[dict[str, Any]]) -> None:
@@ -514,8 +513,7 @@ class AutoYouTubeManager:
                 continue
             _score, best, start, _topic = options[0]
             taken.setdefault(str(best["video_id"]), []).append(start)
-            vintage = run.planned.get(str(scene["id"]), [])[:2]
-            run.planned[str(scene["id"])] = vintage + [(candidate, start, topic) for _s, candidate, start, topic in options]
+            run.teasers[str(scene["id"])] = [(candidate, start, topic) for _s, candidate, start, topic in options]
 
     def _plan_section(self, run: "_Run", key: str, members: list[dict[str, Any]]) -> None:
         is_hook = key == "hook"
@@ -654,16 +652,8 @@ class AutoYouTubeManager:
         core = core_subject(subject)
         signature = signature_words(recipe, subject) if recipe else set()
         is_hook = str(scene["id"]) in run.hook_ids
-        hook_words: list[str] = []
-        if is_hook and not subject and use_theme:
-            subject = core = run.theme
-        if is_hook and not subject:
-            # Each hook sentence shows its own picture ("christmas table", "grandma kitchen");
-            # the video's theme ("dollar desserts") only helps the search.
-            hook_words = [word for word in scene_keywords(str(scene.get("narration") or ""), "", limit=4)
-                          if word not in _GENERIC_THEME and not word.isdigit()][:3]
-            subject = " ".join(hook_words) or run.theme
-            core = subject
+        # The hook is searched like testing 10 did it: the sentence's own words with the era
+        # ("1950s christmas table footage"), period footage preferred, no theme requirement.
         if run.verifier is not None and self._motion_graphic(run, scene, position, is_hook):
             with run.lock:
                 run.completed += 1
@@ -671,15 +661,6 @@ class AutoYouTubeManager:
             self._progress(run)
             return
         own = topic_queries(scene, subject, run.era, recipe) or scene_search_queries(scene)
-        if is_hook and subject:
-            # Period footage first: old films, home movies and commercials of the sentence and the theme.
-            era = run.era or "vintage"
-            plain_theme = " ".join(word for word in run.theme.split() if word not in _GENERIC_THEME) or run.theme
-            own = list(dict.fromkeys(query for query in [
-                f"{era} {subject} footage", f"vintage {subject} home movie",
-                f"{era} {run.theme} footage" if run.theme else "", f"vintage {plain_theme}" if run.theme else "",
-                f"{era} {subject}",
-            ] if query.strip()))
         queries = list(dict.fromkeys(
             [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in run.ai_queries.get(position, [])]
             + own
@@ -713,14 +694,15 @@ class AutoYouTubeManager:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             choices = planned or (self._choose(
                 run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
-                run.settings.blocked_channels, recipe, bool(run.era), is_hook,
+                run.settings.blocked_channels, recipe, bool(run.era) or is_hook, False,
             ) if ranked else [])
-            if not choices and is_hook and ranked and not planned:
-                # No period footage passed: real modern footage of the theme still beats a repeat or a gap.
-                choices = self._choose(
-                    run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
-                    run.settings.blocked_channels, recipe, True, False,
-                )
+            if not choices and is_hook and not planned and not skip_plan:
+                # Nothing fits the sentence: a teaser shot of the dishes to come.
+                planned = [
+                    (candidate, start, topic) for candidate, start, topic in run.teasers.get(str(scene["id"]), [])
+                    if not any(abs(float(start or 0) - used) < 15 for used in run.used.get(str(candidate["video_id"]), []))
+                ]
+                choices = planned
             need = self._need(run, scene, subject, recipe, is_hook)
             judged = self._judge_videos(run, need, choices, duration)
             if judged is not None:
@@ -821,10 +803,6 @@ class AutoYouTubeManager:
                 if metadata["needs_review"]:
                     run.review.append(position)
         except Exception as error:
-            if is_hook and not use_theme and run.theme and run.theme != subject:
-                # The sentence had too little to film ("simple ingredients feed"): try the video's theme.
-                self._source_scene(run, scene, use_theme=True, skip_plan=True)
-                return
             # Never leave a gap: a real archival photo, then (outside the hook) an aged still.
             with run.lock:
                 run.notes[position] = "no matching clip" if isinstance(error, _NoFootage) else str(error)[:300]
