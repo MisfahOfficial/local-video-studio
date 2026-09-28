@@ -226,6 +226,11 @@ class YouTubeSourceService:
             with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
                 return ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
         except Exception as error:
+            if "not a bot" in str(error):
+                raise ProviderError(
+                    "YouTube is temporarily blocking this computer (\"confirm you're not a bot\"). "
+                    "Wait a few hours before sourcing again."
+                ) from error
             raise ProviderError(f"Could not inspect the YouTube source: {error}") from error
 
     @staticmethod

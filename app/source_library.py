@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 CHUNK_BYTES = 1 << 20
-WORKERS = 16
+# Enough to beat the per-connection limit without looking like a flood to YouTube.
+WORKERS = 6
 ANALYSIS_HEIGHT = 360
 CACHE_DAYS = 14
 _locks: dict[str, threading.Lock] = {}
