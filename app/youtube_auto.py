@@ -238,6 +238,7 @@ class _Run:
     gallery_done: bool = False
     judge: Any = None
     photo_budget: int = 0
+    notes: dict[int, str] = field(default_factory=dict)
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     by_position: dict[int, str] = field(default_factory=dict)
@@ -451,6 +452,7 @@ class AutoYouTubeManager:
                     judge_cost=round(run.judge.cost, 3) if run.judge else 0.0,
                     judge_calls=run.judge.calls if run.judge else 0,
                     judge_notice=run.judge.disabled if run.judge else "",
+                    notes={str(key): value for key, value in sorted(run.notes.items())},
                 )
             with self._lock:
                 self._threads.pop(project_id, None)
@@ -574,7 +576,7 @@ class AutoYouTubeManager:
             run.searches[query] = results
         return results
 
-    def _source_scene(self, run: "_Run", scene: dict[str, Any], use_theme: bool = False) -> None:
+    def _source_scene(self, run: "_Run", scene: dict[str, Any], use_theme: bool = False, skip_plan: bool = False) -> None:
         position = int(scene.get("position") or 0)
         self._update(run.project_id, current_scene=position)
         scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
@@ -619,7 +621,7 @@ class AutoYouTubeManager:
             return usable_source(run, item, is_hook, core, signature)
 
         planned = [
-            (candidate, start, topic) for candidate, start, topic in run.planned.get(str(scene["id"]), [])
+            (candidate, start, topic) for candidate, start, topic in ([] if skip_plan else run.planned.get(str(scene["id"]), []))
             if not any(abs(float(start or 0) - used) < 15 for used in run.used.get(str(candidate["video_id"]), []))
         ]
         try:
@@ -640,10 +642,10 @@ class AutoYouTubeManager:
                 reverse=True,
             )
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
-            choices = planned or self._choose(
-                run.service, run.verifier, ranked[:4 if is_hook else 3], subject, scene_text, duration, used_now, run.infos,
+            choices = planned or (self._choose(
+                run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
                 run.settings.blocked_channels, recipe, bool(run.era), is_hook,
-            ) if ranked else []
+            ) if ranked else [])
             if not choices and is_hook and ranked and not planned:
                 # No period footage passed: real modern footage of the theme still beats a repeat or a gap.
                 choices = self._choose(
@@ -669,6 +671,7 @@ class AutoYouTubeManager:
                 self._progress(run)
                 return
             last_error: Exception | None = None
+            rejected: list[str] = []
             # Archival films cut often, so the hook tries more sources for one clean shot.
             for candidate, start_time, topic_score in choices[:5 if is_hook else 3]:
                 video_id = str(candidate["video_id"])
@@ -702,11 +705,19 @@ class AutoYouTubeManager:
                 except Exception as error:
                     destination.unlink(missing_ok=True)
                     last_error = error
+                    rejected.append(f"{candidate.get('title', video_id)}"[:40] + f": {str(error)[:70]}")
                     with run.lock:
                         if run.by_position.get(position) == video_id:
                             run.by_position.pop(position, None)
             else:
-                raise ProviderError(str(last_error or "No downloadable result was found"))
+                if planned:
+                    # The section's own sources failed the clip checks here: search for this sentence instead.
+                    with run.lock:
+                        run.errors.append({"scene": position, "error": "Planned clips rejected: " + " | ".join(rejected[:3]), "query": ""})
+                    self._source_scene(run, scene, use_theme=use_theme, skip_plan=True)
+                    return
+                raise ProviderError("Every candidate was rejected: " + " | ".join(rejected[:3])
+                                    if rejected else str(last_error or "No downloadable result was found"))
             metadata.update({
                 "auto_sourced": True,
                 "search_query": str(candidate.get("_query") or query),
@@ -742,9 +753,11 @@ class AutoYouTubeManager:
         except Exception as error:
             if is_hook and not use_theme and run.theme and run.theme != subject:
                 # The sentence had too little to film ("simple ingredients feed"): try the video's theme.
-                self._source_scene(run, scene, use_theme=True)
+                self._source_scene(run, scene, use_theme=True, skip_plan=True)
                 return
             # Never leave a gap: a real archival photo, then (outside the hook) an aged still.
+            with run.lock:
+                run.notes[position] = "no matching clip" if isinstance(error, _NoFootage) else str(error)[:300]
             try:
                 if self._real_photo(run, scene, position, scene_text, subject, queries):
                     with run.lock:
