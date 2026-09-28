@@ -698,6 +698,8 @@ class FootageVerifier:
         self._tiles: dict[str, list[tuple[float, Any]]] = {}
         # Storyboard times where macOS Vision sees a clear face (someone on camera).
         self._face_times: dict[str, set[float]] = {}
+        # Hard cuts of sources read in full (whole-video check); windows never span one.
+        self._cuts: dict[str, list[float]] = {}
         # One model on one GPU: scene threads take turns.
         self.lock = threading.RLock()
 
@@ -803,6 +805,17 @@ class FootageVerifier:
         self._grey[video_id] = None if stack is None else stack.astype("uint8")
         while len(self._grey) > 24:
             self._grey.pop(next(iter(self._grey)))
+
+    def set_whole_video(self, video_id: str, frames: list[tuple[float, Any]], cuts: list[float]) -> None:
+        """Replace storyboard frames with a whole-video read (one frame per second) and its cuts."""
+        with self.lock:
+            self._add_frames(video_id, frames)
+            self._cuts[video_id] = sorted(cuts)
+            self._face_times.pop(video_id, None)
+            self._synthetic.pop(video_id, None)
+
+    def has_whole_video(self, video_id: str) -> bool:
+        return video_id in self._cuts
 
     def mark_faces(self, video_id: str) -> None:
         """Find storyboard moments with a clear face once per source, so they are never picked."""
@@ -939,6 +952,8 @@ class FootageVerifier:
                 continue
             if not require_vintage and any(times[position] in self._face_times.get(video_id, ()) for position in window):
                 continue  # someone on camera (Vision saw a clear face in the storyboard)
+            if any(start + 0.15 < cut < start + clip_duration - 0.15 for cut in self._cuts.get(video_id, ())):
+                continue  # a hard cut inside the window would be a jump cut
             if require_vintage and sum(vintage[position] for position in window) / len(window) < VINTAGE_LIMIT:
                 continue  # the opening of a period story is always old footage
             score = sum(combined[position] for position in window) / len(window)

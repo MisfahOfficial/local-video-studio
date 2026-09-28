@@ -19,6 +19,7 @@ from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
 from .text_guard import available as text_guard_available, face_areas, has_burned_in_text, sample_frames
 from .ai_judge import ClaudeJudge, best_usable
+from .source_library import analysis_copy, clean_cache, read_source
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
 from .youtube_source import pick_video_stream
 from .ingredient_library import dish_images, item_image
@@ -239,6 +240,7 @@ class _Run:
     judge: Any = None
     photo_budget: int = 0
     notes: dict[int, str] = field(default_factory=dict)
+    photo_slots: set[str] = field(default_factory=set)
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
@@ -292,7 +294,8 @@ _CLASSIC_TITLE = re.compile(
     r"\b(old[- ]fashioned|vintage|classic|grandma'?s?|homemade|from scratch|original|19[3-7]0s|retro|church|potluck)\b",
     re.IGNORECASE,
 )
-POOL_SIZE = 5
+# Each item is cut from its two best source videos (two spares are read in case one fails).
+POOL_SIZE = 2
 
 
 class AutoYouTubeManager:
@@ -426,6 +429,7 @@ class AutoYouTubeManager:
                     and str(item["id"]) not in run.card_ids and str(item["id"]) != run.gallery_id]
         run.photo_budget = len(filmable) // 5
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
+        clean_cache(self.paths.root / "source_cache")
         if verifier is not None:
             try:
                 self._plan_sections(run, scenes)
@@ -543,7 +547,14 @@ class AutoYouTubeManager:
             return (2.0 * mentions_topic(title, recipe or core) + 1.0 * bool(_CLASSIC_TITLE.search(title))
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
 
-        sources = self._prepare_sources(run, sorted(usable, key=rank, reverse=True)[:POOL_SIZE + 2])[:POOL_SIZE]
+        ordered = sorted(usable, key=rank, reverse=True)
+        sources: list[dict[str, Any]] = []
+        # Read the two best first; spares only when one is unusable (AI look, vertical, unreadable).
+        for start in range(0, min(len(ordered), POOL_SIZE + 4), POOL_SIZE):
+            sources += self._prepare_sources(run, ordered[start:start + POOL_SIZE])
+            if len(sources) >= POOL_SIZE:
+                break
+        sources = sources[:POOL_SIZE]
         if not is_hook:
             with run.lock:
                 run.section_pools.append((subject, recipe, sources))
@@ -551,6 +562,7 @@ class AutoYouTubeManager:
             return
         taken: dict[str, list[float]] = {vid: list(times) for vid, times in run.used.items()}
         previous: tuple[str, float] | None = None
+        best_scores: dict[str, float] = {}
         for scene in members:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
@@ -572,12 +584,21 @@ class AutoYouTubeManager:
             if not options:
                 continue
             run.planned[str(scene["id"])] = [(candidate, start, topic) for _score, candidate, start, topic in options]
+            best_scores[str(scene["id"])] = options[0][0]
             _score, best, start, _topic = options[0]
             taken.setdefault(str(best["video_id"]), []).append(start)
             previous = (str(best["video_id"]), start)
+        if not is_hook:
+            # 80:20 - the weakest fifth of the item's moments (and any with no moment) are offered to a photo.
+            ranked_scenes = sorted((str(scene["id"]) for scene in members), key=lambda scene_id: best_scores.get(scene_id, -1.0))
+            with run.lock:
+                run.photo_slots.update(ranked_scenes[:len(members) // 5])
 
     def _prepare_sources(self, run: "_Run", candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Inspect candidates in parallel, keep landscape, real (non-AI) footage with storyboards."""
+        """Inspect candidates in parallel and read each one whole (a light copy: a frame every second and
+        every cut); keep landscape, real (non-AI) footage. Storyboards are the fallback."""
+        cache = self.paths.root / "source_cache"
+
         def prepare(candidate: dict[str, Any]) -> dict[str, Any] | None:
             video_id = str(candidate["video_id"])
             try:
@@ -585,11 +606,16 @@ class AutoYouTubeManager:
             except ProviderError:
                 return None
             run.infos[video_id] = info
-            if not run.verifier.has_frames(video_id):
-                tiles = storyboard_frames(info)
-                if not tiles:
-                    return None
-                run.verifier.add_frames(video_id, tiles)
+            if not run.verifier.has_whole_video(video_id):
+                copy = analysis_copy(info, cache)
+                frames, cuts = read_source(copy, run.service.ffmpeg_path, float(info.get("duration") or 0)) if copy else ([], [])
+                if frames:
+                    run.verifier.set_whole_video(video_id, frames, cuts)
+                elif not run.verifier.has_frames(video_id):
+                    tiles = storyboard_frames(info)
+                    if not tiles:
+                        return None
+                    run.verifier.add_frames(video_id, tiles)
             run.verifier.mark_faces(video_id)
             return candidate
 
@@ -704,6 +730,7 @@ class AutoYouTubeManager:
             with run.lock:
                 photo_room = len(run.photos) < run.photo_budget
             weak = (choices[0][2] is not None and choices[0][2] < REVIEW_BELOW) if judged is None else False
+            weak = weak or str(scene["id"]) in run.photo_slots
             if weak and photo_room and self._real_photo(
                 run, scene, position, scene_text, subject, queries,
             ):
