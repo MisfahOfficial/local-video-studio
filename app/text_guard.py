@@ -5,12 +5,17 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 # A sentence-like line, or this much readable writing in one frame, means an overlay.
 MIN_LINE_WORDS = 3
 MIN_LETTERS = 24
 MIN_CONFIDENCE = 0.8
+
+# Vision objects are freed only when an autorelease pool drains; worker threads have none, so
+# hundreds of frames leaked memory until the server was killed. One call at a time, each in its own pool.
+_vision_lock = threading.Lock()
 
 
 def available() -> bool:
@@ -23,18 +28,20 @@ def available() -> bool:
 
 def read_text(image_path: Path) -> list[tuple[str, float]]:
     """(line, confidence) for every line of text macOS Vision finds in the image."""
+    import objc
     import Vision
     from Foundation import NSURL
 
-    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
-    request = Vision.VNRecognizeTextRequest.alloc().init()
-    request.setRecognitionLevel_(0)  # accurate; still ~50 ms per frame
-    request.setUsesLanguageCorrection_(False)
-    handler.performRequests_error_([request], None)
-    lines = []
-    for result in request.results() or []:
-        candidate = result.topCandidates_(1)[0]
-        lines.append((str(candidate.string()), float(candidate.confidence())))
+    with _vision_lock, objc.autorelease_pool():
+        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
+        request = Vision.VNRecognizeTextRequest.alloc().init()
+        request.setRecognitionLevel_(0)  # accurate; still ~50 ms per frame
+        request.setUsesLanguageCorrection_(False)
+        handler.performRequests_error_([request], None)
+        lines = []
+        for result in request.results() or []:
+            candidate = result.topCandidates_(1)[0]
+            lines.append((str(candidate.string()), float(candidate.confidence())))
     return lines
 
 
@@ -47,16 +54,18 @@ def face_areas(image_path: Path) -> list[float]:
     """Frame share of every face macOS Vision finds (reliable where CLIP misses a cook at the stove)."""
     if not available():
         return []
+    import objc
     import Vision
     from Foundation import NSURL
 
-    handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
-    request = Vision.VNDetectFaceRectanglesRequest.alloc().init()
-    handler.performRequests_error_([request], None)
-    return [
-        float(face.boundingBox().size.width * face.boundingBox().size.height)
-        for face in request.results() or [] if float(face.confidence()) >= MIN_FACE_CONFIDENCE
-    ]
+    with _vision_lock, objc.autorelease_pool():
+        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
+        request = Vision.VNDetectFaceRectanglesRequest.alloc().init()
+        handler.performRequests_error_([request], None)
+        return [
+            float(face.boundingBox().size.width * face.boundingBox().size.height)
+            for face in request.results() or [] if float(face.confidence()) >= MIN_FACE_CONFIDENCE
+        ]
 
 
 def is_overlay(lines: list[tuple[str, float]]) -> bool:
