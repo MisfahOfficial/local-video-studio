@@ -170,7 +170,13 @@ def search_drive(files: list[dict[str, Any]], query: str, maximum: int = 6) -> l
     if not wanted:
         return []
     scored = []
+    seen: set[str] = set()
     for item in files:
+        # The same download is often copied into several project folders: one copy is enough.
+        key = item["name"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
         name_words = set(_WORD.findall(item["name"].lower()))
         hits = sum(word in name_words for word in wanted)
         if hits and hits >= min(2, len(wanted)):

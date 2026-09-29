@@ -24,6 +24,12 @@ class DriveFiles(unittest.TestCase):
         self.assertEqual(found[0]["video_id"], drive_id("/d/a.mp4"))  # stable across runs
 
 
+    def test_copies_of_one_download_count_once(self):
+        files = [{"path": "/a/Divinity Candy.mp4", "name": "Old Fashioned Divinity Candy", "folder": "V1"},
+                 {"path": "/b/Divinity Candy.mp4", "name": "Old Fashioned Divinity Candy", "folder": "V2"}]
+        self.assertEqual(len(search_drive(files, "divinity candy")), 1)
+
+
 class BlockedYouTube(unittest.TestCase):
     def test_one_bot_check_stops_every_later_youtube_request(self):
         service = MultiSourceService("", "ffmpeg", "fair_use")
