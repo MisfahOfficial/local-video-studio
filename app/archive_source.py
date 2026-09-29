@@ -236,6 +236,7 @@ class MultiSourceService(YouTubeSourceService):
         self.visual_index: Any = None
         self.embed_text: Any = None
         self._text_vectors: dict[str, Any] = {}
+        self._vector_lock = threading.Lock()
 
     @property
     def ffprobe_path(self) -> str:
@@ -245,8 +246,9 @@ class MultiSourceService(YouTubeSourceService):
     def _visual_drive(self, query: str) -> list[dict[str, Any]]:
         if self.visual_index is None or self.embed_text is None:
             return []
-        if query not in self._text_vectors:
-            self._text_vectors[query] = self.embed_text(f"a photo of {query}")
+        with self._vector_lock:
+            if query not in self._text_vectors:
+                self._text_vectors[query] = self.embed_text(f"a photo of {query}")
         return self.visual_index.search(self._text_vectors[query], maximum=6)
 
     def search(self, query: str, maximum: int = 8) -> list[dict[str, Any]]:

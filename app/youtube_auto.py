@@ -415,7 +415,10 @@ class AutoYouTubeManager:
         service.period = profile.period
         if verifier is not None:
             service.visual_index = DriveVisualIndex(self.paths.root)
-            service.embed_text = lambda text: verifier.scorer.embed_texts([text])[0]
+            def embed_text(text: str) -> Any:
+                with verifier.lock:  # the CLIP model is not safe to call from several threads at once
+                    return verifier.scorer.embed_texts([text])[0]
+            service.embed_text = embed_text
         run = _Run(
             project_id=project_id, settings=settings, service=service, verifier=verifier, ai_queries=ai_queries,
             topic=topic, era=detect_era(str(project.get("script") or "")) if profile.period else "", used=used,
