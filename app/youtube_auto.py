@@ -194,6 +194,10 @@ REVIEW_BELOW = 0.75
 _GOOD_MATCH = 4.0
 
 
+MAX_SOURCE_SECONDS = 45 * 60
+_READ_SLOTS = threading.BoundedSemaphore(2)
+
+
 class _NoFootage(Exception):
     """No real YouTube footage passed the checks for a scene."""
 
@@ -639,12 +643,18 @@ class AutoYouTubeManager:
             except ProviderError:
                 return None
             run.infos[video_id] = info
+            if float(info.get("duration") or 0) > MAX_SOURCE_SECONDS:
+                return None  # hour-long archive reels: too slow and too much memory to read whole
             if not run.verifier.has_whole_video(video_id):
-                copy = analysis_copy(info, cache)
-                frames, cuts = read_source(copy, run.service.ffmpeg_path, float(info.get("duration") or 0)) if copy else ([], [])
-                if frames:
-                    run.verifier.set_whole_video(video_id, frames, cuts)
-                elif not run.verifier.has_frames(video_id):
+                # A whole read holds hundreds of frames; two at a time keeps an 8 GB Mac alive.
+                with _READ_SLOTS:
+                    copy = analysis_copy(info, cache)
+                    frames, cuts = read_source(copy, run.service.ffmpeg_path, float(info.get("duration") or 0)) if copy else ([], [])
+                    read = bool(frames)
+                    if read:
+                        run.verifier.set_whole_video(video_id, frames, cuts)
+                    del frames
+                if not read and not run.verifier.has_frames(video_id):
                     tiles = storyboard_frames(info)
                     if not tiles:
                         return None
