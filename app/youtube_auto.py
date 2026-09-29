@@ -442,7 +442,7 @@ class AutoYouTubeManager:
         try:
             # Several scenes at once: most of the time is spent waiting on YouTube.
             with ThreadPoolExecutor(max_workers=SCENE_WORKERS) as pool:
-                list(pool.map(lambda scene: self._source_scene(run, scene), [
+                list(pool.map(lambda scene: self._source_scene_safely(run, scene), [
                     scene for scene in scenes if str(scene["id"]) not in headings  # headings become chapter cards
                 ]))
             if headings:
@@ -662,6 +662,17 @@ class AutoYouTubeManager:
             run.searches[query] = results
         return results
 
+    def _source_scene_safely(self, run: "_Run", scene: dict[str, Any]) -> None:
+        """One scene's unexpected error (a network timeout, a broken picture) marks only that scene for
+        review; it must never stop the other scenes, which silently left most of a video empty."""
+        try:
+            self._source_scene(run, scene)
+        except Exception as error:
+            with run.lock:
+                run.failed += 1
+                run.errors.append({"scene": int(scene.get("position") or 0), "error": str(error)[:500], "query": ""})
+            self._progress(run)
+
     def _source_scene(
         self, run: "_Run", scene: dict[str, Any], use_theme: bool = False, skip_plan: bool = False,
         teasers_only: bool = False,
@@ -676,7 +687,13 @@ class AutoYouTubeManager:
         is_hook = str(scene["id"]) in run.hook_ids
         # The hook is searched like testing 10 did it: the sentence's own words with the era
         # ("1950s christmas table footage"), period footage preferred, no theme requirement.
-        if run.verifier is not None and self._motion_graphic(run, scene, position, is_hook):
+        try:
+            graphic = run.verifier is not None and self._motion_graphic(run, scene, position, is_hook)
+        except Exception as error:  # a failed card falls back to footage like any other scene
+            with run.lock:
+                run.notes[position] = f"Motion graphic failed: {str(error)[:200]}"
+            graphic = False
+        if graphic:
             with run.lock:
                 run.completed += 1
                 run.graphics.append(position)
