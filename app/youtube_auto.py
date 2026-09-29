@@ -768,8 +768,10 @@ class AutoYouTubeManager:
                 used_now = {key: list(value) for key, value in run.used.items()}
             ranked = sorted(
                 (item for item in pool.values() if usable(item)),
-                key=lambda item: (item.get("source") == "drive", str(item.get("video_id")) not in used_now,
-                                  candidate_relevance(item, scene)),
+                # A period opening prefers genuine archive films; everything else our own Drive footage.
+                key=lambda item: ((2 if is_hook and run.profile.period and item.get("source") == "archive"
+                                   else 1 if item.get("source") == "drive" else 0),
+                                  str(item.get("video_id")) not in used_now, candidate_relevance(item, scene)),
                 reverse=True,
             )
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
