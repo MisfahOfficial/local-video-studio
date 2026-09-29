@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .archive_source import drive_id
+from .archive_source import _is_footage, drive_id
 
 FRAME_STEP = 2.0
 MIN_SIMILARITY = 0.26  # CLIP cosine: below this a frame rarely shows the words
@@ -49,7 +49,7 @@ class DriveVisualIndex:
                 continue
             seen.add(key)
             identifier = drive_id(item["path"])
-            if identifier in self.manifest:
+            if identifier in self.manifest or not _is_footage(Path(item["path"])):
                 continue
             try:
                 size = Path(item["path"]).stat().st_size
@@ -114,7 +114,7 @@ class DriveVisualIndex:
             return
         blocks, owners, times = [], [], []
         for identifier, entry in self.manifest.items():
-            if not entry.get("frames"):
+            if not entry.get("frames") or not _is_footage(Path(entry["path"])):
                 continue
             try:
                 vectors = np.load(self.folder / f"{identifier}.npy").astype(np.float32)

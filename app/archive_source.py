@@ -37,6 +37,9 @@ _NOT_FOOTAGE = re.compile(
     r"^v\d|--|\bv[1-4]\b)",
     re.IGNORECASE,
 )
+# AI-generated clips (Grok, Kling, Veo…) are never used as real footage.
+_AI_MADE = re.compile(r"(grok[-_ ]?video|kling|hailuo|runway|gen[-_ ]?3|veo[-_ ]?\d|sora|pika|luma|midjourney|higgsfield|"
+                      r"minimax|seedance|wan[-_ ]?2|ai[-_ ]?generated)", re.IGNORECASE)
 _SKIP_FOLDERS = {"media cache", "media cache files", "adobe premiere pro auto-save", "adobe premiere pro video previews",
                  "adobe premiere pro audio previews", ".tmp.drivedownload"}
 
@@ -130,7 +133,8 @@ def archive_info(identifier: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- Google Drive project folders
 def _is_footage(path: Path) -> bool:
-    return path.suffix.lower() in VIDEO_EXTENSIONS and not _NOT_FOOTAGE.search(path.stem)
+    return (path.suffix.lower() in VIDEO_EXTENSIONS and not _NOT_FOOTAGE.search(path.stem)
+            and not _AI_MADE.search(path.stem))
 
 
 def build_drive_index(roots: list[str], index_path: Path, max_seconds: float = 600) -> dict[str, Any]:

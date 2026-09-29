@@ -13,7 +13,8 @@ class DriveFiles(unittest.TestCase):
         self.assertTrue(_is_footage(Path("Easy No Bake Woolworth Icebox Cheesecake.mp4")))
         for name in ("taha x2 -V2--30 Genius Big Mama Soul Kitchen Tricks.mp3_x264.mp4", "Outro.mp4",
                      "like-and-subscribe-05-SBV-347596325-HD.mov", "Enhance Your Videos with 4K Film Burn Transition.mp4",
-                     "WhatsApp Video 2026-05-17 at 5.17.35 AM.mp4", "notes.txt"):
+                     "WhatsApp Video 2026-05-17 at 5.17.35 AM.mp4", "notes.txt",
+                     "grok-video-0d293979-1044-4911-b879-dbd93.mp4", "kling_20260411_pie.mp4"):
             self.assertFalse(_is_footage(Path(name)), name)
 
     def test_search_matches_file_names(self):
