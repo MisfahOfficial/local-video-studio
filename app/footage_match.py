@@ -384,17 +384,38 @@ def scene_keywords(text: str, topic: str, limit: int = 4) -> list[str]:
     return (visual + [word for word in found if word not in visual])[:limit]
 
 
+# A heading like "Poor Man's Cookies" only names a kind of dish; "Magic Cookie Bars" names the dish itself.
+_DISH_KINDS = {
+    "cookie", "cookies", "cake", "cakes", "pie", "pies", "salad", "salads", "dessert", "desserts", "casserole",
+    "casseroles", "bar", "bars", "soup", "soups", "bread", "breads", "candy", "candies", "pudding", "puddings",
+    "dinner", "dinners", "supper", "suppers", "snack", "snacks", "treat", "treats", "dish", "dishes", "side", "sides",
+    "stew", "loaf", "roll", "rolls", "fudge", "sandwich", "sandwiches", "drink", "punch",
+}
+_VAGUE_WORDS = {
+    "poor", "man's", "mans", "man", "depression", "grandma's", "grandmas", "grandma", "church", "cheap", "forgotten",
+    "old", "fashioned", "old-fashioned", "vintage", "classic", "homemade", "simple", "easy", "budget", "sunday", "holiday",
+    "farm", "farmhouse", "country", "potluck", "war", "wartime", "ration", "penny", "dollar", "the", "a", "of", "and", "mom's", "moms",
+}
+
+
+def vague_heading(heading: str) -> bool:
+    words = [word for word in re.findall(r"[a-z'$-]+", heading.lower()) if word not in _VAGUE_WORDS]
+    return not words or all(word in _DISH_KINDS for word in words)
+
+
 def topic_queries(scene: dict[str, Any], topic: str, era: str = "", recipe: str = "") -> list[str]:
     """Searches that always name the subject, narrowed by the scene's own nouns."""
     source = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
     keys = scene_keywords(source, topic)
     if recipe and topic.strip():
-        # The exact dish first ("oatmeal molasses cookies mixed oats"), then its name.
         recipe_keys = [key for key in keys if key not in _words(recipe)]
-        queries = [
-            f"{recipe} {' '.join(recipe_keys[:2])}".strip(), f"{topic} {' '.join(keys[:1])}".strip(),
-            f"{recipe} recipe", topic,
-        ]
+        by_recipe = [f"{recipe} {' '.join(recipe_keys[:2])}".strip(), f"{recipe} recipe"]
+        by_name = [f"{topic} {' '.join(keys[:1])}".strip(), topic]
+        # A named dish ("Magic Cookie Bars") is searched by its name, since the ingredient phrase
+        # ("condensed graham bars") finds other dishes; a vague heading ("Poor Man's Cookies")
+        # by what is actually in it ("oatmeal molasses cookies").
+        first, second = (by_recipe, by_name) if vague_heading(topic) else (by_name, by_recipe)
+        queries = [first[0], second[0], first[1], second[1]]
         return list(dict.fromkeys(query.strip() for query in queries if query.strip()))
     if not topic.strip():
         prefix = f"{era} " if era else ""

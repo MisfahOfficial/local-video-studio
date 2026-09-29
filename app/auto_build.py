@@ -58,6 +58,11 @@ class AutoBuildManager:
                 time.sleep(2)
             self._update(project_id, sourcing=self.app.youtube_auto.status(project_id),
                          stage="Filling missing scenes", step=3)
+            if self.app.youtube_auto.status(project_id).get("youtube_blocked"):
+                # Empty scenes wait for real footage instead of turning into AI images.
+                self._update(project_id, running=False, stage="Paused: YouTube is blocking this computer. Run it again later; "
+                             "finished scenes are kept.", filled=[], fill_failed=[])
+                return
             filled, failed = self._fill_missing(project_id)
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed)
         except Exception as error:  # the UI shows the reason; the project keeps whatever was made

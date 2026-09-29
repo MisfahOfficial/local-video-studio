@@ -20,6 +20,7 @@ from .chapter_cards import build_chapter_cards, heading_scenes
 from .text_guard import available as text_guard_available, face_areas, has_burned_in_text, sample_frames
 from .ai_judge import ClaudeJudge, best_usable
 from .content_profile import BUILTIN, DEFAULT_KIND, profile_for
+from .archive_source import MultiSourceService, load_drive_index
 from .channel_styles import get_style
 from .source_library import analysis_copy, clean_cache, read_source
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
@@ -30,7 +31,7 @@ from .photo_source import load_image, load_images, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     MODERN_TITLE, NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    PLURAL_FOODS, heading_subject, hook_theme, is_process_scene, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
+    PLURAL_FOODS, heading_subject, hook_theme, is_process_scene, vague_heading, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -372,7 +373,9 @@ class AutoYouTubeManager:
         self, project_id: str, scenes: list[dict[str, Any]], topic: str = "", exclude_videos: set[str] | None = None,
     ) -> None:
         settings = self.settings_store.load()
-        service = YouTubeSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode)
+        # Own Drive footage and public-domain archive films first; YouTube only for what they lack.
+        service = MultiSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode,
+                                     drive_files=load_drive_index(self.paths.root / "drive_index.json"))
         problems: list[str] = []
         ai_queries = gemini_footage_queries(
             scenes, settings.gemini_api_key, settings.gemini_model, problems=problems, topic=topic,
@@ -402,6 +405,7 @@ class AutoYouTubeManager:
         # The opening is about the whole video ("church potluck casseroles"), not the first dish.
         theme = topic or hook_theme(" ".join(str(item["narration"]) for item in all_scenes[:first_heading or 0]))
         profile = profile_for(project)
+        service.period = profile.period
         run = _Run(
             project_id=project_id, settings=settings, service=service, verifier=verifier, ai_queries=ai_queries,
             topic=topic, era=detect_era(str(project.get("script") or "")) if profile.period else "", used=used,
@@ -467,6 +471,7 @@ class AutoYouTubeManager:
                     judge_calls=run.judge.calls if run.judge else 0,
                     judge_notice=run.judge.disabled if run.judge else "",
                     notes={str(key): value for key, value in sorted(run.notes.items())},
+                    youtube_blocked=bool(getattr(run.service, "youtube_blocked", False)),
                 )
             with self._lock:
                 self._threads.pop(project_id, None)
@@ -516,7 +521,7 @@ class AutoYouTubeManager:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             options: list[tuple[float, dict[str, Any], float, float]] = []
             for rank, (subject, recipe, sources) in enumerate(ordered):
-                dish = recipe or core_subject(subject)
+                dish = (recipe if vague_heading(subject) else core_subject(subject)) or recipe or core_subject(subject)
                 for candidate in sources:
                     video_id = str(candidate["video_id"])
                     avoid = list(taken.get(video_id, []))
@@ -552,8 +557,13 @@ class AutoYouTubeManager:
             subject = run.subject_by_id.get(first, "")
             recipe = run.recipe_by_id.get(first, "")
             signature = signature_words(recipe, subject) if recipe else set()
-            dish = recipe or core_subject(subject)
+            # A named dish is searched by its name ("Magic Cookie Bars", not "condensed graham bars");
+            # a vague heading ("Poor Man's Cookies") by its ingredients. The other adds one more search.
+            dish = (recipe if vague_heading(subject) else core_subject(subject)) or recipe or core_subject(subject)
             queries = run.profile.queries(run.profile.section_queries, item=dish, era=era, theme=run.theme)
+            other = core_subject(subject) if dish == recipe else recipe
+            if other and other != dish:
+                queries += run.profile.queries(run.profile.section_queries[:1], item=other, era=era, theme=run.theme)
         core = subject if is_hook else core_subject(subject)
         found: dict[str, dict[str, Any]] = {}
         for query in dict.fromkeys(queries):
@@ -564,7 +574,8 @@ class AutoYouTubeManager:
         def rank(item: dict[str, Any]) -> float:
             title = str(item.get("title") or "")
             length = float(item.get("duration_seconds") or item.get("duration") or 0)
-            return (2.0 * mentions_topic(title, recipe or core) + 1.0 * run.profile.good_title(title)
+            return (2.0 * mentions_topic(title, dish) + 0.5 * bool(recipe and dish != recipe and mentions_topic(title, recipe))
+                    + 1.0 * run.profile.good_title(title)
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
 
         ordered = sorted(usable, key=rank, reverse=True)
@@ -879,6 +890,9 @@ class AutoYouTubeManager:
                 elif is_hook:
                     raise ProviderError("No real footage or photo passed for this hook scene; AI images are never used in the hook")
                 else:
+                    if getattr(run.service, "youtube_blocked", False):
+                        # A blocked YouTube is not "no footage exists": leave the scene for the next run.
+                        raise ProviderError("YouTube is blocking this computer for now; run sourcing again later")
                     self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings)
                     with run.lock:
                         run.completed += 1

@@ -77,7 +77,7 @@ def pick_video_stream(info: dict[str, Any]) -> dict[str, Any] | None:
     streams = [
         item for item in info.get("formats") or []
         if item.get("url") and item.get("vcodec") not in (None, "none")
-        and str(item.get("protocol") or "") in {"https", "http"}
+        and str(item.get("protocol") or "") in {"https", "http", "file"}
         and 0 < int(item.get("height") or 0) <= 1080
     ]
     if not streams:

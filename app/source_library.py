@@ -77,6 +77,8 @@ def fetch_parallel(url: str, size: int, destination: Path, headers: dict[str, st
 
 def analysis_copy(info: dict[str, Any], cache: Path) -> Path | None:
     """Cached light copy of a source for whole-video checks (shared by every project)."""
+    if info.get("local_path") and Path(str(info["local_path"])).is_file():
+        return Path(str(info["local_path"]))  # own footage (team Drive) is read in place
     video_id = str(info.get("id") or "")
     stream = analysis_format(info)
     if not video_id or stream is None:
