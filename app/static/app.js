@@ -109,6 +109,9 @@ async function boot() {
       api("/api/health"), api("/api/themes"), api("/api/settings"), api("/api/projects"), api("/api/fonts"),
     ]);
     const styleData = await api("/api/channel-styles");
+    const profileData = await api("/api/content-profiles");
+    state.maxReferences = profileData.max_references || 5;
+    $("#contentKindSelect").innerHTML = profileData.profiles.map(item => `<option value="${escapeHtml(item.kind)}">${escapeHtml(item.name)}</option>`).join("");
     const styleOptions = styleData.styles.map(item => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.name)}</option>`).join("");
     $("#channelStyleSelect").innerHTML = styleOptions;
     $("#effectChannelStyle").innerHTML = styleOptions;
@@ -206,6 +209,8 @@ async function openProject(projectId, keepTab = false) {
   configurePreviewAudio();
   renderTimeline();
   $("#channelStyleSelect").value = state.current.effects?.channel_style || "v3";
+  $("#contentKindSelect").value = state.current.content_profile?.kind || "vintage_recipe";
+  renderReferences(state.current.content_profile?.references || []);
   $("#effectChannelStyle").value = state.current.effects?.channel_style || "v3";
   if (!keepTab) activateTab(state.scenes.length ? "timeline" : "script");
   await refreshGenerationStatus();
@@ -267,9 +272,42 @@ async function uploadVoiceover(file) {
   } finally { setTimeout(() => { progress.hidden = true; progress.value = 0; }, 700); }
 }
 
+// Example videos: the first is required, up to five in all.
+function renderReferences(links) {
+  const list = $("#referenceList");
+  const rows = links.length ? links : [""];
+  list.innerHTML = rows.map((link, index) => `
+    <div class="reference-row">
+      <input type="url" class="reference-input" placeholder="${index ? "Another example (optional)" : "https://www.youtube.com/watch?v=… (required)"}" value="${escapeHtml(link)}">
+      ${index ? '<button class="button icon-button remove-reference" type="button" aria-label="Remove example">✕</button>' : ""}
+    </div>`).join("");
+  $("#addReferenceButton").hidden = rows.length >= (state.maxReferences || 5);
+}
+
+function referenceLinks() {
+  return [...document.querySelectorAll(".reference-input")].map(input => input.value.trim()).filter(Boolean);
+}
+
+function contentProfileFromForm() {
+  return { ...(state.current?.content_profile || {}), kind: $("#contentKindSelect").value, references: referenceLinks() };
+}
+
+async function saveContentProfile() {
+  if (!state.current) return;
+  const result = await api(`/api/projects/${state.current.id}/content-profile`, {
+    method: "POST", body: JSON.stringify(contentProfileFromForm()),
+  });
+  state.current.content_profile = result.content_profile;
+}
+
 // One click: plan + auto-source + chapter cards + realistic fill for anything missing.
 async function createVideo() {
   if (!state.current) return;
+  if (!referenceLinks().length) {
+    toast("Add at least one example video (a YouTube link) first", true);
+    document.querySelector(".reference-input")?.focus();
+    return;
+  }
   const button = $("#createPlanButton");
   button.disabled = true;
   button.textContent = "Creating video…";
@@ -282,6 +320,7 @@ async function createVideo() {
         theme_id: $("#themeSelect").value,
         planner: $("#plannerSelect").value,
         channel_style: $("#channelStyleSelect").value,
+        content_profile: contentProfileFromForm(),
         image_count: Number($("#imageCountInput").value || 0),
         duration_seconds: Number($("#durationInput").value || 0) * 60,
       }),
@@ -2014,6 +2053,14 @@ $("#workflowExportButton").addEventListener("click", openExportDialog);
 $("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
 $("#createPlanButton").addEventListener("click", createVideo);
+$("#contentKindSelect").addEventListener("change", () => saveContentProfile().catch(error => toast(error.message, true)));
+$("#addReferenceButton").addEventListener("click", () => renderReferences([...referenceLinks(), ""].slice(0, state.maxReferences || 5)));
+$("#referenceList").addEventListener("click", event => {
+  if (!event.target.closest(".remove-reference")) return;
+  event.target.closest(".reference-row").remove();
+  saveContentProfile().then(() => renderReferences(state.current.content_profile.references)).catch(error => toast(error.message, true));
+});
+$("#referenceList").addEventListener("change", () => saveContentProfile().catch(error => toast(error.message, true)));
 $("#redrawGraphicButton").addEventListener("click", () => redrawGraphic().catch(error => toast(error.message, true)));
 $("#graphicItems").addEventListener("input", event => {
   const index = event.target.dataset.graphicLabel;

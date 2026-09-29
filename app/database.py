@@ -204,6 +204,9 @@ class Database:
             if "effects" not in project_columns:
                 # Timeline effects (film look, photo graphics, subscribe button) live with the project.
                 db.execute("ALTER TABLE projects ADD COLUMN effects TEXT NOT NULL DEFAULT '{}'")
+            if "content_profile" not in project_columns:
+                # What the footage should be (vintage recipes, today's brands, history) and the example videos.
+                db.execute("ALTER TABLE projects ADD COLUMN content_profile TEXT NOT NULL DEFAULT '{}'")
             scene_columns = {row[1] for row in db.execute("PRAGMA table_info(scenes)")}
             if "caption_text" not in scene_columns:
                 db.execute("ALTER TABLE scenes ADD COLUMN caption_text TEXT NOT NULL DEFAULT ''")
@@ -243,7 +246,7 @@ class Database:
         if row is None:
             return None
         data = dict(row)
-        for key in ("timeline_actions", "metadata", "settings", "caption_style", "effects"):
+        for key in ("timeline_actions", "metadata", "settings", "caption_style", "effects", "content_profile"):
             if key in data and isinstance(data[key], str):
                 try:
                     data[key] = json.loads(data[key])
@@ -278,9 +281,10 @@ class Database:
             "name", "theme_id", "script", "voiceover_path", "duration_seconds", "target_scene_count",
             "requested_scene_count", "status", "estimated_cost", "actual_cost", "default_provider", "default_model_role",
             "default_candidate_count", "default_motion", "default_transition", "caption_style", "effects",
+            "content_profile",
         }
         values = {key: value for key, value in changes.items() if key in allowed}
-        for key in ("caption_style", "effects"):
+        for key in ("caption_style", "effects", "content_profile"):
             if key in values:
                 values[key] = json.dumps(values[key])
         if values:

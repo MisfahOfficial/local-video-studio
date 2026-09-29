@@ -19,6 +19,7 @@ from .config import SettingsStore
 from .database import Database
 from .generation import GenerationManager
 from .gemini_audio_planner import GeminiAudioScenePlanner
+from .content_profile import BUILTIN as PROFILES, MAX_REFERENCES, missing_reference_message, normalize_profile
 from .whisper_planner import WhisperScenePlanner
 from .gemini_analyzer import GeminiSceneEnhancer
 from .fonts import FontError, FontManager
@@ -249,6 +250,7 @@ class StudioApplication:
         project = dict(project)
         project["caption_style"] = normalize_caption_style(project.get("caption_style"))
         project["effects"] = normalize_effects(project.get("effects"))
+        project["content_profile"] = normalize_profile(project.get("content_profile"))
         project["caption_keywords"] = {
             str(scene["id"]): sorted(caption_keywords(str(scene.get("caption_text") or "")))
             for scene in self.db.list_scenes(project_id) if scene.get("caption_text")
@@ -638,6 +640,10 @@ def build_handler(application: StudioApplication):
                 queries = topic_queries(scene, subjects.get(str(scene["id"]), ""), detect_era(str(project.get("script") or "")))
                 self._json({"query": queries[0] if queries else str(scene.get("narration") or "")[:120]})
                 return
+            if path == "/api/content-profiles":
+                self._json({"profiles": [{"kind": kind, "name": item.name} for kind, item in PROFILES.items()],
+                            "max_references": MAX_REFERENCES})
+                return
             if path == "/api/channel-styles":
                 from .channel_styles import STYLES
 
@@ -754,6 +760,15 @@ def build_handler(application: StudioApplication):
                 application.db.update_project(project_id, caption_style=style)
                 self._json({"caption_style": style})
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/content-profile", path)
+            if match:
+                project_id = match.group(1)
+                if not application.db.get_project(project_id):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                profile = normalize_profile(self._read_json())
+                application.db.update_project(project_id, content_profile=profile)
+                self._json({"content_profile": profile})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/effects", path)
             if match:
                 project_id = match.group(1)
@@ -818,6 +833,12 @@ def build_handler(application: StudioApplication):
                     raise ApiError("Paste a script before creating the video")
                 if not project.get("voiceover_path"):
                     raise ApiError("Upload the finished voice-over first")
+                if isinstance(body.get("content_profile"), dict):
+                    project = application.db.update_project(
+                        project_id, content_profile=normalize_profile(body["content_profile"]))
+                missing = missing_reference_message(project)
+                if missing:
+                    raise ApiError(missing)
                 effects = {**(project.get("effects") or {}), "channel_style": body.get("channel_style")}
                 application.db.update_project(project_id, effects=normalize_effects(effects))
                 self._json(application.auto_build.start(project_id, body), HTTPStatus.ACCEPTED)

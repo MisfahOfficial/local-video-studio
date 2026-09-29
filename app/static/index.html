@@ -61,6 +61,7 @@
             <div><span class="eyebrow">Input</span><h2>Script and finished voice-over</h2></div>
           </div>
           <div class="form-grid">
+            <label>Video type (what footage to look for)<select id="contentKindSelect"></select></label>
             <label>Channel style (motion graphics look)<select id="channelStyleSelect"></select></label>
             <label>Channel theme<select id="themeSelect"></select></label>
             <label>Visual planning<select id="plannerSelect"><option value="whisper" selected>Whisper Sync (free, runs on this computer)</option><option value="precision">Gemini Precision Sync (VO + script)</option><option value="gemini">Gemini Text Smart (estimated timing)</option><option value="local">Local Free (estimated timing)</option></select></label>
@@ -69,6 +70,12 @@
             <label>Voice-over<input id="voiceoverInput" type="file" accept="audio/*,video/*"></label>
           </div>
           <div class="upload-line"><span id="voiceoverStatus">No voice-over uploaded</span><progress id="uploadProgress" max="100" value="0" hidden></progress></div>
+          <fieldset class="reference-videos" id="referenceVideos">
+            <legend>Example videos <span class="required-mark">required</span></legend>
+            <p class="hint">Paste the YouTube link of a video this one should look like. One is required; add more (optional) for a sharper match.</p>
+            <div id="referenceList"></div>
+            <button class="button" id="addReferenceButton" type="button">+ Add another example (optional)</button>
+          </fieldset>
           <label class="script-field">Complete script<textarea id="scriptInput" rows="18" placeholder="Paste the complete narration script here…"></textarea></label>
           <div class="action-row">
             <button class="button primary" id="createPlanButton" type="button">Create video</button>

@@ -19,6 +19,7 @@ from .providers.http import post_json
 from .chapter_cards import build_chapter_cards, heading_scenes
 from .text_guard import available as text_guard_available, face_areas, has_burned_in_text, sample_frames
 from .ai_judge import ClaudeJudge, best_usable
+from .content_profile import BUILTIN, DEFAULT_KIND, profile_for
 from .channel_styles import get_style
 from .source_library import analysis_copy, clean_cache, read_source
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
@@ -243,6 +244,7 @@ class _Run:
     notes: dict[int, str] = field(default_factory=dict)
     photo_slots: set[str] = field(default_factory=set)
     style: Any = None  # the project's channel style (motion graphics look)
+    profile: Any = field(default_factory=lambda: BUILTIN[DEFAULT_KIND])  # what the footage should be
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
@@ -289,6 +291,7 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
             and not off_cuisine(title, run.script)
             and str(item.get("video_id")) not in run.exclude_videos
             and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
+            and run.profile.title_allowed(title)
             and named and exact)
 
 
@@ -398,24 +401,25 @@ class AutoYouTubeManager:
         script = str(project.get("script") or "")
         # The opening is about the whole video ("church potluck casseroles"), not the first dish.
         theme = topic or hook_theme(" ".join(str(item["narration"]) for item in all_scenes[:first_heading or 0]))
+        profile = profile_for(project)
         run = _Run(
             project_id=project_id, settings=settings, service=service, verifier=verifier, ai_queries=ai_queries,
-            topic=topic, era=detect_era(str(project.get("script") or "")), used=used,
+            topic=topic, era=detect_era(str(project.get("script") or "")) if profile.period else "", used=used,
             subject_by_id=dict(zip((str(item["id"]) for item in all_scenes), subjects)),
             recipe_by_id=dict(zip((str(item["id"]) for item in all_scenes), section_recipes(all_scenes, subjects))),
             hook_ids=hook_ids, exclude_videos=set(exclude_videos or ()), theme=theme, script=script,
             model="fair-use-auto-source" if service.fair_use else "creative-commons-auto-source",
             empty_label="YouTube" if service.fair_use else "Creative Commons",
             # Each API search spends daily quota; fair-use search can fall back to quota-free yt-dlp.
-            max_attempts=4 if service.fair_use else 2,
+            max_attempts=4 if service.fair_use else 2, profile=profile,
         )
         # Graphics are planned in story order: one gallery per video.
         # Every scene that talks about ingredients is an ingredient card (motion graphics, never a clip).
-        for item in all_scenes:
+        for item in all_scenes if profile.recipe_cards else []:
             if ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"])):
                 run.card_ids.add(str(item["id"]))
-        run.gallery_id = next((str(item["id"]) for item in all_scenes
-                               if not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
+        run.gallery_id = next((str(item["id"]) for item in all_scenes if profile.recipe_cards
+                               and not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
         # A gallery already on the timeline (outside this run) counts as the video's one gallery.
         redo = {str(item["id"]) for item in scenes}
         selected = {str(item.get("selected_asset_id") or "") for item in all_scenes if str(item["id"]) not in redo}
@@ -519,8 +523,9 @@ class AutoYouTubeManager:
                     # Up to three different moments per source, so one failed check never empties the scene.
                     for _extra in range(3):
                         moment = run.verifier.best_moment(
-                            video_id, run.infos[video_id], subject, f"a finished {dish} served on a table", duration,
-                            avoid=avoid, recipe=recipe, prefer_vintage=True, avoid_radius=6.0,
+                            video_id, run.infos[video_id], subject,
+                            f"a finished {dish} served on a table" if run.profile.recipe_cards else dish, duration,
+                            avoid=avoid, recipe=recipe, prefer_vintage=run.profile.period, avoid_radius=6.0,
                         )
                         if moment is None:
                             break
@@ -536,20 +541,19 @@ class AutoYouTubeManager:
     def _plan_section(self, run: "_Run", key: str, members: list[dict[str, Any]]) -> None:
         is_hook = key == "hook"
         first = str(members[0]["id"])
-        era = run.era or "vintage"
+        era = run.era or ("vintage" if run.profile.period else "")
         if is_hook:
             if not run.theme:
                 return
             subject = " ".join(word for word in run.theme.split() if word not in _GENERIC_THEME) or run.theme
             recipe, signature = "", set()
-            queries = [f"{era} {run.theme} footage", f"vintage {subject} home movie", f"{era} {subject}",
-                       f"{subject} {era} film"]
+            queries = run.profile.queries(run.profile.hook_queries, item=subject, era=era, theme=run.theme)
         else:
             subject = run.subject_by_id.get(first, "")
             recipe = run.recipe_by_id.get(first, "")
             signature = signature_words(recipe, subject) if recipe else set()
             dish = recipe or core_subject(subject)
-            queries = [f"{dish} recipe", f"old fashioned {dish}", f"{era} {dish}", dish]
+            queries = run.profile.queries(run.profile.section_queries, item=dish, era=era, theme=run.theme)
         core = subject if is_hook else core_subject(subject)
         found: dict[str, dict[str, Any]] = {}
         for query in dict.fromkeys(queries):
@@ -560,7 +564,7 @@ class AutoYouTubeManager:
         def rank(item: dict[str, Any]) -> float:
             title = str(item.get("title") or "")
             length = float(item.get("duration_seconds") or item.get("duration") or 0)
-            return (2.0 * mentions_topic(title, recipe or core) + 1.0 * bool(_CLASSIC_TITLE.search(title))
+            return (2.0 * mentions_topic(title, recipe or core) + 1.0 * run.profile.good_title(title)
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
 
         ordered = sorted(usable, key=rank, reverse=True)
@@ -587,7 +591,8 @@ class AutoYouTubeManager:
                 video_id = str(candidate["video_id"])
                 moment = run.verifier.best_moment(
                     video_id, run.infos[video_id], subject, scene_text, duration, avoid=taken.get(video_id),
-                    recipe=recipe, prefer_vintage=bool(run.era) or is_hook, require_vintage=is_hook,
+                    recipe=recipe, prefer_vintage=bool(run.era) or (is_hook and run.profile.period),
+                    require_vintage=is_hook and run.profile.period,
                 )
                 if moment is None:
                     continue
@@ -738,7 +743,8 @@ class AutoYouTubeManager:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             choices = planned or (self._choose(
                 run.service, run.verifier, ranked[:4], subject, scene_text, duration, used_now, run.infos,
-                run.settings.blocked_channels, recipe, bool(run.era) or is_hook, is_hook,
+                run.settings.blocked_channels, recipe, bool(run.era) or (is_hook and run.profile.period),
+                is_hook and run.profile.period,
             ) if ranked else [])
             if not choices and is_hook and not planned and not skip_plan:
                 # Nothing fits the sentence: a teaser shot of the dishes to come.
@@ -953,6 +959,9 @@ class AutoYouTubeManager:
         """What the judge should see, in plain words."""
         sentence = str(scene.get("narration") or "").strip()
         era = run.era or "mid-century"
+        if is_hook and not run.profile.period:
+            return (f'The opening of a documentary about {run.theme or subject}. Narration: "{sentence}". '
+                    "Needs real footage or photos showing what the sentence is about.")
         if is_hook:
             return (f'The opening of a nostalgic documentary about {run.theme or subject}. Narration: "{sentence}". '
                     f"Needs genuinely old footage or photos from the {era} (modern footage does not fit), showing "
