@@ -228,14 +228,27 @@ class MultiSourceService(YouTubeSourceService):
         self.period = period
         self.youtube_blocked = False
         self._local: dict[str, str] = {}
+        # Set by the sourcing run: the Drive's visual index and a text-to-vector function (CLIP).
+        self.visual_index: Any = None
+        self.embed_text: Any = None
+        self._text_vectors: dict[str, Any] = {}
 
     @property
     def ffprobe_path(self) -> str:
         path = Path(self.ffmpeg_path)
         return str(path.with_name("ffprobe")) if path.name == "ffmpeg" and path.parent != Path(".") else "ffprobe"
 
+    def _visual_drive(self, query: str) -> list[dict[str, Any]]:
+        if self.visual_index is None or self.embed_text is None:
+            return []
+        if query not in self._text_vectors:
+            self._text_vectors[query] = self.embed_text(f"a photo of {query}")
+        return self.visual_index.search(self._text_vectors[query], maximum=6)
+
     def search(self, query: str, maximum: int = 8) -> list[dict[str, Any]]:
         drive = search_drive(self.drive_files, query, maximum=4)
+        named = {item["video_id"] for item in drive}
+        drive += [item for item in self._visual_drive(query) if item["video_id"] not in named]
         for item in drive:
             self._local[item["video_id"]] = item["local_path"]
         archive = search_archive(query, maximum=6, period=self.period)

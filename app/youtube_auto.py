@@ -21,6 +21,7 @@ from .text_guard import available as text_guard_available, face_areas, has_burne
 from .ai_judge import ClaudeJudge, best_usable
 from .content_profile import BUILTIN, DEFAULT_KIND, profile_for
 from .archive_source import MultiSourceService, load_drive_index
+from .drive_vision import DriveVisualIndex
 from .channel_styles import get_style
 from .source_library import analysis_copy, clean_cache, read_source
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
@@ -280,6 +281,8 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
     # A list section's clips must be that exact dish: its name or signature
     # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
     exact = not signature or any(mentions_topic(text, word) for word in signature)
+    # Drive clips found by what they show ("FlexClip_12") need no telling title.
+    seen = item.get("source") == "drive" and bool(item.get("visual_score"))
     # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
     if is_hook:
         named = True  # the hook matches the sentence visually; titles need not name the theme
@@ -297,7 +300,7 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
             and str(item.get("video_id")) not in run.exclude_videos
             and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
             and run.profile.title_allowed(title)
-            and named and exact)
+            and (seen or (named and exact)))
 
 
 # Titles that promise a whole, period-style recipe: better pool sources than quick hacks.
@@ -410,6 +413,9 @@ class AutoYouTubeManager:
         theme = topic or hook_theme(" ".join(str(item["narration"]) for item in all_scenes[:first_heading or 0]))
         profile = profile_for(project)
         service.period = profile.period
+        if verifier is not None:
+            service.visual_index = DriveVisualIndex(self.paths.root)
+            service.embed_text = lambda text: verifier.scorer.embed_texts([text])[0]
         run = _Run(
             project_id=project_id, settings=settings, service=service, verifier=verifier, ai_queries=ai_queries,
             topic=topic, era=detect_era(str(project.get("script") or "")) if profile.period else "", used=used,
@@ -557,6 +563,7 @@ class AutoYouTubeManager:
             subject = " ".join(word for word in run.theme.split() if word not in _GENERIC_THEME) or run.theme
             recipe, signature = "", set()
             queries = run.profile.queries(run.profile.hook_queries, item=subject, era=era, theme=run.theme)
+            dish = subject
         else:
             subject = run.subject_by_id.get(first, "")
             recipe = run.recipe_by_id.get(first, "")
@@ -578,7 +585,10 @@ class AutoYouTubeManager:
         def rank(item: dict[str, Any]) -> float:
             title = str(item.get("title") or "")
             length = float(item.get("duration_seconds") or item.get("duration") or 0)
-            return (2.0 * mentions_topic(title, dish) + 0.5 * bool(recipe and dish != recipe and mentions_topic(title, recipe))
+            # Own footage first (no YouTube request, no bot check); archive films for a period opening.
+            source = str(item.get("source") or "")
+            return (3.0 * (source == "drive") + 1.5 * (source == "archive" and is_hook)
+                    + 2.0 * mentions_topic(title, dish) + 0.5 * bool(recipe and dish != recipe and mentions_topic(title, recipe))
                     + 1.0 * run.profile.good_title(title)
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
 
@@ -758,7 +768,8 @@ class AutoYouTubeManager:
                 used_now = {key: list(value) for key, value in run.used.items()}
             ranked = sorted(
                 (item for item in pool.values() if usable(item)),
-                key=lambda item: (str(item.get("video_id")) not in used_now, candidate_relevance(item, scene)),
+                key=lambda item: (item.get("source") == "drive", str(item.get("video_id")) not in used_now,
+                                  candidate_relevance(item, scene)),
                 reverse=True,
             )
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
