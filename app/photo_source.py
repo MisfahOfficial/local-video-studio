@@ -30,11 +30,10 @@ _resting: dict[str, float] = {}
 
 
 def _openverse(query: str, count: int, sources: str = "") -> list[dict[str, Any]]:
-    params = {"q": query, "page_size": count, "mature": "false", "license_type": "commercial,modification"}
+    params = {"q": query, "page_size": count, "category": "photograph", "mature": "false",
+              "license_type": "commercial,modification"}
     if sources:
         params["source"] = sources
-    else:
-        params["category"] = "photograph"
     found = request_json(f"{OPENVERSE}?{urllib.parse.urlencode(params)}", timeout=30)
     assert isinstance(found, dict)
     return [item for item in found.get("results") or [] if item.get("url") and int(item.get("width") or 0) >= 500]
