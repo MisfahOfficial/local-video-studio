@@ -428,6 +428,13 @@ class FFmpegRenderer:
 
         items = redrawable_items(metadata, getattr(self, "library_dir", None))
         try:
+            if asset.get("provider") == "chapter" and not plain.is_file() and metadata.get("design") not in (None, "classic"):
+                from ..motion_designs import render_chapter
+
+                plain = destination.with_name(destination.stem + "-plain-card.mp4")
+                render_chapter(str(metadata["design"]), str(metadata.get("title") or ""), int(metadata.get("chapter") or 1),
+                               getattr(self._style, "key", ""), duration, str(metadata.get("backdrop") or ""), plain,
+                               self.ffmpeg_path, show_text=False)
             if asset.get("provider") == "chapter" and plain.is_file():
                 kind = "video" if plain.suffix.lower() == ".mp4" else "image"
                 self._render_clip(plain, destination, kind, duration, scene, width, height, fps, encoder,

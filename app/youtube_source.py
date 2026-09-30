@@ -293,7 +293,7 @@ class YouTubeSourceService:
             "--ffmpeg-location", self.ffmpeg_path, "-o", str(destination),
         ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=900)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=180)  # was 15 min when stuck
         except (OSError, subprocess.TimeoutExpired) as error:
             raise ProviderError(f"Could not download the YouTube excerpt: {error}") from error
         if result.returncode or not destination.is_file() or destination.stat().st_size == 0:
@@ -315,7 +315,8 @@ class YouTubeSourceService:
             "-movflags", "+faststart", str(destination),
         ]
         try:
-            result = subprocess.run(command, capture_output=True, timeout=180)
+            # A stuck stream gives up after 75 s and the next candidate is tried (this once idled for 40 minutes).
+            result = subprocess.run(command, capture_output=True, timeout=75)
         except (OSError, subprocess.TimeoutExpired):
             destination.unlink(missing_ok=True)
             return False

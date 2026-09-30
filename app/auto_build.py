@@ -80,17 +80,21 @@ class AutoBuildManager:
         era = detect_era(str(project.get("script") or ""))
         filled: list[int] = []
         failed: list[dict[str, Any]] = []
-        for scene, subject in zip(scenes, subjects):
-            if scene.get("selected_asset_id") or heading_subject(str(scene.get("narration") or "")):
-                continue
+        lock = threading.Lock()
+        todo = [(scene, subject) for scene, subject in zip(scenes, subjects)
+                if not scene.get("selected_asset_id") and not heading_subject(str(scene.get("narration") or ""))]
+
+        def fill(pair: tuple[dict[str, Any], str]) -> None:
+            scene, subject = pair
             position = int(scene.get("position") or 0)
             destination = (self.app.paths.project_dir(project_id) / "assets" / "stills"
                            / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg")
             try:
                 metadata = generate_vintage_still(settings, str(scene.get("narration") or ""), subject, era, destination)
             except Exception as error:
-                failed.append({"scene": position, "error": str(error)[:200]})
-                continue
+                with lock:
+                    failed.append({"scene": position, "error": str(error)[:200]})
+                return
             asset = db.add_asset(
                 project_id=project_id, scene_id=str(scene["id"]),
                 candidate_index=db.next_asset_candidate_index(str(scene["id"])),
@@ -98,5 +102,12 @@ class AutoBuildManager:
                 remote_url=None, provider_asset_id=None, cost=float(metadata.get("cost") or 0), metadata=metadata,
             )
             db.select_asset(str(scene["id"]), str(asset["id"]))
-            filled.append(position)
-        return filled, failed
+            with lock:
+                filled.append(position)
+
+        # Images are made three at a time (one by one took most of the last step).
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(fill, todo))
+        return sorted(filled), failed

@@ -174,17 +174,16 @@ def _web_chapter(db: Database, project_id: str, scene: dict[str, Any], design: s
         backdrop = str(folder / f"chapter-{number:03d}-bg.jpg")
         background.convert("RGB").save(backdrop, quality=90)
     video = folder / f"chapter-{number:03d}-{design}.mp4"
-    plain = folder / f"chapter-{number:03d}-{design}-plain.mp4"
     try:
         payload = render_chapter(design, title, number, style.key, seconds, backdrop, video, ffmpeg_path)
-        render_chapter(design, title, number, style.key, seconds, backdrop, plain, ffmpeg_path, show_text=False)
     except Exception:
         return False
+    # The word-free twin is only needed for a Premiere/CapCut export, so it is drawn then (halves the time here).
     asset = db.add_asset(
         project_id=project_id, scene_id=str(scene["id"]), candidate_index=db.next_asset_candidate_index(str(scene["id"])),
         media_kind="video", provider="chapter", model=f"chapter-{design}", local_path=str(video), remote_url=None,
         provider_asset_id=None, cost=0.0,
-        metadata={"chapter": number, "title": title, "plain_path": str(plain), "design": design, "payload": payload},
+        metadata={"chapter": number, "title": title, "design": design, "payload": payload, "backdrop": backdrop},
     )
     db.select_asset(str(scene["id"]), str(asset["id"]))
     db.update_scene(str(scene["id"]), {"caption_text": "", "timeline_actions": [

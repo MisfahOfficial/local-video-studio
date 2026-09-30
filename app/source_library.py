@@ -101,11 +101,13 @@ def read_source(path: Path, ffmpeg_path: str = "ffmpeg", duration: float = 0.0) 
     """One FFmpeg pass: (time, frame) once per second (every 2 s past 20 minutes) and every hard cut."""
     from PIL import Image
 
-    step = 2.0 if duration > 1200 else 1.0
+    # A frame every 2 s (3 s past 20 minutes) at 320 px: CLIP looks at 224 px anyway, and this
+    # halves the frames to embed and face-check compared with one per second at 384 px.
+    step = 3.0 if duration > 1200 else 2.0
     with tempfile.TemporaryDirectory() as folder:
         result = subprocess.run(
             [ffmpeg_path, "-hide_banner", "-hwaccel", "videotoolbox", "-i", str(path), "-an", "-filter_complex",
-             f"[0:v]scdet=threshold=10,split[a][b];[a]fps=1/{step},scale=384:-2[f];[b]nullsink",
+             f"[0:v]scdet=threshold=10,split[a][b];[a]fps=1/{step},scale=320:-2[f];[b]nullsink",
              "-map", "[f]", "-q:v", "4", f"{folder}/%05d.jpg"],
             capture_output=True, text=True, timeout=600,
         )

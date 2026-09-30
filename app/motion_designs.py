@@ -59,10 +59,41 @@ def _node() -> str | None:
     return None
 
 
+GENERATED = WEB_ROOT / "hf" / "generated"
+
+
+def all_designs(include_pending: bool = False) -> dict[str, Design]:
+    """Built-in designs plus every design the AI wrote and the tool approved (motion_web/hf/generated)."""
+    found = dict(DESIGNS)
+    for meta in sorted(GENERATED.glob("*/meta.json")) if GENERATED.is_dir() else []:
+        try:
+            data = json.loads(meta.read_text())
+            if data.get("pending") and not include_pending:
+                continue  # still being tested
+            found[meta.parent.name] = Design(meta.parent.name, str(data["kind"]), "hyperframes",
+                                             str(data.get("name") or meta.parent.name), str(data.get("mood") or ""))
+        except (OSError, ValueError, KeyError):
+            continue
+    return found
+
+
+def design(key: str) -> Design:
+    return all_designs()[key]
+
+
+def is_web(key: Any) -> bool:
+    found = all_designs().get(str(key or ""))
+    return bool(found and found.engine != "python")
+
+
+def template_folder(key: str) -> Path:
+    return WEB_ROOT / "hf" / key if (WEB_ROOT / "hf" / key).is_dir() else GENERATED / key
+
+
 def available(kind: str, remotion: bool = True) -> list[str]:
     ready = web_engines_ready()
-    return [key for key, design in DESIGNS.items() if design.kind == kind
-            and (design.engine == "python" or (ready and (design.engine != "remotion" or remotion)))]
+    return [key for key, item in all_designs().items() if item.kind == kind
+            and (item.engine == "python" or (ready and (item.engine != "remotion" or remotion)))]
 
 
 # ------------------------------------------------------------------ choosing (AI, never the same way twice)
@@ -108,14 +139,11 @@ def plan_designs(kind: str, count: int, script: str, channel: str, root: Path, s
 
 
 def _ai_rank(kind: str, options: list[str], script: str, recent: list[str], settings: Any) -> list[str]:
-    key = str(getattr(settings, "gemini_api_key", "") or "")
-    model = str(getattr(settings, "gemini_model", "") or "gemini-2.5-flash")
-    if not key:
+    if settings is None or not str(getattr(settings, "gemini_api_key", "") or ""):
         return []
-    from .providers.base import ProviderError
-    from .providers.http import post_json
+    from .llm import gemini_json
 
-    catalog = [{"key": option, "look": DESIGNS[option].name, "suits": DESIGNS[option].mood} for option in options]
+    catalog = [{"key": option, "look": design(option).name, "suits": design(option).mood} for option in options]
     prompt = (
         f"You pick motion-graphic designs for a faceless YouTube video. Kind: {kind}.\n"
         f"Designs: {json.dumps(catalog)}\nUsed in this channel's last videos (avoid leading with these): {recent[-6:]}\n"
@@ -123,15 +151,8 @@ def _ai_rank(kind: str, options: list[str], script: str, recent: list[str], sett
         "Return every design key once, best fit for this video first. Vary from the recent ones."
     )
     try:
-        response = post_json(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key.strip()}",
-            {"contents": [{"parts": [{"text": prompt}]}],
-             "generationConfig": {"response_mime_type": "application/json", "temperature": 0.9,
-                                  "response_schema": {"type": "ARRAY", "items": {"type": "STRING"}}}},
-            timeout=40,
-        )
-        picked = json.loads(response["candidates"][0]["content"]["parts"][0]["text"])
-    except (ProviderError, KeyError, IndexError, TypeError, ValueError):
+        picked = gemini_json(settings, prompt, {"type": "ARRAY", "items": {"type": "STRING"}}, temperature=0.9)
+    except Exception:  # no AI answer: the channel-history order still keeps things varied
         return []
     ordered = [item for item in dict.fromkeys(picked) if item in options]
     return ordered + [item for item in options if item not in ordered]
@@ -209,7 +230,8 @@ def text_layers(metadata: dict[str, Any], style: ChannelStyle) -> list[dict[str,
     """Editable-export text for a web design (same positions as the render)."""
     design = str(metadata.get("design") or "")
     payload = metadata.get("payload") or {}
-    if design in {"recipe_book", "carousel"}:
+    kind = all_designs().get(design, Design("", "", "python", "", "")).kind if is_web(design) else ""
+    if kind == "ingredients":
         layers = []
         for index, item in enumerate(payload.get("items") or []):
             layers.append({"role": "ingredient label", "text": item["label"], "x": item["text_x"], "y": item["text_y"],
@@ -220,7 +242,7 @@ def text_layers(metadata: dict[str, Any], style: ChannelStyle) -> list[dict[str,
                            "y": payload["heading_y"], "size": 64, "color": _rgb(payload.get("heading_color", "#aa3333")),
                            "font": _font_file(style.chapter_title_fonts), "appear": 0.4})
         return layers
-    if design in {"film_slate", "newspaper"}:
+    if kind == "chapter":
         return [{"role": "chapter text", "text": text["text"], "x": text["x"], "y": text["y"], "size": text["size"],
                  "color": _rgb(text["color"]), "font": _font_file(style.chapter_title_fonts if index else style.chapter_label_fonts),
                  "letter_spacing": float(text.get("spacing") or 0) / 10, "appear": 1.0}
@@ -239,7 +261,7 @@ _render_lock = threading.Lock()  # one Chrome render at a time keeps an 8 GB Mac
 
 def render_design(design: str, payload: dict[str, Any], destination: Path, ffmpeg_path: str = "ffmpeg") -> Path:
     """Render a HyperFrames or Remotion design to an MP4 (pictures are copied next to the template)."""
-    spec = DESIGNS[design]
+    spec = all_designs(include_pending=True)[design]
     node = _node()
     if node is None:
         raise RuntimeError("Node.js is not installed, so web motion designs cannot render")
@@ -251,7 +273,7 @@ def render_design(design: str, payload: dict[str, Any], destination: Path, ffmpe
         payload = json.loads(json.dumps(payload))
         pictures = [item for item in payload.get("items") or []]
         if spec.engine == "hyperframes":
-            shutil.copytree(WEB_ROOT / "hf" / design, folder, dirs_exist_ok=True)
+            shutil.copytree(template_folder(design), folder, dirs_exist_ok=True)
             shutil.copy2(WEB_ROOT / "hf" / "gsap.min.js", folder / "gsap.min.js")
             for index, item in enumerate(pictures):
                 name = f"img{index}{Path(item['image']).suffix or '.jpg'}"

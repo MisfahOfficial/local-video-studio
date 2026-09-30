@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -473,6 +474,8 @@ class AutoYouTubeManager:
         run.photo_budget = len(filmable) // 5
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
         clean_cache(self.paths.root / "source_cache")
+        timings: dict[str, float] = {}
+        started = time.time()
         if verifier is not None:
             try:
                 self._plan_sections(run, scenes, all_scenes)
@@ -480,13 +483,16 @@ class AutoYouTubeManager:
                 run.errors.append({"scene": 0, "error": f"Section planning skipped: {str(error)[:200]}", "query": ""})
         try:
             # Several scenes at once: most of the time is spent waiting on YouTube.
+            timings["plan_sources_s"] = round(time.time() - started)
             with ThreadPoolExecutor(max_workers=SCENE_WORKERS) as pool:
                 list(pool.map(lambda scene: self._source_scene_safely(run, scene), [
                     scene for scene in scenes if str(scene["id"]) not in headings  # headings become chapter cards
                 ]))
             if headings:
                 try:
+                    timings["scenes_s"] = round(time.time() - started - timings.get("plan_sources_s", 0))
                     made = build_chapter_cards(self.db, self.paths, project_id, service.ffmpeg_path)
+                    timings["chapters_s"] = round(time.time() - started - sum(timings.values()))
                     with run.lock:
                         run.completed += made
                 except Exception as error:  # cards are a finishing touch; never lose the footage
@@ -509,7 +515,18 @@ class AutoYouTubeManager:
                     judge_notice=run.judge.disabled if run.judge else "",
                     notes={str(key): value for key, value in sorted(run.notes.items())},
                     youtube_blocked=bool(getattr(run.service, "youtube_blocked", False)),
+                    timings={**timings, "total_s": round(time.time() - started)},
                 )
+            try:  # a small record per run, so slow steps can be found later
+                logs = self.paths.root / "logs"
+                logs.mkdir(exist_ok=True)
+                (logs / f"sourcing-{project_id}.json").write_text(json.dumps({
+                    "finished": time.time(), "scenes": len(scenes), "completed": run.completed, "failed": run.failed,
+                    "timings": {**timings, "total_s": round(time.time() - started)},
+                    "youtube_blocked": bool(getattr(run.service, "youtube_blocked", False)),
+                }))
+            except (OSError, NameError):
+                pass
             with self._lock:
                 self._threads.pop(project_id, None)
 
@@ -605,7 +622,7 @@ class AutoYouTubeManager:
         core = subject if is_hook else core_subject(subject)
         found: dict[str, dict[str, Any]] = {}
         for query in dict.fromkeys(queries):
-            for item in self._search(run, query):
+            for item in self._search(run, query, archive=is_hook):
                 found.setdefault(str(item.get("video_id")), {**item, "_query": query})
         usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
 
@@ -682,6 +699,9 @@ class AutoYouTubeManager:
             run.infos[video_id] = info
             if float(info.get("duration") or 0) > MAX_SOURCE_SECONDS:
                 return None  # hour-long archive reels: too slow and too much memory to read whole
+            analyses = self.paths.root / "analysis_cache"
+            if not run.verifier.has_whole_video(video_id) and run.verifier.load_analysis(video_id, analyses):
+                return candidate  # read in an earlier run: instant
             if not run.verifier.has_whole_video(video_id):
                 # A whole read holds hundreds of frames; two at a time keeps an 8 GB Mac alive.
                 with _READ_SLOTS:
@@ -697,6 +717,10 @@ class AutoYouTubeManager:
                         return None
                     run.verifier.add_frames(video_id, tiles)
             run.verifier.mark_faces(video_id)
+            try:
+                run.verifier.save_analysis(video_id, analyses)
+            except Exception:  # the cache only saves time; never fail a source over it
+                pass
             return candidate
 
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -715,14 +739,18 @@ class AutoYouTubeManager:
             kept.append(candidate)
         return kept
 
-    def _search(self, run: "_Run", query: str) -> list[dict[str, Any]]:
+    def _search(self, run: "_Run", query: str, archive: bool = False) -> list[dict[str, Any]]:
         """Searches are cached per run: scenes in one list section repeat the same queries."""
+        cache_key = f"{query}|{archive}"
         with run.lock:
-            if query in run.searches:
-                return run.searches[query]
-        results = run.service.search(query, maximum=10)
+            if cache_key in run.searches:
+                return run.searches[cache_key]
+        try:
+            results = run.service.search(query, maximum=10, archive=archive)
+        except TypeError:  # plain YouTube service
+            results = run.service.search(query, maximum=10)
         with run.lock:
-            run.searches[query] = results
+            run.searches[cache_key] = results
         return results
 
     def _source_scene_safely(self, run: "_Run", scene: dict[str, Any]) -> None:
@@ -784,7 +812,7 @@ class AutoYouTubeManager:
                     if not any(abs(float(start or 0) - used) < 6 for used in run.used.get(str(candidate["video_id"]), []))
                 ]
             for attempt in ([] if planned or teasers_only else queries[:run.max_attempts]):
-                for item in self._search(run, attempt):
+                for item in self._search(run, attempt, archive=is_hook):
                     pool.setdefault(str(item.get("video_id")), {**item, "_query": attempt})
                 good = [item for item in pool.values() if usable(item)]
                 if len(good) >= 4 and any(candidate_relevance(item, scene) >= _GOOD_MATCH for item in good):

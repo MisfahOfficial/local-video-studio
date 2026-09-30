@@ -251,13 +251,14 @@ class MultiSourceService(YouTubeSourceService):
                 self._text_vectors[query] = self.embed_text(f"a photo of {query}")
         return self.visual_index.search(self._text_vectors[query], maximum=6)
 
-    def search(self, query: str, maximum: int = 8) -> list[dict[str, Any]]:
+    def search(self, query: str, maximum: int = 8, archive: bool = True) -> list[dict[str, Any]]:
         drive = search_drive(self.drive_files, query, maximum=4)
         named = {item["video_id"] for item in drive}
         drive += [item for item in self._visual_drive(query) if item["video_id"] not in named]
         for item in drive:
             self._local[item["video_id"]] = item["local_path"]
-        archive = search_archive(query, maximum=6, period=self.period)
+        # Archive films suit period openings; dish steps never come from them, so those searches skip it.
+        archive = search_archive(query, maximum=6, period=self.period) if archive and self.period else []
         youtube: list[dict[str, Any]] = []
         if not self.youtube_blocked:
             try:

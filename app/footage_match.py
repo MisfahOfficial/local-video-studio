@@ -823,8 +823,10 @@ class FootageVerifier:
         self._tiles[video_id] = [(time, image) for time, image in tiles]
         while len(self._tiles) > 60:
             self._tiles.pop(next(iter(self._tiles)))
-        # Greyscale frames from across the whole video let logo detection see what never moves.
-        stack = storyboard_stack(tiles)
+        # Greyscale frames from across the whole video let logo detection see what never moves;
+        # 40 spread-out frames are enough (all of them held ~30 MB per video).
+        step = max(1, len(tiles) // 40)
+        stack = storyboard_stack(tiles[::step])
         self._grey[video_id] = None if stack is None else stack.astype("uint8")
         while len(self._grey) > 24:
             self._grey.pop(next(iter(self._grey)))
@@ -850,6 +852,9 @@ class FootageVerifier:
         from .text_guard import MIN_FACE_AREA, available, face_areas
 
         tiles = self._tiles.get(video_id) or []
+        # People stay on screen for seconds: checking at most ~120 frames per source finds them
+        # while one 10-minute video no longer costs 600 Vision calls.
+        tiles = tiles[::max(1, -(-len(tiles) // 120))]
         found: set[float] = set()
         if available() and tiles:
             with tempfile.TemporaryDirectory() as folder:
@@ -859,6 +864,48 @@ class FootageVerifier:
                     if any(area >= MIN_FACE_AREA for area in face_areas(path)):
                         found.add(time)
         self._face_times[video_id] = found
+
+    # ---- analysis cache: a source read once is never read again (any project, any run)
+    def save_analysis(self, video_id: str, folder: Any) -> None:
+        import numpy as np
+        from pathlib import Path
+
+        with self.lock:
+            if video_id not in self._cuts or video_id not in self._frames:
+                return
+            times, features = self._frames[video_id]
+            grey = self._grey.get(video_id)
+            folder = Path(folder)
+            folder.mkdir(parents=True, exist_ok=True)
+            safe = "".join(character if character.isalnum() or character in "-_" else "_" for character in video_id)
+            np.savez_compressed(
+                folder / f"{safe}.npz", times=np.asarray(times, dtype=np.float32),
+                features=np.asarray(features, dtype=np.float16), cuts=np.asarray(self._cuts[video_id], dtype=np.float32),
+                faces=np.asarray(sorted(self._face_times.get(video_id, set())), dtype=np.float32),
+                grey=grey if grey is not None else np.zeros((0,), dtype=np.uint8),
+            )
+
+    def load_analysis(self, video_id: str, folder: Any) -> bool:
+        import numpy as np
+        import torch
+        from pathlib import Path
+
+        safe = "".join(character if character.isalnum() or character in "-_" else "_" for character in video_id)
+        path = Path(folder) / f"{safe}.npz"
+        if not path.is_file():
+            return False
+        try:
+            data = np.load(path)
+            with self.lock:
+                self._frames[video_id] = ([float(value) for value in data["times"]],
+                                          torch.from_numpy(data["features"].astype(np.float32)))
+                self._cuts[video_id] = [float(value) for value in data["cuts"]]
+                self._face_times[video_id] = {float(value) for value in data["faces"]}
+                self._grey[video_id] = data["grey"] if data["grey"].size else None
+                self._synthetic.pop(video_id, None)
+            return True
+        except (OSError, ValueError, KeyError):
+            return False
 
     def moment_frames(self, video_id: str, start: float, duration: float, count: int = 3) -> list[Any]:
         """Storyboard tiles nearest the start, middle and end of a chosen moment."""
