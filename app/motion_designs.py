@@ -154,10 +154,20 @@ def remember_designs(root: Path, channel: str, used: list[str]) -> None:
 
 
 def plan_designs(kind: str, count: int, script: str, channel: str, root: Path, settings: Any = None,
-                 remotion: bool = True) -> list[str]:
-    """One design per graphic of this kind, in story order: AI picks what suits the script;
-    the channel's recent videos and the previous graphic are never repeated."""
+                 remotion: bool = True, allowed: list[str] | None = None) -> list[str]:
+    """One design per graphic of this kind, in story order, only from the channel kit's approved
+    designs (its 2-3 looks rotate); the previous graphic's look is never repeated."""
+    if allowed is None:
+        try:
+            from .channel_kits import allowed_designs
+
+            allowed = allowed_designs(root, channel, kind)
+        except Exception:
+            allowed = []
     options = available(kind, remotion)
+    if allowed:
+        # The kit decides; a kit design that cannot render here (no Node) falls back to the classic look.
+        options = [key for key in allowed if key in options] or [key for key in options if design(key).engine == "python"]
     if count <= 0 or not options:
         return []
     recent = recent_designs(root, channel)

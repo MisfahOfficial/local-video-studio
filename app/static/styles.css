@@ -487,3 +487,21 @@ body.is-moving-clip, body.is-moving-clip * { cursor: grabbing !important; user-s
 .required-mark { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #b7f36b; margin-left: 6px; }
 .reference-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .reference-row .reference-input { flex: 1; min-width: 0; }
+
+/* Playback speed and J/K/L shuttle */
+.speed-select { width: auto; margin: 0; padding: 4px 6px; border-radius: 7px; font-size: 11px; background: #0e1115; }
+.shuttle-badge { padding: 3px 7px; border-radius: 6px; font-size: 11px; font-weight: 800; color: #071316; background: var(--accent); }
+
+/* The editor fits the screen like Premiere/CapCut: no whole-page scrolling, panels scroll inside. */
+body.editor-mode { height: 100vh; overflow: hidden; }
+body.editor-mode .app-shell { height: calc(100vh - 70px); min-height: 0; }
+body.editor-mode .main { height: calc(100vh - 70px); overflow: hidden; padding-bottom: 6px; display: flex; flex-direction: column; }
+body.editor-mode .studio-editor.active { flex: none; min-height: 0; height: calc(100vh - 122px); overflow: hidden; }
+body.editor-mode .editor-workspace { flex: 1 1 auto; min-height: 0; height: auto; }
+body.editor-mode .pro-timeline { flex: 0 0 auto; max-height: 38vh; overflow-y: auto; }
+body.editor-mode .editor-workspace { flex: 1 1 0; overflow: hidden; }
+body.editor-mode .player-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+body.editor-mode .preview-wrap { flex: 1 1 0; min-height: 0; display: flex; align-items: center; justify-content: center; }
+/* The picture keeps 16:9 inside whatever height is left, instead of pushing the timeline off screen. */
+body.editor-mode .preview-stage { height: 100%; width: auto; max-width: 100%; aspect-ratio: 16/9; }
+body.editor-mode .pro-timeline { flex: 0 0 auto; max-height: 40vh; min-height: 210px; }

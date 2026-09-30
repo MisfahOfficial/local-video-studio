@@ -103,4 +103,18 @@ DEFAULT_STYLE = "v3"
 
 
 def get_style(key: Any) -> ChannelStyle:
-    return STYLES.get(str(key or "").lower(), STYLES[DEFAULT_STYLE])
+    """A built-in channel style, or the style of a channel created from its example videos."""
+    name = str(key or "").lower()
+    if name in STYLES:
+        return STYLES[name]
+    if name:
+        try:
+            from .channel_kits import custom_styles
+            from .paths import AppPaths
+
+            custom = custom_styles(AppPaths.resolve().root)
+            if name in custom:
+                return custom[name]
+        except Exception:  # a broken kits file must never stop a render
+            pass
+    return STYLES[DEFAULT_STYLE]

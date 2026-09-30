@@ -1680,6 +1680,53 @@ function startManualPreview() {
   state.manualPreviewFrame = requestAnimationFrame(tick);
 }
 
+// J / K / L like Premiere and CapCut: L plays forward (again = 2x, 4x), J plays backward
+// (again = 2x, 4x), K stops. The speed menu sets normal playback speed.
+function showShuttle(rate) {
+  const badge = $("#shuttleBadge");
+  badge.hidden = !rate || rate === 1;
+  badge.textContent = rate < 0 ? `◀◀ ${Math.abs(rate)}×` : `▶▶ ${rate}×`;
+}
+
+function stopShuttle() {
+  cancelAnimationFrame(state.reverseFrame);
+  state.reverseFrame = null;
+  state.shuttle = 0;
+  const audio = $("#previewAudio");
+  audio.playbackRate = Number($("#previewSpeed").value || 1);
+  showShuttle(0);
+}
+
+async function shuttle(direction) {
+  const audio = $("#previewAudio");
+  const current = state.shuttle || 0;
+  const next = direction > 0 ? (current > 0 ? Math.min(8, current * 2) : 1) : (current < 0 ? Math.max(-8, current * 2) : -1);
+  cancelAnimationFrame(state.reverseFrame);
+  state.reverseFrame = null;
+  state.shuttle = next;
+  showShuttle(next);
+  if (next > 0) {
+    audio.playbackRate = Math.min(4, next);  // browsers play audio up to 4x; beyond that the picture jumps
+    if (audio.getAttribute("src")) {
+      if (audio.paused) await togglePreview();
+    } else if (!state.manualPreviewFrame) startManualPreview();
+    return;
+  }
+  // Backward: audio cannot play in reverse, so the picture steps back silently.
+  if (!audio.paused) { audio.pause(); state.isPreviewPlaying = false; $("#previewPlayButton").textContent = "▶"; }
+  pausePreview();
+  let last = performance.now();
+  const step = now => {
+    const time = Math.max(0, state.previewTime - (now - last) / 1000 * Math.abs(state.shuttle));
+    last = now;
+    updatePreviewAt(time, false);
+    if (audio.getAttribute("src")) audio.currentTime = time;
+    if (time <= 0 || state.shuttle >= 0) { stopShuttle(); return; }
+    state.reverseFrame = requestAnimationFrame(step);
+  };
+  state.reverseFrame = requestAnimationFrame(step);
+}
+
 async function togglePreview() {
   const audio = $("#previewAudio");
   if (audio.getAttribute("src")) {
@@ -2285,7 +2332,8 @@ $("#timelineCaption").addEventListener("input", event => {
 });
 $("#timelineCaption").addEventListener("input", () => { $("#autosaveStatus").textContent = "Unsaved caption changes"; });
 $("#timelineMotion").addEventListener("change", () => updatePreviewAt(state.previewTime, false));
-$("#previewPlayButton").addEventListener("click", () => togglePreview().catch(error => toast(error.message, true)));
+$("#previewPlayButton").addEventListener("click", () => { stopShuttle(); togglePreview().catch(error => toast(error.message, true)); });
+$("#previewSpeed").addEventListener("change", () => { $("#previewAudio").playbackRate = Number($("#previewSpeed").value || 1); });
 $("#previewBackButton").addEventListener("click", () => {
   const index = Math.max(0, state.timelineClips.findIndex(clip => clip.id === state.activeTimelineClipId) - 1);
   if (state.timelineClips[index]) selectTimelineClip(state.timelineClips[index].id);
@@ -2406,7 +2454,17 @@ $("#openOutputButton").addEventListener("click", async () => {
 });
 document.addEventListener("keydown", event => {
   if (event.defaultPrevented || !document.body.classList.contains("editor-mode") || event.target.closest("input,textarea,select,button,[contenteditable='true']")) return;
-  if (event.code === "Space") { event.preventDefault(); togglePreview().catch(error => toast(error.message, true)); }
+  if (event.code === "Space") { event.preventDefault(); stopShuttle(); togglePreview().catch(error => toast(error.message, true)); }
+  if (!event.metaKey && !event.ctrlKey && ["j", "k", "l"].includes(event.key.toLowerCase())) {
+    event.preventDefault();
+    const key = event.key.toLowerCase();
+    if (key === "k") {
+      stopShuttle();
+      const audio = $("#previewAudio");
+      if (!audio.paused) togglePreview().catch(error => toast(error.message, true));
+      else pausePreview();
+    } else shuttle(key === "l" ? 1 : -1).catch(error => toast(error.message, true));
+  }
   if (!event.metaKey && !event.ctrlKey && event.key.toLowerCase() === "v") {
     event.preventDefault(); $("#timelineSelectTool").click();
   }
