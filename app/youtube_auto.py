@@ -22,6 +22,7 @@ from .ai_judge import ClaudeJudge, best_usable
 from .content_profile import BUILTIN, DEFAULT_KIND, profile_for
 from .archive_source import MultiSourceService, load_drive_index
 from .drive_vision import DriveVisualIndex
+from .motion_designs import plan_designs, remember_designs, render_ingredients
 from .channel_styles import get_style
 from .source_library import analysis_copy, clean_cache, read_source
 from .logo_guard import analyse_clip, content_box, cut_free_start, fit_crop, shot_cuts, trim
@@ -251,6 +252,7 @@ class _Run:
     photo_slots: set[str] = field(default_factory=set)
     style: Any = None  # the project's channel style (motion graphics look)
     profile: Any = field(default_factory=lambda: BUILTIN[DEFAULT_KIND])  # what the footage should be
+    designs: dict[str, str] = field(default_factory=dict)  # ingredient scene -> motion design (AI-chosen)
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
@@ -448,6 +450,11 @@ class AutoYouTubeManager:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
         run.style = get_style((project.get("effects") or {}).get("channel_style"))
+        # Each ingredient graphic gets a design the AI picked for this video, never the same look twice in a row
+        # and led by one this channel has not used lately.
+        card_order = [str(item["id"]) for item in all_scenes if str(item["id"]) in run.card_ids]
+        planned_designs = plan_designs("ingredients", len(card_order), script, run.style.key, self.paths.root, settings)
+        run.designs = dict(zip(card_order, planned_designs))
         # 80:20 - four of five filmable scenes are real video; photos may replace a weak clip only
         # while they stay under a fifth (a scene with no usable video still gets a photo).
         filmable = [item for item in all_scenes if not heading_subject(str(item["narration"]))
@@ -475,6 +482,12 @@ class AutoYouTubeManager:
                     with run.lock:
                         run.errors.append({"scene": 0, "error": f"Chapter cards failed: {str(error)[:300]}", "query": ""})
         finally:
+            used = [run.designs[key] for key in card_order if key in run.designs]
+            if used:
+                try:
+                    remember_designs(self.paths.root, run.style.key, list(dict.fromkeys(used)))
+                except OSError:
+                    pass
             with run.lock:
                 self._update(
                     project_id, running=False, current_scene=None, completed=run.completed, failed=run.failed,
@@ -1085,8 +1098,22 @@ class AutoYouTubeManager:
             pictures = [(name, path) for name, path in pictures if path is not None]
             if len(pictures) < 2:
                 return False
+            items = [{"label": name, "image": str(path)} for name, path in pictures]
+            metadata = {"graphic": "ingredients", "items": items}
+            design = run.designs.get(str(scene["id"]), "cards")
+            duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+            destination = (self.paths.project_dir(run.project_id) / "assets" / "graphics"
+                           / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4")
+            if design != "cards":
+                try:
+                    payload = render_ingredients(design, items, getattr(run.style, "key", ""), duration, destination,
+                                                 run.service.ffmpeg_path)
+                    return self._save_graphic(run, scene, destination, {**metadata, "design": design, "payload": payload})
+                except Exception as error:  # a web design that fails falls back to the classic cards
+                    with run.lock:
+                        run.notes[position] = f"{design} design failed, classic cards used: {str(error)[:150]}"
             frame = ingredient_cards([(name, Image.open(path)) for name, path in pictures], run.style)
-            metadata = {"graphic": "ingredients", "items": [{"label": name, "image": str(path)} for name, path in pictures]}
+            metadata["design"] = "cards"
         else:
             dishes = [heading_subject(str(item.get("narration") or "")) for item in self.db.list_scenes(run.project_id)]
             paths = dish_images(many, [dish for dish in dishes if dish], library, run.verifier, run.settings,
@@ -1100,6 +1127,9 @@ class AutoYouTubeManager:
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
         destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
         encode(frame, duration, destination, ffmpeg_path=run.service.ffmpeg_path)
+        return self._save_graphic(run, scene, destination, metadata)
+
+    def _save_graphic(self, run: "_Run", scene: dict[str, Any], destination: Path, metadata: dict[str, Any]) -> bool:
         asset = self.db.add_asset(
             project_id=run.project_id, scene_id=str(scene["id"]),
             candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),

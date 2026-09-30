@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("LVS_NO_WEB_DESIGNS", "1")  # classic cards only; no Chrome renders in tests
+
 import tempfile
 import unittest
 from pathlib import Path

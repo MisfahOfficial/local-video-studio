@@ -54,13 +54,21 @@ def redraw_scene_graphic(db: Any, paths: Any, scene_id: str, items: list[dict[st
     destination = (paths.project_dir(str(scene["project_id"])) / "assets" / "graphics"
                    / f"scene-{int(scene['position']):04d}-{uuid.uuid4().hex[:8]}.mp4")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    draw_graphic(kind, cleaned, str(style_key or ""), duration, destination, ffmpeg_path)
+    design = str(metadata.get("design") or "cards")
+    if kind == "ingredients" and design not in ("cards", ""):
+        from .motion_designs import render_ingredients
+
+        payload = render_ingredients(design, cleaned, str(style_key or ""), duration, destination, ffmpeg_path)
+    else:
+        draw_graphic(kind, cleaned, str(style_key or ""), duration, destination, ffmpeg_path)
+        payload = None
     asset = db.add_asset(
         project_id=str(scene["project_id"]), scene_id=scene_id,
         candidate_index=db.next_asset_candidate_index(scene_id),
         media_kind="video", provider="graphic", model=kind, local_path=str(destination),
         remote_url=None, provider_asset_id=None, cost=0.0,
-        metadata={"graphic": kind, "items": cleaned, "channel_style": style_key, "edited": True},
+        metadata={"graphic": kind, "items": cleaned, "channel_style": style_key, "edited": True, "design": design,
+                  **({"payload": payload} if payload else {})},
     )
     db.select_asset(scene_id, str(asset["id"]))
     return asset

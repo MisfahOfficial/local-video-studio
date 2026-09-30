@@ -1,0 +1,16 @@
+{
+  "name": "lvs-motion-web",
+  "private": true,
+  "description": "HTML (HyperFrames) and React (Remotion) motion-graphics templates for Local Video Studio",
+  "type": "module",
+  "dependencies": {
+    "@remotion/bundler": "^4.0.530",
+    "@remotion/cli": "^4.0.530",
+    "@remotion/renderer": "^4.0.530",
+    "gsap": "^3.15.0",
+    "hyperframes": "^0.8.94",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "remotion": "^4.0.530"
+  }
+}

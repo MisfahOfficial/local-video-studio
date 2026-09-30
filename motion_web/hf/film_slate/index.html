@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:#111}
+  #bg{position:absolute;inset:-40px;background-size:cover;background-position:center;filter:sepia(.55) blur(6px) brightness(.45)}
+  .ring{position:absolute;left:760px;top:340px;width:400px;height:400px;border-radius:50%;border:6px solid rgba(255,255,255,.75)}
+  .cross{position:absolute;left:0;right:0;top:538px;height:4px;background:rgba(255,255,255,.5)}
+  .crossv{position:absolute;top:0;bottom:0;left:958px;width:4px;background:rgba(255,255,255,.5)}
+  #count{position:absolute;left:0;right:0;top:420px;text-align:center;color:#fff;font:bold 220px Futura, sans-serif}
+  .text{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;text-align:center}
+  #grain{position:absolute;inset:0;opacity:.12;background-image:repeating-radial-gradient(circle at 17% 32%, #fff 0 1px, transparent 1px 3px)}
+</style></head>
+<body>
+<div id="stage" data-composition-id="film_slate" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="bg" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="leader" class="clip" data-start="0" data-duration="600" data-track-index="1">
+    <div class="cross"></div><div class="crossv"></div><div class="ring"></div><div id="count">3</div>
+  </div>
+  <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+  <div id="grain" class="clip" data-start="0" data-duration="600" data-track-index="3"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  document.getElementById("stage").setAttribute("data-duration", String(p.seconds || 4));
+  if (p.background) document.getElementById("bg").style.backgroundImage = `url(${p.background})`;
+  const tl = gsap.timeline({paused: true});
+  const count = document.getElementById("count");
+  [3, 2, 1].forEach((n, i) => tl.call(() => { count.textContent = String(n); }, null, i * 0.3));
+  tl.to("#leader", {opacity: 0, duration: 0.25}, 0.9);
+  tl.fromTo("#bg", {scale: 1.12}, {scale: 1.0, duration: (p.seconds || 4), ease: "none"}, 0);
+  if (p.show_text) {
+    (p.texts || []).forEach((t, i) => {
+      const el = document.createElement("div"); el.className = "text"; el.textContent = t.text;
+      el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};letter-spacing:${t.spacing || 0}px`;
+      document.getElementById("words").appendChild(el);
+      tl.from(el, {opacity: 0, y: 30, duration: 0.6, ease: "power2.out"}, 1.0 + i * 0.25);
+    });
+  }
+  tl.to("#grain", {x: 6, y: -4, duration: 0.08, repeat: 60, yoyo: true, ease: "none"}, 0);
+  window.__timelines = window.__timelines || {}; window.__timelines.film_slate = tl;
+</script>
+</body></html>

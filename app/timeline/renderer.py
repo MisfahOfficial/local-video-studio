@@ -417,8 +417,20 @@ class FFmpegRenderer:
         items = redrawable_items(metadata, getattr(self, "library_dir", None))
         try:
             if asset.get("provider") == "chapter" and plain.is_file():
-                self._render_clip(plain, destination, "image", duration, scene, width, height, fps, encoder,
+                kind = "video" if plain.suffix.lower() == ".mp4" else "image"
+                self._render_clip(plain, destination, kind, duration, scene, width, height, fps, encoder,
                                   source_in_seconds=0, crop=None, film_look=False)
+                return
+            if (asset.get("provider") == "graphic" and metadata.get("graphic") == "ingredients"
+                    and metadata.get("design") not in (None, "cards") and items):
+                from ..motion_designs import render_ingredients
+
+                bare = destination.with_name(destination.stem + "-bare.mp4")
+                render_ingredients(str(metadata["design"]), items, getattr(self._style, "key", ""), duration, bare,
+                                   self.ffmpeg_path, show_text=False)
+                self._render_clip(bare, destination, "video", duration, scene, width, height, fps, encoder,
+                                  source_in_seconds=0, crop=None, film_look=False)
+                bare.unlink(missing_ok=True)
                 return
             if asset.get("provider") == "graphic" and metadata.get("graphic") == "ingredients" and items:
                 from ..graphics_editor import draw_graphic

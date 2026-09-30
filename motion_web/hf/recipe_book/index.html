@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden}
+  .bg{position:absolute;inset:0}
+  .page{position:absolute;left:260px;top:90px;width:1400px;height:900px;border-radius:10px;
+        box-shadow:0 30px 80px rgba(0,0,0,.45);background:#fbf5e8;
+        background-image:repeating-linear-gradient(#fbf5e8 0 58px,#cfe0ee 58px 60px)}
+  .page:before{content:"";position:absolute;left:150px;top:0;bottom:0;width:3px;background:#e7a4a4}
+  .heading{position:absolute;left:190px;top:40px;font-size:64px}
+  .photo{position:absolute;width:300px;height:300px;padding:14px 14px 50px;background:#fff;box-shadow:0 12px 30px rgba(0,0,0,.35)}
+  .photo img{width:100%;height:100%;object-fit:cover}
+  .line{position:absolute;font-size:54px;white-space:nowrap}
+  .tick{display:inline-block;width:44px;margin-right:18px}
+</style></head>
+<body>
+<div id="stage" data-composition-id="recipe_book" data-start="0" data-width="1920" data-height="1080" data-duration="6"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div class="bg clip" id="bg" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div class="page clip" id="page" data-start="0" data-duration="600" data-track-index="1"></div>
+  <div id="layer" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const stage = document.getElementById("stage");
+  stage.setAttribute("data-duration", String(p.seconds || 6));
+  document.getElementById("bg").style.background = `radial-gradient(circle at 50% 40%, ${p.bg_inner}, ${p.bg_outer})`;
+  const layer = document.getElementById("layer");
+  const tl = gsap.timeline({paused: true});
+  tl.from("#page", {y: 80, opacity: 0, rotation: -2, duration: 0.7, ease: "power3.out"}, 0);
+  if (p.show_text && p.heading) {
+    const h = document.createElement("div"); h.className = "heading"; h.textContent = p.heading;
+    h.style.cssText += `font-family:${p.title_font};color:${p.heading_color};left:${p.heading_x}px;top:${p.heading_y}px;transform:translate(-50%,-50%)`;
+    layer.appendChild(h); tl.from(h, {opacity: 0, duration: 0.5}, 0.4);
+  }
+  (p.items || []).forEach((item, i) => {
+    const photo = document.createElement("div"); photo.className = "photo";
+    photo.style.left = item.photo_x + "px"; photo.style.top = item.photo_y + "px";
+    photo.style.transform = `rotate(${item.tilt}deg)`;
+    const img = document.createElement("img"); img.src = item.image; photo.appendChild(img);
+    layer.appendChild(photo);
+    tl.from(photo, {x: 500, opacity: 0, rotation: item.tilt + 12, duration: 0.6, ease: "back.out(1.4)"}, 0.5 + i * 0.45);
+    if (p.show_text) {
+      const line = document.createElement("div"); line.className = "line";
+      line.style.cssText = `left:${item.text_x}px;top:${item.text_y}px;transform:translate(-50%,-50%);font-family:${p.label_font};color:${p.ink}`;
+      line.innerHTML = `<span class="tick">✓</span>${item.label}`;
+      layer.appendChild(line);
+      tl.from(line, {clipPath: "inset(0 100% 0 0)", duration: 0.6, ease: "none"}, 0.7 + i * 0.45);
+    }
+  });
+  window.__timelines = window.__timelines || {}; window.__timelines.recipe_book = tl;
+</script>
+</body></html>

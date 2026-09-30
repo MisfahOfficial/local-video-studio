@@ -163,6 +163,37 @@ def _wrap(draw: Any, words: list[str], font: Any, max_width: float) -> list[str]
     return lines
 
 
+def _web_chapter(db: Database, project_id: str, scene: dict[str, Any], design: str, title: str, number: int,
+                 style: Any, background: Any, folder: Path, ffmpeg_path: str) -> bool:
+    """A HyperFrames/Remotion chapter card (with a word-free twin for editable exports); False to fall back."""
+    from .motion_designs import render_chapter
+
+    seconds = max(1.0, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+    backdrop = ""
+    if background is not None:
+        backdrop = str(folder / f"chapter-{number:03d}-bg.jpg")
+        background.convert("RGB").save(backdrop, quality=90)
+    video = folder / f"chapter-{number:03d}-{design}.mp4"
+    plain = folder / f"chapter-{number:03d}-{design}-plain.mp4"
+    try:
+        payload = render_chapter(design, title, number, style.key, seconds, backdrop, video, ffmpeg_path)
+        render_chapter(design, title, number, style.key, seconds, backdrop, plain, ffmpeg_path, show_text=False)
+    except Exception:
+        return False
+    asset = db.add_asset(
+        project_id=project_id, scene_id=str(scene["id"]), candidate_index=db.next_asset_candidate_index(str(scene["id"])),
+        media_kind="video", provider="chapter", model=f"chapter-{design}", local_path=str(video), remote_url=None,
+        provider_asset_id=None, cost=0.0,
+        metadata={"chapter": number, "title": title, "plain_path": str(plain), "design": design, "payload": payload},
+    )
+    db.select_asset(str(scene["id"]), str(asset["id"]))
+    db.update_scene(str(scene["id"]), {"caption_text": "", "timeline_actions": [
+        {"type": "motion", "params": {"preset": "static"}},
+        {"type": "transition", "params": {"preset": "fade", "duration": 0.32}},
+    ]})
+    return True
+
+
 def heading_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [scene for scene in scenes if heading_subject(str(scene.get("narration") or ""))]
 
@@ -174,7 +205,18 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
     assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
     by_position = {int(scene["position"]): scene for scene in scenes}
     made = 0
-    for count, scene in enumerate(heading_scenes(scenes), start=1):
+    style = get_style((project.get("effects") or {}).get("channel_style"))
+    headings = heading_scenes(scenes)
+    try:  # a different look per chapter, chosen by AI for this video (classic when the web engines are missing)
+        from .config import SettingsStore
+        from .motion_designs import plan_designs, remember_designs
+
+        settings = SettingsStore(paths.settings).load()
+        designs = plan_designs("chapter", len(headings), str(project.get("script") or ""), style.key, paths.root, settings)
+        remember_designs(paths.root, style.key, list(dict.fromkeys(designs)))
+    except Exception:
+        designs = []
+    for count, scene in enumerate(headings, start=1):
         raw = str(scene["narration"]).strip()
         numbered = re.match(r"\s*#?(\d+)", raw) if _NUMBERING.match(raw) else None
         number = int(numbered.group(1)) if numbered else count
@@ -197,10 +239,15 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
                     background = None
             if background is not None:
                 break
-        card = render_card(background, title, number, str(project.get("theme_id") or ""),
-                           get_style((project.get("effects") or {}).get("channel_style")))
-        destination = paths.project_dir(project_id) / "assets" / "chapters" / f"chapter-{number:03d}.png"
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        design = designs[count - 1] if count - 1 < len(designs) else "classic"
+        folder = paths.project_dir(project_id) / "assets" / "chapters"
+        folder.mkdir(parents=True, exist_ok=True)
+        if design != "classic" and _web_chapter(db, project_id, scene, design, title, number, style, background,
+                                                folder, ffmpeg_path):
+            made += 1
+            continue
+        card = render_card(background, title, number, str(project.get("theme_id") or ""), style)
+        destination = folder / f"chapter-{number:03d}.png"
         card.save(destination)
         plain = destination.with_name(f"chapter-{number:03d}-plain.png")
         render_card(background, title, number, str(project.get("theme_id") or ""),
@@ -210,7 +257,7 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
             candidate_index=db.next_asset_candidate_index(str(scene["id"])),
             media_kind="image", provider="chapter", model="chapter-card",
             local_path=str(destination), remote_url=None, provider_asset_id=None, cost=0.0,
-            metadata={"chapter": number, "title": title, "plain_path": str(plain)},
+            metadata={"chapter": number, "title": title, "plain_path": str(plain), "design": "classic"},
         )
         db.select_asset(str(scene["id"]), str(asset["id"]))
         # The card already shows the heading, so no caption on top of it.

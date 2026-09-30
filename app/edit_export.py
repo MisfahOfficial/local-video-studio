@@ -120,7 +120,11 @@ def on_screen_text(project: dict[str, Any], scenes: list[dict[str, Any]],
         metadata = asset.get("metadata") or {}
         start, end = float(scene["start_seconds"]), float(scene["end_seconds"])
         # Only cards that were redrawn without words get text layers (else the words would show twice).
-        if (asset.get("provider") == "chapter" and metadata.get("title")
+        if metadata.get("design") in {"recipe_book", "carousel", "film_slate", "newspaper"}:
+            from .motion_designs import text_layers
+
+            found = text_layers(metadata, style)
+        elif (asset.get("provider") == "chapter" and metadata.get("title")
                 and Path(str(metadata.get("plain_path") or "")).is_file()):
             found = card_text_layout(str(metadata["title"]), int(metadata.get("chapter") or 1), style)
         elif asset.get("provider") == "graphic" and metadata.get("graphic") == "ingredients":
