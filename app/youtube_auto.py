@@ -950,7 +950,7 @@ class AutoYouTubeManager:
                 cached = run.searches.get(f"photo:{query}")
             if cached is None:
                 # Scenes of one section repeat the same archive searches.
-                cached = search_photos(query)
+                cached = search_photos(query, period=run.profile.period)
                 with run.lock:
                     run.searches[f"photo:{query}"] = cached
             for item in cached:
