@@ -97,3 +97,16 @@ class HeadingSceneTests(unittest.TestCase):
         sentences = ["Chicken and Rice Casserole", "Chicken and Rice Casserole was the staple."]
         groups = _group_by_pacing(sentences, [(10.0, 11.5), (11.6, 13.0)])
         self.assertEqual(groups, [[0], [1]])
+
+
+class VoiceTimesTest(unittest.TestCase):
+    def test_scenes_start_on_their_spoken_words(self):
+        from app.whisper_planner import voice_times
+
+        words = [("Custard", 0.0), ("slices", 0.4), ("were", 5.0), ("loved", 5.3), ("Treacle", 9.0), ("tart", 9.4)]
+        segments = [{"words": [{"word": word, "start": start, "end": start + 0.3} for word, start in words]}]
+        times = voice_times(["Custard slices", "were loved", "Treacle tart"], segments, 12.0)
+        self.assertAlmostEqual(times[1][0], (0.7 + 5.0) / 2, places=2)  # cut in the pause before "were"
+        self.assertAlmostEqual(times[2][0], (5.6 + 9.0) / 2, places=2)
+        self.assertEqual(times[-1][1], 12.0)
+        self.assertTrue(all(end > start for start, end in times))

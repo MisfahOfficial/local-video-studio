@@ -24,7 +24,15 @@ NEGATIVE = (
 )
 
 
-def still_prompt(scene_text: str, subject: str, era: str, people: bool = True) -> str:
+HOMES = {"GB": "British", "UK": "British", "CA": "Canadian", "US": "American", "IE": "Irish"}
+
+
+def home_word(country: str) -> str:
+    """The country the channel is about: a Britain channel's stills show a British home, not an American one."""
+    return HOMES.get(str(country or "").upper(), "American")
+
+
+def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, country: str = "US") -> str:
     period = era or "mid-century"
     about = f" Main subject: {subject}." if subject else ""
     if not people:
@@ -36,7 +44,7 @@ def still_prompt(scene_text: str, subject: str, era: str, people: bool = True) -
         )
     return (
         f"{scene_text.strip()[:220]}{about} Candid {period} amateur snapshot photograph, shot on Kodachrome "
-        f"slide film with a cheap camera. Period-correct {period} American home: enamel stove, rounded "
+        f"slide film with a cheap camera. Period-correct {period} {home_word(country)} home: enamel stove, rounded "
         f"refrigerator, linoleum floor, {period} hairstyles, cotton dresses and aprons, glass mixing bowls. "
         "Natural window light, slightly soft focus, ordinary imperfect scene, real people and real food, "
         "faded colours, fine film grain"
@@ -66,13 +74,14 @@ def film_finish(content: bytes, seed: int, size: tuple[int, int] = (1920, 1080))
 
 def generate_vintage_still(
     settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path, people: bool = True,
+    country: str = "US",
 ) -> dict[str, Any]:
     """Generate, age and save a still; returns asset metadata.
 
     Runware first (paid, fast, reliable); when it has no key, no balance or fails, the free
     Pollinations service (FLUX, no key) makes the image instead."""
     seed = random.randint(1, 2**31 - 1)
-    prompt = still_prompt(scene_text, subject, era, people)
+    prompt = still_prompt(scene_text, subject, era, people, country)
     negative = NEGATIVE if people else f"{NEGATIVE}, person, people, woman, man, face, hands, crowd"
     destination.parent.mkdir(parents=True, exist_ok=True)
     runware_error = "no Runware key"

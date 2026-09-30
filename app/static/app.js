@@ -1979,7 +1979,7 @@ async function fitTimelineToVoiceover() {
   const before = timelineSnapshot();
   const button = $("#fitTimelineButton");
   button.disabled = true;
-  button.textContent = "Fitting…";
+  button.textContent = "Listening to the VO…";
   try {
     const result = await api(`/api/projects/${state.current.id}/timeline/fit-voiceover`, {
       method: "POST", body: "{}",
@@ -1988,7 +1988,9 @@ async function fitTimelineToVoiceover() {
     state.timelineClips = result.timeline_clips;
     state.timelineSync = result.timeline_sync;
     renderTimeline();
-    toast(`Visual track now ends with the VO at ${clock(result.timeline_sync.voiceover_duration)}`);
+    toast(result.method === "words"
+      ? `Every scene now starts on its own words in the VO (ends at ${clock(result.timeline_sync.voiceover_duration)})`
+      : `Visual track now ends with the VO at ${clock(result.timeline_sync.voiceover_duration)}`);
   } catch (error) {
     toast(error.message, true);
   } finally {

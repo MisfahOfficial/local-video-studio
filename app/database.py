@@ -481,6 +481,34 @@ class Database:
             "contiguous": contiguous,
         }
 
+    def set_scene_times(self, project_id: str, times: list[tuple[float, float]]) -> list[dict[str, Any]]:
+        """Move every scene to new (start, end) times (from the spoken words) and carry its timeline
+        clips along, each keeping its share of the scene; the footage itself is not touched."""
+        scenes = self.list_scenes(project_id)
+        if len(times) != len(scenes):
+            raise ValueError("One time span is needed for every scene")
+        old = {str(scene["id"]): (float(scene["start_seconds"]), float(scene["end_seconds"])) for scene in scenes}
+        new = {str(scene["id"]): span for scene, span in zip(scenes, times)}
+        now = utc_now()
+        with self.connection() as db:
+            for scene_id, (start, end) in new.items():
+                db.execute("UPDATE scenes SET start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                           (start, end, now, scene_id))
+            for clip in self.list_timeline_clips(project_id):
+                scene_id = str(clip["scene_id"])
+                if scene_id not in new:
+                    continue
+                (old_start, old_end), (start, end) = old[scene_id], new[scene_id]
+                scale = (end - start) / max(1e-6, old_end - old_start)
+
+                def moved(value: float) -> float:
+                    return round(start + (min(max(value, old_start), old_end) - old_start) * scale, 3)
+
+                db.execute("UPDATE timeline_clips SET start_seconds = ?, end_seconds = ?, updated_at = ? WHERE id = ?",
+                           (moved(float(clip["start_seconds"])), moved(float(clip["end_seconds"])), now, clip["id"]))
+            db.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
+        return self.list_timeline_clips(project_id)
+
     def fit_timeline_to_duration(self, project_id: str, target_duration: float) -> list[dict[str, Any]]:
         """Fit a gapless visual track to a master duration without changing clip order."""
         clips = self.list_timeline_clips(project_id)

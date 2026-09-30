@@ -328,6 +328,12 @@ _CLASSIC_TITLE = re.compile(
 POOL_SIZE = 2
 
 
+def pool_size(scene_count: int) -> int:
+    """Sources read for one section: two for a short dish, more for a long one. With two sources a
+    30-scene section ran out of fresh moments and half of it became AI images (V3 45-minute test)."""
+    return POOL_SIZE if scene_count <= 12 else 3 if scene_count <= 22 else 4
+
+
 class AutoYouTubeManager:
     """Background, project-wide B-roll sourcing (Creative Commons or fair-use mode)."""
 
@@ -652,12 +658,13 @@ class AutoYouTubeManager:
 
         ordered = sorted(usable, key=rank, reverse=True)
         sources: list[dict[str, Any]] = []
-        # Read the two best first; spares only when one is unusable (AI look, vertical, unreadable).
-        for start in range(0, min(len(ordered), POOL_SIZE + 4), POOL_SIZE):
-            sources += self._prepare_sources(run, ordered[start:start + POOL_SIZE])
-            if len(sources) >= POOL_SIZE:
+        # Read the best first (more of them for a long section); spares only when one is unusable.
+        size = 2 if is_hook else pool_size(len(members))
+        for start in range(0, min(len(ordered), size + 4), size):
+            sources += self._prepare_sources(run, ordered[start:start + size])
+            if len(sources) >= size:
                 break
-        sources = sources[:POOL_SIZE]
+        sources = sources[:size]
         if not is_hook:
             with run.lock:
                 run.section_pools.append((subject, recipe, sources))
@@ -1312,7 +1319,11 @@ class AutoYouTubeManager:
     ) -> None:
         destination = self.paths.project_dir(project_id) / "assets" / "stills" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
         try:
-            metadata = generate_vintage_still(settings, scene_text, subject, era, destination)
+            from .channel_kits import kit_for
+
+            effects = (self.db.get_project(project_id) or {}).get("effects") or {}
+            country = str(kit_for(self.paths.root, get_style(effects.get("channel_style")).key).get("country") or "US")
+            metadata = generate_vintage_still(settings, scene_text, subject, era, destination, country=country)
         except ProviderError as error:
             raise ProviderError(
                 f'No real footage of "{subject or scene_text[:40]}" passed the checks and a fallback image '

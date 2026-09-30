@@ -51,3 +51,21 @@ class VintageStillTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CountryHomeTest(unittest.TestCase):
+    def test_britain_channel_stills_show_a_british_home(self):
+        from app.vintage_still import still_prompt
+
+        self.assertIn("British home", still_prompt("Mum baked on Sundays", "jam tarts", "1970s", country="GB"))
+        self.assertIn("Canadian home", still_prompt("Mum baked on Sundays", "butter tarts", "1970s", country="CA"))
+        self.assertIn("American home", still_prompt("Mum baked on Sundays", "pie", "1950s"))
+
+
+class PoolSizeTest(unittest.TestCase):
+    def test_long_sections_read_more_sources(self):
+        from app.youtube_auto import pool_size
+
+        self.assertEqual(pool_size(10), 2)
+        self.assertEqual(pool_size(16), 3)
+        self.assertEqual(pool_size(34), 4)

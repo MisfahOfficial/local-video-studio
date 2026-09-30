@@ -20,7 +20,7 @@ from .database import Database
 from .generation import GenerationManager
 from .gemini_audio_planner import GeminiAudioScenePlanner
 from .content_profile import BUILTIN as PROFILES, MAX_REFERENCES, missing_reference_message, normalize_profile
-from .whisper_planner import WhisperScenePlanner
+from .whisper_planner import CachedTranscriber, WhisperScenePlanner
 from .gemini_analyzer import GeminiSceneEnhancer
 from .fonts import FontError, FontManager
 from .paths import AppPaths
@@ -427,6 +427,23 @@ class StudioApplication:
             del metadata
         return {"checked": len(clips), "zoomed": hidden, "needs_review": review}
 
+    def sync_to_voice(self, project_id: str, project: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+        """Line every scene up with the words in the voice-over (Whisper); stretching evenly only
+        when the voice-over cannot be heard or matched."""
+        from .whisper_planner import CachedTranscriber, voice_times
+
+        voiceover = Path(str(project.get("voiceover_path") or ""))
+        duration = float(project.get("duration_seconds") or 0)
+        scenes = self.db.list_scenes(project_id)
+        if voiceover.is_file() and duration > 0 and scenes:
+            try:
+                segments = CachedTranscriber(voiceover.parent / "transcript.json").transcribe(voiceover)
+                times = voice_times([str(scene.get("narration") or "") for scene in scenes], segments, duration)
+                return self.db.set_scene_times(project_id, times), "words"
+            except (RuntimeError, ValueError, OSError):
+                pass
+        return self.db.fit_timeline_to_duration(project_id, duration), "stretch"
+
     def plan_project(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
         project = self.db.get_project(project_id)
         if not project:
@@ -446,6 +463,9 @@ class StudioApplication:
             raise ApiError("Target images must be between 1 and 3000")
         settings = self.settings.load()
         planner_mode = str(body.get("planner", "local"))
+        if planner_mode in ("local", "gemini") and Path(str(project.get("voiceover_path") or "")).is_file():
+            # With a voice-over, estimated timing drifts (10-13 s by mid-video): time scenes from the words.
+            planner_mode = "whisper"
         timing_source = "estimated"
         try:
             if planner_mode == "precision":
@@ -476,7 +496,7 @@ class StudioApplication:
                     raise ApiError("The voice-over duration could not be measured. Re-upload it before using Whisper Sync.")
                 duration = voiceover_duration
                 try:
-                    drafts = WhisperScenePlanner().plan(
+                    drafts = WhisperScenePlanner(CachedTranscriber(voiceover_path.parent / "transcript.json")).plan(
                         script=script,
                         voiceover_path=voiceover_path,
                         duration_seconds=duration,
@@ -974,13 +994,11 @@ def build_handler(application: StudioApplication):
                 if not project:
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
                 try:
-                    clips = application.db.fit_timeline_to_duration(
-                        project_id, float(project.get("duration_seconds") or 0)
-                    )
+                    clips, method = application.sync_to_voice(project_id, project)
                     sync = application.db.timeline_sync_status(project_id)
                 except (KeyError, ValueError, TypeError) as error:
                     raise ApiError(str(error)) from error
-                self._json({"timeline_clips": clips, "timeline_sync": sync})
+                self._json({"timeline_clips": clips, "timeline_sync": sync, "method": method})
                 return
             match = re.fullmatch(r"/api/timeline-clips/([a-zA-Z0-9_-]+)/split", path)
             if match:

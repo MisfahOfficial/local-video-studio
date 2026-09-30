@@ -106,6 +106,9 @@ class AutoBuildManager:
         filled: list[int] = []
         failed: list[dict[str, Any]] = []
         lock = threading.Lock()
+        from .channel_kits import kit_for
+
+        country = str(kit_for(self.app.paths.root, (project.get("effects") or {}).get("channel_style") or "v3").get("country") or "US")
         todo = [(scene, subject) for scene, subject in zip(scenes, subjects)
                 if not scene.get("selected_asset_id") and not heading_subject(str(scene.get("narration") or ""))]
 
@@ -115,7 +118,8 @@ class AutoBuildManager:
             destination = (self.app.paths.project_dir(project_id) / "assets" / "stills"
                            / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg")
             try:
-                metadata = generate_vintage_still(settings, str(scene.get("narration") or ""), subject, era, destination)
+                metadata = generate_vintage_still(settings, str(scene.get("narration") or ""), subject, era, destination,
+                                                  country=country)
             except Exception as error:
                 with lock:
                     failed.append({"scene": position, "error": str(error)[:200]})

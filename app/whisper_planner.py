@@ -253,3 +253,45 @@ class WhisperScenePlanner:
                 timeline_actions=_timeline_actions(emotion, pop_insert=pop_insert),
             ))
         return drafts
+
+
+def voice_times(narrations: list[str], segments: list[dict[str, Any]], duration: float,
+                minimum: float = 0.25) -> list[tuple[float, float]]:
+    """(start, end) for existing scenes from the spoken words, footage untouched: each scene starts where
+    its narration is heard and cuts land in the middle of the pause. Stretching a whole timeline evenly
+    to the voice-over drifted 10-13 s by the middle of a 45-minute video (V3 test)."""
+    spans = align_sentences(narrations, segments, duration)
+    bounds = [0.0] + [(left[1] + right[0]) / 2 for left, right in zip(spans, spans[1:])] + [duration]
+    times: list[tuple[float, float]] = []
+    for index in range(len(narrations)):
+        start = times[-1][1] if times else 0.0
+        room = duration - minimum * (len(narrations) - index - 1)  # leave the rest their minimum
+        end = min(max(bounds[index + 1], start + minimum), room) if index < len(narrations) - 1 else duration
+        times.append((round(start, 3), round(max(end, start + minimum), 3)))
+    return times
+
+
+class CachedTranscriber:
+    """Whisper once per voice-over: the words are saved next to it, so re-syncing is instant."""
+
+    def __init__(self, cache: Path, inner: Transcriber | None = None):
+        self.cache = cache
+        self.inner = inner or FasterWhisperTranscriber()
+
+    def transcribe(self, audio_path: Path) -> list[dict[str, Any]]:
+        import json
+
+        stat = audio_path.stat()
+        stamp = f"{audio_path.name}|{stat.st_size}|{int(stat.st_mtime)}"
+        try:
+            saved = json.loads(self.cache.read_text())
+            if saved.get("stamp") == stamp:
+                return saved["segments"]
+        except (OSError, ValueError, KeyError, AttributeError):
+            pass
+        segments = self.inner.transcribe(audio_path)
+        try:
+            self.cache.write_text(json.dumps({"stamp": stamp, "segments": segments}))
+        except OSError:
+            pass
+        return segments
