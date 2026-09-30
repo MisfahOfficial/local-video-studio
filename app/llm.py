@@ -60,3 +60,15 @@ def gemini_look(settings: Any, prompt: str, images: list[bytes], schema: dict[st
 
 def gemini_json(settings: Any, prompt: str, schema: dict[str, Any], temperature: float = 0.7) -> Any:
     return json.loads(gemini_text(settings, prompt, schema=schema, temperature=temperature))
+
+
+def claude_text(settings: Any, prompt: str, model: str = "claude-sonnet-5", max_tokens: int = 12000) -> str:
+    """Claude writes better motion designs than the free Gemini models (needs an Anthropic key)."""
+    key = str(getattr(settings, "anthropic_api_key", "") or "").strip()
+    if not key:
+        raise ProviderError("No Anthropic key in Settings")
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=key)
+    message = client.messages.create(model=model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}])
+    return "".join(block.text for block in message.content if getattr(block, "type", "") == "text")

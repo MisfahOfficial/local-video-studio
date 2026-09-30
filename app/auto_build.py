@@ -80,9 +80,9 @@ class AutoBuildManager:
             from .design_generator import generate_design, library_size
             from .motion_designs import web_engines_ready
 
-            if not web_engines_ready():
-                return
             settings = self.app.settings.load()
+            if not web_engines_ready() or not str(getattr(settings, "anthropic_api_key", "") or "").strip():
+                return  # without Claude the free models' designs do not pass review; don't spend the Mac on it
             project = self.app.db.get_project(project_id) or {}
             style_key = str((project.get("effects") or {}).get("channel_style") or "v3")
             sample = next((str(asset["local_path"]) for asset in self.app.db.list_assets(project_id)

@@ -1,0 +1,54 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:#6b4a2b}
+  #board{position:absolute;left:70px;top:60px;width:1780px;height:960px;border-radius:14px;
+         background:radial-gradient(circle at 40% 35%,#35463b,#1d2822);box-shadow:inset 0 0 0 26px #8a5f36,inset 0 0 0 32px #5a3b20,0 20px 60px rgba(0,0,0,.5)}
+  #smudge{position:absolute;inset:120px;background:radial-gradient(ellipse at 30% 40%,rgba(255,255,255,.07),transparent 60%),
+          radial-gradient(ellipse at 75% 70%,rgba(255,255,255,.05),transparent 55%)}
+  .photo{position:absolute;background:#fff;padding:10px;box-shadow:0 10px 24px rgba(0,0,0,.55)}
+  .photo img{width:100%;height:100%;object-fit:cover;display:block}
+  .pin{position:absolute;left:50%;top:-14px;width:28px;height:28px;margin-left:-14px;border-radius:50%;background:#d23b2e;box-shadow:0 4px 6px rgba(0,0,0,.5)}
+  .word{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;color:#f4f1e8;text-shadow:0 0 2px rgba(255,255,255,.6)}
+  .rule{position:absolute;height:4px;background:rgba(244,241,232,.75);border-radius:2px}
+</style></head>
+<body>
+<div id="stage" data-composition-id="chalkboard" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="board" class="clip" data-start="0" data-duration="600" data-track-index="0"><div id="smudge"></div></div>
+  <div id="layer" class="clip" data-start="0" data-duration="600" data-track-index="1"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4, k = Math.min(1, seconds / 4);
+  const layer = document.getElementById("layer");
+  const tl = gsap.timeline({paused: true});
+  const size = p.photo_size || 300;
+  if (p.show_text && p.heading) {
+    const h = document.createElement("div"); h.className = "word"; h.textContent = p.heading;
+    h.style.cssText += `left:${p.heading_x}px;top:${p.heading_y}px;font-size:84px;font-family:Noteworthy`;
+    layer.appendChild(h);
+    tl.from(h, {clipPath: "inset(0 100% 0 0)", duration: 0.5 * k, ease: "none"}, 0.1 * k);
+    const r = document.createElement("div"); r.className = "rule";
+    r.style.cssText += `left:${p.heading_x - 260}px;top:${p.heading_y + 60}px;width:520px`;
+    layer.appendChild(r); tl.from(r, {scaleX: 0, transformOrigin: "left", duration: 0.4 * k}, 0.4 * k);
+  }
+  (p.items || []).forEach((item, i) => {
+    const ph = document.createElement("div"); ph.className = "photo";
+    ph.style.cssText += `left:${item.photo_x}px;top:${item.photo_y}px;width:${size}px;height:${size}px;transform:rotate(${[-4,3,-2,5,-3][i]}deg)`;
+    ph.innerHTML = `<img src="${item.image}"><div class="pin"></div>`;
+    layer.appendChild(ph);
+    tl.from(ph, {y: -80, opacity: 0, duration: 0.4 * k, ease: "back.out(1.6)"}, (0.3 + i * 0.35) * k);
+    if (p.show_text) {
+      const w = document.createElement("div"); w.className = "word"; w.textContent = item.label;
+      w.style.cssText += `left:${item.text_x}px;top:${item.text_y}px;font-size:56px;font-family:Noteworthy`;
+      layer.appendChild(w);
+      tl.from(w, {clipPath: "inset(0 100% 0 0)", duration: 0.45 * k, ease: "none"}, (0.5 + i * 0.35) * k);  // chalk writing
+    }
+  });
+  window.__timelines = window.__timelines || {}; window.__timelines.chalkboard = tl;
+</script>
+</body></html>

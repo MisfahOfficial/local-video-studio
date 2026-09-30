@@ -43,7 +43,42 @@ DESIGNS: dict[str, Design] = {item.key: item for item in (
     Design("film_slate", "chapter", "hyperframes", "Film-leader countdown, then the title over sepia footage",
            "old films, history, 1930s-1960s, cinematic"),
     Design("newspaper", "chapter", "remotion", "Spinning newspaper stops on a headline", "news, scandal, events, brands, 1920s-1970s"),
+    Design("typewriter_card", "chapter", "hyperframes", "Old index card: the title types out, a red stamp thumps down",
+           "recipes, archives, grandma's files, 1940s-1970s, warm"),
+    Design("vintage_tv", "chapter", "hyperframes", "Retro wooden TV set: channel-switch static, then the title on screen",
+           "TV era, 1950s-1980s, adverts, pop culture, playful"),
+    Design("chalkboard", "ingredients", "hyperframes", "Bakery chalkboard menu with pinned photos and chalk writing",
+           "bakery, cafe, school, British tea rooms, homely"),
+    Design("scrapbook", "ingredients", "hyperframes", "Kraft-paper scrapbook with taped photos and handwritten labels",
+           "family memories, crafts, nostalgic, desserts, cosy"),
 )}
+
+
+def _row(count: int, photo: int, top: int, label_y: int, gap: int = 70) -> list[list[float]]:
+    left = (W - (photo * count + gap * (count - 1))) / 2
+    return [[left + index * (photo + gap), top, left + index * (photo + gap) + photo / 2, label_y] for index in range(count)]
+
+
+# Fixed layouts of the built-in web designs (AI designs save their own in meta.json).
+BUILTIN_LAYOUTS: dict[str, dict[str, Any]] = {
+    "typewriter_card": {"label": {"x": 1330, "y": 330, "size": 44, "color": "#b3261e", "font": "American Typewriter"},
+                        "title": {"x": 960, "y": 580, "size": 92, "color": "#2a2118", "font": "American Typewriter"}},
+    "vintage_tv": {"label": {"x": 960, "y": 380, "size": 40, "color": "#9fe3a8", "font": "Futura"},
+                   "title": {"x": 960, "y": 520, "size": 92, "color": "#f2f7e9", "font": "Futura"}},
+    "chalkboard": {"photo": 300, "label_size": 56, "label_color": "#f4f1e8", "label_font": "Noteworthy",
+                   "heading": "Ingredients", "heading_x": 960, "heading_y": 170, "heading_size": 84, "heading_color": "#f4f1e8",
+                   "slots": {str(count): _row(count, 300, 330, 730) for count in range(1, 6)}},
+    "scrapbook": {"photo": 330, "label_size": 60, "label_color": "#3a2412", "label_font": "Noteworthy",
+                  "heading": "What went in", "heading_x": 960, "heading_y": 130, "heading_size": 90, "heading_color": "#8c2f1c",
+                  "slots": {
+                      "1": [[795, 330, 960, 760]],
+                      "2": [[430, 300, 595, 730], [1160, 360, 1325, 790]],
+                      "3": [[260, 330, 425, 760], [795, 270, 960, 700], [1330, 350, 1495, 780]],
+                      "4": [[170, 300, 335, 730], [610, 390, 775, 820], [1050, 280, 1215, 710], [1480, 380, 1645, 810]],
+                      "5": [[140, 260, 305, 690], [520, 420, 685, 850], [900, 250, 1065, 680], [1280, 410, 1445, 840],
+                            [1560, 240, 1725, 670]],
+                  }},
+}
 
 
 def web_engines_ready() -> bool:
@@ -177,7 +212,9 @@ def _font_file(paths: tuple[str, ...]) -> str:
 
 
 def design_layout(key: str) -> dict[str, Any]:
-    """An AI design's own layout (where its words and pictures go), saved with it."""
+    """A design's layout (where its words and pictures go): built in, or saved with an AI design."""
+    if key in BUILTIN_LAYOUTS:
+        return BUILTIN_LAYOUTS[key]
     try:
         return dict(json.loads((GENERATED / key / "meta.json").read_text()).get("layout") or {})
     except (OSError, ValueError):
@@ -211,8 +248,11 @@ def ingredient_payload(design: str, items: list[dict[str, str]], style: ChannelS
                                                     if style.background != "vignette" else (40, 34, 26)),
         "label_font": _family(style.label_fonts), "title_font": _family(style.chapter_title_fonts),
         "photo_size": photo,
-        "heading": "Ingredients" if design == "recipe_book" else "", "heading_x": 760, "heading_y": 170,
-        "heading_color": _hex(style.card_accent),
+        "heading": layout.get("heading", "Ingredients" if design == "recipe_book" else ""),
+        "heading_x": layout.get("heading_x", 760), "heading_y": layout.get("heading_y", 170),
+        "heading_color": layout.get("heading_color", _hex(style.card_accent)), "heading_size": layout.get("heading_size", 64),
+        "label_size": layout.get("label_size", 54 if design == "recipe_book" else 44),
+        "label_color": layout.get("label_color", ""), "label_font_name": layout.get("label_font", ""),
         "items": [{"label": item["label"].title(), "image": item["image"], "photo_x": item["photo_x"],
                    "photo_y": item["photo_y"], "tilt": item.get("tilt", 0), "text_x": item["text_x"],
                    "text_y": item["text_y"]} for item in placed],
@@ -228,10 +268,10 @@ def chapter_payload(design: str, title: str, number: int, style: ChannelStyle, s
         label, main = layout["label"], layout["title"]
         texts = [
             {"text": f"{style.chapter_label} {number}", "x": label["x"], "y": label["y"], "size": label.get("size", 38),
-             "color": label.get("color") or _hex(style.chapter_accent), "font": label_font, "spacing": 8},
+             "color": label.get("color") or _hex(style.chapter_accent), "font": label.get("font") or label_font, "spacing": 8},
             {"text": title.upper(), "x": main["x"], "y": main["y"],
              "size": main.get("size", 110) if len(title) < 16 else int(main.get("size", 110) * 0.75),
-             "color": main.get("color") or "#f6f0e4", "font": title_font},
+             "color": main.get("color") or "#f6f0e4", "font": main.get("font") or title_font},
         ]
     elif design == "newspaper":
         texts = [
@@ -260,11 +300,13 @@ def text_layers(metadata: dict[str, Any], style: ChannelStyle) -> list[dict[str,
         layers = []
         for index, item in enumerate(payload.get("items") or []):
             layers.append({"role": "ingredient label", "text": item["label"], "x": item["text_x"], "y": item["text_y"],
-                           "size": 54 if design == "recipe_book" else 44, "color": _rgb(payload.get("ink", "#222222")),
+                           "size": payload.get("label_size", 54 if design == "recipe_book" else 44),
+                           "color": _rgb(payload.get("label_color") or payload.get("ink", "#222222")),
                            "font": _font_file(style.label_fonts), "appear": 0.7 + index * 0.45})
         if payload.get("heading"):
             layers.append({"role": "heading", "text": payload["heading"], "x": payload["heading_x"],
-                           "y": payload["heading_y"], "size": 64, "color": _rgb(payload.get("heading_color", "#aa3333")),
+                           "y": payload["heading_y"], "size": payload.get("heading_size", 64),
+                           "color": _rgb(payload.get("heading_color", "#aa3333")),
                            "font": _font_file(style.chapter_title_fonts), "appear": 0.4})
         return layers
     if kind == "chapter":

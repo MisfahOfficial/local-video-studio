@@ -125,7 +125,13 @@ def generate_design(kind: str, settings: Any, style_key: str, topic: str = "", r
             + "\n\nAnswer with the HTML file, then the LAYOUT line, then on the very last line: NAME: <3-6 word name> | MOOD: <what it suits>"
         )
         try:
-            answer = gemini_text(settings, prompt, temperature=1.0, timeout=180)
+            # Claude when there is a key (the free Gemini models' designs rarely pass the art director).
+            if str(getattr(settings, "anthropic_api_key", "") or "").strip():
+                from .llm import claude_text
+
+                answer = claude_text(settings, prompt)
+            else:
+                answer = gemini_text(settings, prompt, temperature=1.0, timeout=180)
         except Exception:
             return None
         html = _clean_html(answer)

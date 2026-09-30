@@ -1,0 +1,53 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:#2b2118}
+  #bg{position:absolute;inset:-30px;background-size:cover;background-position:center;filter:sepia(.7) blur(8px) brightness(.35)}
+  #card{position:absolute;left:310px;top:190px;width:1300px;height:700px;background:#f3ead6;border-radius:6px;
+        box-shadow:0 40px 90px rgba(0,0,0,.6);
+        background-image:repeating-linear-gradient(#f3ead6 0 70px,#d8c9a9 70px 72px),
+                         linear-gradient(#f3ead6,#f3ead6)}
+  #card:before{content:"";position:absolute;left:0;right:0;top:0;height:120px;background:#e9dcbd;border-bottom:4px solid #c0392b}
+  #holes{position:absolute;left:90px;top:40px;width:40px;height:40px;border-radius:50%;background:#2b2118;opacity:.8}
+  .word{position:absolute;transform:translate(-50%,-50%);white-space:nowrap}
+  #stamp{border:6px solid currentColor;padding:6px 26px;border-radius:10px;transform:translate(-50%,-50%) rotate(-8deg)}
+</style></head>
+<body>
+<div id="stage" data-composition-id="typewriter_card" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="bg" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="card" class="clip" data-start="0" data-duration="600" data-track-index="1"><div id="holes"></div></div>
+  <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4, k = Math.min(1, seconds / 4);
+  if (p.background) document.getElementById("bg").style.backgroundImage = `url(${p.background})`;
+  const tl = gsap.timeline({paused: true});
+  tl.from("#card", {y: 120, rotation: 3, opacity: 0, duration: 0.5 * k, ease: "power3.out"}, 0);
+  tl.fromTo("#bg", {scale: 1.1}, {scale: 1, duration: seconds, ease: "none"}, 0);
+  if (p.show_text) {
+    const [label, title] = p.texts || [];
+    if (title) {
+      const t = document.createElement("div"); t.className = "word";
+      t.style.cssText += `left:${title.x}px;top:${title.y}px;font-size:${title.size}px;font-family:${title.font};color:${title.color}`;
+      document.getElementById("words").appendChild(t);
+      const letters = title.text.split("");
+      letters.forEach((ch, i) => { const s = document.createElement("span"); s.textContent = ch; s.style.opacity = 0; t.appendChild(s); });
+      const spans = t.querySelectorAll("span");
+      const typing = 0.9 * k;  // the title types out, letter by letter
+      spans.forEach((s, i) => tl.set(s, {opacity: 1}, 0.35 * k + typing * i / Math.max(1, spans.length)));
+    }
+    if (label) {
+      const st = document.createElement("div"); st.id = "stamp"; st.className = "word"; st.textContent = label.text;
+      st.style.cssText += `left:${label.x}px;top:${label.y}px;font-size:${label.size}px;font-family:${label.font};color:${label.color};letter-spacing:${label.spacing || 0}px`;
+      document.getElementById("words").appendChild(st);
+      tl.from(st, {scale: 2.6, opacity: 0, duration: 0.22 * k, ease: "power4.in"}, 1.35 * k);  // the stamp thumps down
+    }
+  }
+  window.__timelines = window.__timelines || {}; window.__timelines.typewriter_card = tl;
+</script>
+</body></html>

@@ -17,7 +17,8 @@ class DesignChoice(unittest.TestCase):
             self.assertEqual(len(plan), 6)
             self.assertTrue(all(first != second for first, second in zip(plan, plan[1:])))
             self.assertNotEqual(plan[0], "recipe_book")  # the look used lately does not lead
-            self.assertEqual(set(plan), {"cards", "recipe_book", "carousel"})
+            self.assertTrue(set(plan) <= set(motion_designs.available("ingredients")))
+            self.assertGreaterEqual(len(set(plan)), 4)  # six graphics use at least four different looks
 
     def test_without_node_only_the_python_designs_are_used(self):
         with tempfile.TemporaryDirectory() as folder, \
