@@ -59,3 +59,17 @@ class DishNames(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DriveRules(unittest.TestCase):
+    def test_copies_with_numbers_count_once(self):
+        files = [{"path": "/a/x.mp4", "name": "Let's Make A Sandwich (1950) A Classic Educational Film", "folder": "a"},
+                 {"path": "/b/x.mp4", "name": "Let's Make A Sandwich (1950) A Classic Educational Film_2", "folder": "b"}]
+        self.assertEqual(len(search_drive(files, "sandwich educational film")), 1)
+
+    def test_a_slow_drive_file_is_skipped_not_fatal(self):
+        import subprocess
+        from app.archive_source import drive_info
+        with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("ffprobe", 90)):
+            with self.assertRaises(ProviderError):
+                drive_info("/drive/slow.mp4", "ffprobe")

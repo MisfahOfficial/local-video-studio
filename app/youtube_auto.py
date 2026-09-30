@@ -296,8 +296,9 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
     # A list section's clips must be that exact dish: its name or signature
     # ingredients ("oatmeal", "molasses"), not gingerbread or chocolate chip.
     exact = not signature or any(mentions_topic(text, word) for word in signature)
-    # Drive clips found by what they show ("FlexClip_12") need no telling title.
-    seen = item.get("source") == "drive" and bool(item.get("visual_score"))
+    # Drive clips found only by what they show ("FlexClip_12") may open a video (the hook's mood);
+    # a dish section needs the dish named, or a sandwich film ends up in an almond-biscuit section.
+    seen = is_hook and item.get("source") == "drive" and bool(item.get("visual_score"))
     # The hook may show any part of its theme ("church" or "potluck"), the dish scenes the dish.
     if is_hook:
         named = True  # the hook matches the sentence visually; titles need not name the theme
@@ -643,7 +644,8 @@ class AutoYouTubeManager:
             length = float(item.get("duration_seconds") or item.get("duration") or 0)
             # Own footage first (no YouTube request, no bot check); archive films for a period opening.
             source = str(item.get("source") or "")
-            return (3.0 * (source == "drive") + 1.5 * (source == "archive" and is_hook)
+            # Own footage first only when it is this dish (named); archive films for a period opening.
+            return (3.0 * (source == "drive" and mentions_topic(title, dish)) + 1.5 * (source == "archive" and is_hook)
                     + 2.0 * mentions_topic(title, dish) + 0.5 * bool(recipe and dish != recipe and mentions_topic(title, recipe))
                     + 1.0 * run.profile.good_title(title)
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
@@ -844,7 +846,8 @@ class AutoYouTubeManager:
                 (item for item in pool.values() if usable(item)),
                 # A period opening prefers genuine archive films; everything else our own Drive footage.
                 key=lambda item: ((2 if is_hook and run.profile.period and item.get("source") == "archive"
-                                   else 1 if item.get("source") == "drive" else 0),
+                                   else 1 if item.get("source") == "drive" and mentions_topic(str(item.get("title") or ""), core)
+                                   else 0),
                                   str(item.get("video_id")) not in used_now, candidate_relevance(item, scene)),
                 reverse=True,
             )

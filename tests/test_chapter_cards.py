@@ -41,3 +41,10 @@ class ChapterCardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Signposts(unittest.TestCase):
+    def test_outro_is_not_a_chapter(self):
+        from app.chapter_cards import heading_scenes
+        scenes = [{"narration": "ALMOND BISCUITS"}, {"narration": "OUTRO"}, {"narration": "Thanks for watching."}]
+        self.assertEqual([scene["narration"] for scene in heading_scenes(scenes)], ["ALMOND BISCUITS"])

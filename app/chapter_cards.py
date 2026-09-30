@@ -193,8 +193,16 @@ def _web_chapter(db: Database, project_id: str, scene: dict[str, Any], design: s
     return True
 
 
+# Script signposts, not chapters: they get footage (no card, no "OUTRO" caption).
+STRUCTURAL = {"outro", "intro", "introduction", "conclusion", "hook", "ending", "final thoughts", "the end", "closing"}
+
+
+def is_signpost(scene: dict[str, Any]) -> bool:
+    return heading_subject(str(scene.get("narration") or "")).strip(" .") in STRUCTURAL
+
+
 def heading_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [scene for scene in scenes if heading_subject(str(scene.get("narration") or ""))]
+    return [scene for scene in scenes if heading_subject(str(scene.get("narration") or "")) and not is_signpost(scene)]
 
 
 def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_path: str = "ffmpeg") -> int:
@@ -215,6 +223,9 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
         remember_designs(paths.root, style.key, list(dict.fromkeys(designs)))
     except Exception:
         designs = []
+    for scene in scenes:
+        if is_signpost(scene) and str(scene.get("caption_text") or "").strip():
+            db.update_scene(str(scene["id"]), {"caption_text": ""})  # never show "OUTRO" on screen
     for count, scene in enumerate(headings, start=1):
         raw = str(scene["narration"]).strip()
         numbered = re.match(r"\s*#?(\d+)", raw) if _NUMBERING.match(raw) else None

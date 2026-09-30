@@ -177,7 +177,8 @@ def search_drive(files: list[dict[str, Any]], query: str, maximum: int = 6) -> l
     seen: set[str] = set()
     for item in files:
         # The same download is often copied into several project folders: one copy is enough.
-        key = item["name"].strip().lower()
+        # "Film", "Film_2", "Film (1)", "Copy of Film" are one download copied into several folders.
+        key = re.sub(r"(^copy of |[\s_-]*(\(\d+\)|_\d+|copy)$)", "", item["name"].strip().lower())
         if key in seen:
             continue
         seen.add(key)
@@ -197,9 +198,16 @@ def drive_id(path: str) -> str:
 
 
 def drive_info(path: str, ffprobe_path: str) -> dict[str, Any]:
+    try:
+        return _drive_info(path, ffprobe_path)
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise ProviderError(f"The Drive file did not open in time: {error}") from error
+
+
+def _drive_info(path: str, ffprobe_path: str) -> dict[str, Any]:
     result = subprocess.run(
         [ffprobe_path, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration",
-         "-of", "json", path], capture_output=True, text=True, timeout=600,
+         "-of", "json", path], capture_output=True, text=True, timeout=90,  # a Drive file slower than this is skipped
     )
     try:
         data = json.loads(result.stdout or "{}")

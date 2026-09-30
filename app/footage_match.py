@@ -361,7 +361,12 @@ def scene_subjects(scenes: list[dict[str, Any]], topic: str) -> list[str]:
     subjects: list[str] = []
     for scene in scenes:
         for sentence in _script_sentences(str(scene.get("narration") or "")):
-            current = heading_subject(sentence) or current
+            heading = heading_subject(sentence)
+            if heading.strip(" .") in {"outro", "intro", "introduction", "conclusion", "hook", "ending",
+                                       "final thoughts", "the end", "closing"}:
+                current = ""  # a signpost ("OUTRO") is not a dish: its scenes use their own words
+            elif heading:
+                current = heading
         subjects.append(current)
     return subjects
 
