@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden}
+  #bg{position:absolute;inset:0}
+  #tag{position:absolute;left:560px;top:230px;width:800px;height:620px;border-radius:30px 30px 30px 30px;
+       box-shadow:0 30px 70px rgba(0,0,0,.5)}
+  #tag:before{content:"";position:absolute;left:50%;top:40px;width:46px;height:46px;margin-left:-23px;border-radius:50%;background:rgba(0,0,0,.35)}
+  #string{position:absolute;left:958px;top:0;width:4px;height:275px;background:rgba(255,255,255,.55)}
+  #coin{position:absolute;left:1270px;top:640px;width:170px;height:170px;border-radius:50%;
+        background:radial-gradient(circle at 35% 35%,#f7e3a1,#b8912f);box-shadow:0 12px 26px rgba(0,0,0,.5)}
+  .word{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;text-align:center}
+</style></head>
+<body>
+<div id="stage" data-composition-id="price_tag" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="bg" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="card" class="clip" data-start="0" data-duration="600" data-track-index="1"><div id="string"></div><div id="tag"></div><div id="coin"></div></div>
+  <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4, k = Math.min(1, seconds / 4);
+  document.getElementById("bg").style.background = `radial-gradient(circle at 50% 40%, ${p.bg_inner}, ${p.bg_outer})`;
+  document.getElementById("tag").style.background = p.card;
+  const tl = gsap.timeline({paused: true});
+  tl.from("#card", {y: -700, rotation: -8, transformOrigin: "50% 0%", duration: 0.55 * k, ease: "back.out(1.3)"}, 0);
+  tl.to("#card", {rotation: 2, duration: 0.5 * k, yoyo: true, repeat: 3, ease: "sine.inOut", transformOrigin: "50% 0%"}, 0.55 * k);
+  tl.from("#coin", {scale: 0, rotation: -180, duration: 0.4 * k, ease: "back.out(2)"}, 0.7 * k);
+  if (p.show_text) {
+    (p.texts || []).forEach((t, i) => {
+      const el = document.createElement("div"); el.className = "word"; el.textContent = t.text;
+      el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};letter-spacing:${t.spacing || 0}px`;
+      document.getElementById("words").appendChild(el);
+      tl.from(el, {opacity: 0, scale: i === 1 ? 1.6 : 1, duration: 0.3 * k}, (0.45 + i * 0.2) * k);
+    });
+  }
+  window.__timelines = window.__timelines || {}; window.__timelines.price_tag = tl;
+</script>
+</body></html>

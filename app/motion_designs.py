@@ -54,6 +54,110 @@ DESIGNS: dict[str, Design] = {item.key: item for item in (
 )}
 
 
+EXTRA_DESIGNS = {"map": "map_pins", "price": "price_tag", "years": "year_timeline", "comment": "comment_card"}
+for _key, _name, _mood in (("map_pins", "Map with dropping pins", "places, regions"),
+                           ("price_tag", "Hanging price tag with a coin", "prices back then"),
+                           ("year_timeline", "Timeline bar between two years", "periods, decades"),
+                           ("comment_card", "Speech-bubble question for the comments", "questions to viewers")):
+    DESIGNS[_key] = Design(_key, "extra", "hyperframes", _name, _mood)
+
+
+def _wrap_words(text: str, width: int) -> list[str]:
+    lines: list[str] = []
+    for word in text.split():
+        if lines and len(lines[-1]) + 1 + len(word) <= width:
+            lines[-1] += " " + word
+        else:
+            lines.append(word)
+    return lines
+
+
+def _map_shapes(country: str, places: list[dict[str, Any]]) -> tuple[str, list[dict[str, float]]]:
+    """SVG path of the country and pin positions, fitted into the frame (equirectangular, latitude-corrected)."""
+    import math
+
+    shapes = json.loads((Path(__file__).parent / "data" / "countries.json").read_text())
+    rings = shapes.get(country) or []
+    if country == "GB":
+        rings = rings + shapes.get("IE", [])
+    points = [point for ring in rings for point in ring] or [[place["lon"], place["lat"]] for place in places]
+    lons, lats = [point[0] for point in points], [point[1] for point in points]
+    squeeze = math.cos(math.radians((min(lats) + max(lats)) / 2))
+    width, height = (max(lons) - min(lons)) * squeeze or 1, (max(lats) - min(lats)) or 1
+    scale = min(1500 / width, 880 / height)
+    left = (W - width * scale) / 2
+    top = (H - height * scale) / 2
+
+    def xy(lon: float, lat: float) -> tuple[float, float]:
+        return left + (lon - min(lons)) * squeeze * scale, top + (max(lats) - lat) * scale
+
+    path = " ".join("M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in (xy(lon, lat) for lon, lat in ring)) + " Z"
+                    for ring in rings)
+    pins = [dict(zip(("x", "y"), (round(value, 1) for value in xy(place["lon"], place["lat"])))) for place in places]
+    return path, pins
+
+
+def _place_labels(names: list[str], pins: list[dict[str, float]], font: str, size: int = 44) -> list[dict[str, Any]]:
+    """Each place name next to its pin (above, below, left or right), never on top of another name or pin."""
+    boxes: list[tuple[float, float, float, float]] = [(pin["x"] - 22, pin["y"] - 40, pin["x"] + 22, pin["y"] + 6) for pin in pins]
+    texts = []
+    for name, pin in zip(names, pins):
+        width, height = len(name) * size * 0.56 + 32, size + 16
+        for dx, dy in ((0, -75), (0, 55), (-(width / 2 + 40), -18), (width / 2 + 40, -18), (0, -140), (0, 120)):
+            x, y = pin["x"] + dx, pin["y"] + dy
+            box = (x - width / 2, y - height / 2, x + width / 2, y + height / 2)
+            clear = all(box[2] < other[0] or box[0] > other[2] or box[3] < other[1] or box[1] > other[3] for other in boxes)
+            if clear and 20 < box[0] and box[2] < W - 20 and 20 < box[1] and box[3] < H - 20:
+                break
+        boxes.append(box)
+        texts.append({"text": name, "x": round(x, 1), "y": round(y, 1), "size": size, "color": "#1e180e", "font": font})
+    return texts
+
+
+def extra_payload(moment: dict[str, Any], style: ChannelStyle, seconds: float, show_text: bool = True) -> dict[str, Any]:
+    """Payload (with word positions) for a map / price / years / comment graphic in the channel's look."""
+    title_font, label_font = _family(style.chapter_title_fonts), _family(style.chapter_label_fonts)
+    dark_backdrop = sum(style.bg_outer) < 300
+    ink = "#f6f0e4" if dark_backdrop else "#2a2118"
+    base = {"seconds": seconds, "show_text": show_text, "bg_inner": _hex(style.bg_inner), "bg_outer": _hex(style.bg_outer),
+            "accent": _hex(style.highlight), "ink": ink, "card": _hex(style.print_border), "label_font": label_font,
+            "title_font": title_font}
+    kind = moment["type"]
+    if kind == "map":
+        path, pins = _map_shapes(moment["country"], moment["places"])
+        texts = _place_labels([place["name"] for place in moment["places"]], pins, label_font)
+        return {**base, "path": path, "pins": pins, "texts": texts, "land": _hex(style.chapter_tint),
+                "label_bg": _hex(style.print_border)}
+    if kind == "price":
+        return {**base, "texts": [
+            {"text": "IT COST", "x": 960, "y": 380, "size": 46, "color": "#5a4632", "font": label_font, "spacing": 8},
+            {"text": moment["price"].title(), "x": 960, "y": 540, "size": 150 if len(moment["price"]) < 10 else 110,
+             "color": "#1e180e", "font": title_font},
+            {"text": f"in the {moment['when']}" if moment.get("when") else "back then", "x": 960, "y": 700, "size": 58,
+             "color": "#5a4632", "font": label_font},
+        ]}
+    if kind == "years":
+        return {**base, "texts": [
+            {"text": moment["start"], "x": 360, "y": 470, "size": 110, "color": ink, "font": title_font},
+            {"text": moment["end"], "x": 1560, "y": 470, "size": 110, "color": ink, "font": title_font},
+        ]}
+    lines = _wrap_words(moment["question"], 34)[:4]
+    first = 500 - (len(lines) - 1) * 45
+    return {**base, "texts": [
+        {"text": "YOUR TURN", "x": 960, "y": 280, "size": 44, "color": _hex(style.highlight), "font": label_font, "spacing": 8},
+        *[{"text": line, "x": 960, "y": first + index * 90, "size": 66, "color": "#1e180e", "font": title_font}
+          for index, line in enumerate(lines)],
+        {"text": "Comment below", "x": 960, "y": 740, "size": 50, "color": "#5a4632", "font": label_font},
+    ]}
+
+
+def render_extra(moment: dict[str, Any], style_key: str, seconds: float, destination: Path,
+                 ffmpeg_path: str = "ffmpeg", show_text: bool = True) -> dict[str, Any]:
+    payload = extra_payload(moment, get_style(style_key), seconds, show_text)
+    render_design(EXTRA_DESIGNS[moment["type"]], payload, destination, ffmpeg_path)
+    return payload
+
+
 def _row(count: int, photo: int, top: int, label_y: int, gap: int = 70) -> list[list[float]]:
     left = (W - (photo * count + gap * (count - 1))) / 2
     return [[left + index * (photo + gap), top, left + index * (photo + gap) + photo / 2, label_y] for index in range(count)]
@@ -319,6 +423,11 @@ def text_layers(metadata: dict[str, Any], style: ChannelStyle) -> list[dict[str,
                            "color": _rgb(payload.get("heading_color", "#aa3333")),
                            "font": _font_file(style.chapter_title_fonts), "appear": 0.4})
         return layers
+    if kind == "extra":
+        return [{"role": design.replace("_", " "), "text": text["text"], "x": text["x"], "y": text["y"], "size": text["size"],
+                 "color": _rgb(text["color"]), "font": _font_file(style.chapter_label_fonts), "appear": 0.4,
+                 "letter_spacing": float(text.get("spacing") or 0) / 10}
+                for text in payload.get("texts") or []]
     if kind == "chapter":
         return [{"role": "chapter text", "text": text["text"], "x": text["x"], "y": text["y"], "size": text["size"],
                  "color": _rgb(text["color"]), "font": _font_file(style.chapter_title_fonts if index else style.chapter_label_fonts),

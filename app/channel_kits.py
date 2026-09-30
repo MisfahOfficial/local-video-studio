@@ -22,16 +22,20 @@ _lock = threading.Lock()
 DEFAULT_KITS: dict[str, dict[str, Any]] = {
     "v1": {"name": "V1 · Vintage Life of USA", "style": "v1", "country": "US", "profile": "vintage_recipe",
            "chapter_designs": ["vintage_tv", "newspaper"], "ingredient_designs": ["carousel", "scrapbook"],
-           "captions": {"animation": "highlight", "position": "bottom"}},
+           "captions": {"animation": "highlight", "position": "bottom"},
+           "extras": ["map", "price", "years", "comment"]},
     "v2": {"name": "V2 · Forgotten Flavors of USA", "style": "v2", "country": "US", "profile": "vintage_recipe",
            "chapter_designs": ["typewriter_card", "classic"], "ingredient_designs": ["recipe_book", "scrapbook"],
-           "captions": {"animation": "highlight", "position": "bottom"}},
+           "captions": {"animation": "highlight", "position": "bottom"},
+           "extras": ["map", "price", "years", "comment"]},
     "v3": {"name": "V3 · Britain We Lived In", "style": "v3", "country": "GB", "profile": "vintage_recipe",
            "chapter_designs": ["film_slate", "typewriter_card"], "ingredient_designs": ["chalkboard", "cards"],
-           "captions": {"animation": "highlight", "position": "bottom"}},
+           "captions": {"animation": "highlight", "position": "bottom"},
+           "extras": ["map", "price", "years", "comment"]},
     "v4": {"name": "V4 · Canada We Lived In", "style": "v4", "country": "CA", "profile": "vintage_recipe",
            "chapter_designs": ["typewriter_card", "film_slate"], "ingredient_designs": ["scrapbook", "chalkboard"],
-           "captions": {"animation": "highlight", "position": "bottom"}},
+           "captions": {"animation": "highlight", "position": "bottom"},
+           "extras": ["map", "price", "years", "comment"]},
 }
 
 

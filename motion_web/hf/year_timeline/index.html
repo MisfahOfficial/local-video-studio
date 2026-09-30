@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden}
+  #bg{position:absolute;inset:0}
+  #line{position:absolute;left:360px;top:600px;width:1200px;height:10px;border-radius:5px}
+  .tick{position:absolute;top:585px;width:4px;height:40px;border-radius:2px;opacity:.6}
+  .dot{position:absolute;top:580px;width:50px;height:50px;margin-left:-25px;border-radius:50%;border:8px solid}
+  .word{position:absolute;transform:translate(-50%,-50%);white-space:nowrap}
+</style></head>
+<body>
+<div id="stage" data-composition-id="year_timeline" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="bg" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="bar" class="clip" data-start="0" data-duration="600" data-track-index="1"><div id="line"></div></div>
+  <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4, k = Math.min(1, seconds / 4);
+  document.getElementById("bg").style.background = `radial-gradient(circle at 50% 45%, ${p.bg_inner}, ${p.bg_outer})`;
+  const line = document.getElementById("line"); line.style.background = p.accent;
+  const bar = document.getElementById("bar");
+  for (let i = 1; i < 10; i++) {
+    const t = document.createElement("div"); t.className = "tick"; t.style.left = (360 + i * 120) + "px"; t.style.background = p.ink; bar.appendChild(t);
+  }
+  [360, 1560].forEach(x => { const d = document.createElement("div"); d.className = "dot";
+    d.style.cssText += `left:${x}px;background:${p.bg_outer};border-color:${p.accent}`; bar.appendChild(d); });
+  const tl = gsap.timeline({paused: true});
+  tl.from(line, {scaleX: 0, transformOrigin: "0% 50%", duration: 0.7 * k, ease: "power2.inOut"}, 0.1 * k);
+  tl.from(".tick", {scaleY: 0, stagger: 0.04 * k, duration: 0.2 * k}, 0.2 * k);
+  tl.from(".dot", {scale: 0, stagger: 0.5 * k, duration: 0.3 * k, ease: "back.out(2)"}, 0.1 * k);
+  if (p.show_text) {
+    (p.texts || []).forEach((t, i) => {
+      const el = document.createElement("div"); el.className = "word"; el.textContent = t.text;
+      el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};letter-spacing:${t.spacing || 0}px`;
+      document.getElementById("words").appendChild(el);
+      tl.from(el, {opacity: 0, y: 30, duration: 0.35 * k}, (0.2 + i * 0.45) * k);
+    });
+  }
+  window.__timelines = window.__timelines || {}; window.__timelines.year_timeline = tl;
+</script>
+</body></html>

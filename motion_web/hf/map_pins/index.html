@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden}
+  #bg{position:absolute;inset:0}
+  svg{position:absolute;left:0;top:0}
+  .pin{position:absolute;width:34px;height:34px;margin:-34px 0 0 -17px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 6px 12px rgba(0,0,0,.45)}
+  .pin:after{content:"";position:absolute;left:10px;top:10px;width:14px;height:14px;border-radius:50%;background:rgba(255,255,255,.9)}
+  .ring{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;border:3px solid}
+  .word{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;padding:6px 16px;border-radius:8px}
+</style></head>
+<body>
+<div id="stage" data-composition-id="map_pins" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="bg" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="map" class="clip" data-start="0" data-duration="600" data-track-index="1"></div>
+  <div id="pins" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4, k = Math.min(1, seconds / 4);
+  document.getElementById("bg").style.background = `radial-gradient(circle at 50% 45%, ${p.bg_inner}, ${p.bg_outer})`;
+  document.getElementById("map").innerHTML =
+    `<svg width="1920" height="1080" viewBox="0 0 1920 1080"><path id="land" d="${p.path}" fill="${p.land}" stroke="${p.accent}" stroke-width="3" stroke-linejoin="round"/></svg>`;
+  const tl = gsap.timeline({paused: true});
+  tl.from("#map", {scale: 1.12, opacity: 0, transformOrigin: "50% 50%", duration: 0.5 * k, ease: "power2.out"}, 0);
+  const pins = document.getElementById("pins");
+  (p.pins || []).forEach((pin, i) => {
+    const ring = document.createElement("div"); ring.className = "ring";
+    ring.style.cssText += `left:${pin.x}px;top:${pin.y}px;border-color:${p.accent}`;
+    const dot = document.createElement("div"); dot.className = "pin";
+    dot.style.cssText += `left:${pin.x}px;top:${pin.y}px;background:${p.accent}`;
+    pins.appendChild(ring); pins.appendChild(dot);
+    const at = (0.35 + i * 0.3) * k;
+    tl.from(dot, {y: -120, opacity: 0, duration: 0.3 * k, ease: "bounce.out"}, at);
+    tl.fromTo(ring, {scale: 0.5, opacity: 0.9}, {scale: 4, opacity: 0, duration: 0.8 * k, ease: "power1.out"}, at + 0.2 * k);
+  });
+  if (p.show_text) {
+    (p.texts || []).forEach((t, i) => {
+      const el = document.createElement("div"); el.className = "word"; el.textContent = t.text;
+      el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};background:${p.label_bg}`;
+      pins.appendChild(el);
+      tl.from(el, {opacity: 0, y: 12, duration: 0.3 * k}, (0.55 + i * 0.3) * k);
+    });
+  }
+  window.__timelines = window.__timelines || {}; window.__timelines.map_pins = tl;
+</script>
+</body></html>

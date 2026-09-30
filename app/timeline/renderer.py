@@ -451,6 +451,16 @@ class FFmpegRenderer:
                                   source_in_seconds=0, crop=None, film_look=False)
                 bare.unlink(missing_ok=True)
                 return
+            if asset.get("provider") == "graphic" and metadata.get("moment"):
+                from ..motion_designs import render_extra
+
+                bare = destination.with_name(destination.stem + "-bare.mp4")
+                render_extra(metadata["moment"], getattr(self._style, "key", ""), duration, bare, self.ffmpeg_path,
+                             show_text=False)
+                self._render_clip(bare, destination, "video", duration, scene, width, height, fps, encoder,
+                                  source_in_seconds=0, crop=None, film_look=False)
+                bare.unlink(missing_ok=True)
+                return
             if asset.get("provider") == "graphic" and metadata.get("graphic") == "ingredients" and items:
                 from ..graphics_editor import draw_graphic
 

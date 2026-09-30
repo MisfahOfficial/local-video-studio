@@ -265,6 +265,7 @@ class _Run:
     style: Any = None  # the project's channel style (motion graphics look)
     profile: Any = field(default_factory=lambda: BUILTIN[DEFAULT_KIND])  # what the footage should be
     designs: dict[str, str] = field(default_factory=dict)  # ingredient scene -> motion design (AI-chosen)
+    moments: dict[str, dict[str, Any]] = field(default_factory=dict)  # scene -> map / price / years / comment graphic
     # scene id -> (candidate, start, topic score) options planned from its section's footage pool.
     planned: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     # (dish subject, recipe, sources) of every list section, in story order: the hook's teaser shots.
@@ -465,6 +466,17 @@ class AutoYouTubeManager:
         # Each ingredient graphic gets a design the AI picked for this video, never the same look twice in a row
         # and led by one this channel has not used lately.
         card_order = [str(item["id"]) for item in all_scenes if str(item["id"]) in run.card_ids]
+        # Extra graphics the script calls for (a place, a price, a span of years, a question), as the kit allows.
+        try:
+            from .channel_kits import kit_for
+            from .graphic_moments import plan_moments
+
+            allowed_extras = set(kit_for(self.paths.root, run.style.key).get("extras") or [])
+            skip = run.card_ids | run.hook_ids | ({run.gallery_id} if run.gallery_id else set())
+            run.moments = {key: value for key, value in plan_moments(all_scenes, run.era, skip).items()
+                           if value["type"] in allowed_extras}
+        except Exception:
+            run.moments = {}
         planned_designs = plan_designs("ingredients", len(card_order), script, run.style.key, self.paths.root, settings)
         run.designs = dict(zip(card_order, planned_designs))
         # 80:20 - four of five filmable scenes are real video; photos may replace a weak clip only
@@ -778,6 +790,13 @@ class AutoYouTubeManager:
         is_hook = str(scene["id"]) in run.hook_ids
         # The hook is searched like testing 10 did it: the sentence's own words with the era
         # ("1950s christmas table footage"), period footage preferred, no theme requirement.
+        moment = run.moments.get(str(scene["id"]))
+        if moment and self._extra_graphic(run, scene, position, moment):
+            with run.lock:
+                run.completed += 1
+                run.graphics.append(position)
+            self._progress(run)
+            return
         try:
             graphic = run.verifier is not None and self._motion_graphic(run, scene, position, is_hook)
         except Exception as error:  # a failed card falls back to footage like any other scene
@@ -1169,6 +1188,22 @@ class AutoYouTubeManager:
         destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
         encode(frame, duration, destination, ffmpeg_path=run.service.ffmpeg_path)
         return self._save_graphic(run, scene, destination, metadata)
+
+    def _extra_graphic(self, run: "_Run", scene: dict[str, Any], position: int, moment: dict[str, Any]) -> bool:
+        """A map, price, years or comment card in the channel's look; False (footage instead) if it cannot render."""
+        from .motion_designs import EXTRA_DESIGNS, render_extra
+
+        duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+        destination = (self.paths.project_dir(run.project_id) / "assets" / "graphics"
+                       / f"scene-{position:04d}-{moment['type']}-{uuid.uuid4().hex[:6]}.mp4")
+        try:
+            payload = render_extra(moment, run.style.key, duration, destination, run.service.ffmpeg_path)
+        except Exception as error:
+            with run.lock:
+                run.notes[position] = f"{moment['type']} graphic failed, footage used: {str(error)[:150]}"
+            return False
+        return self._save_graphic(run, scene, destination, {
+            "graphic": moment["type"], "design": EXTRA_DESIGNS[moment["type"]], "payload": payload, "moment": moment})
 
     def _save_graphic(self, run: "_Run", scene: dict[str, Any], destination: Path, metadata: dict[str, Any]) -> bool:
         asset = self.db.add_asset(
