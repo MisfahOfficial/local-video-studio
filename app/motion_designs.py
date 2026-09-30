@@ -76,7 +76,7 @@ def _map_shapes(country: str, places: list[dict[str, Any]]) -> tuple[str, list[d
     """SVG path of the country and pin positions, fitted into the frame (equirectangular, latitude-corrected)."""
     import math
 
-    shapes = json.loads((Path(__file__).parent / "data" / "countries.json").read_text())
+    shapes = json.loads((Path(__file__).parent / "geo" / "countries.json").read_text())
     rings = shapes.get(country) or []
     if country == "GB":
         rings = rings + shapes.get("IE", [])
