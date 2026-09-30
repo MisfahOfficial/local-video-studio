@@ -12,7 +12,7 @@ EDITABLE = {"ingredients", "gallery"}
 
 
 def draw_graphic(kind: str, items: list[dict[str, str]], style_key: str, duration: float, destination: Path,
-                 ffmpeg_path: str = "ffmpeg") -> Path:
+                 ffmpeg_path: str = "ffmpeg", show_labels: bool = True) -> Path:
     from PIL import Image
 
     from .motion.engine import encode
@@ -21,7 +21,7 @@ def draw_graphic(kind: str, items: list[dict[str, str]], style_key: str, duratio
     style = get_style(style_key)
     pictures = [(str(item.get("label") or ""), Image.open(str(item["image"])).convert("RGB")) for item in items]
     if kind == "ingredients":
-        frame = ingredient_cards(pictures, style)
+        frame = ingredient_cards(pictures, style, show_labels=show_labels)
     else:
         frame = gallery_stack([image for _label, image in pictures], style)
     return encode(frame, duration, destination, ffmpeg_path=ffmpeg_path)

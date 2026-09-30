@@ -1,8 +1,9 @@
 """Hand a finished timeline to Premiere Pro (FCP7 XML) and CapCut desktop (a native draft).
 
-Both editors get the tool's own 1080p per-clip renders, so logo zooms, motion and
-fades look exactly like the export; the untouched YouTube excerpts are copied
-alongside for swapping.
+Both editors get the tool's own 1080p per-clip renders (logo zooms, motion and fades as in
+the export) with no words baked in: captions, chapter titles and ingredient names come as
+separate, editable text (CapCut text layers; Premiere caption tracks). Scenes with no
+footage yet are black and marked, and AI images are marked for replacement.
 """
 from __future__ import annotations
 
@@ -32,7 +33,8 @@ def build_edit_package(
     *, project: dict[str, Any], scenes: list[dict[str, Any]], timeline_clips: list[dict[str, Any]],
     assets: list[dict[str, Any]], project_dir: Path, destination: Path, caption_style: dict[str, Any] | None,
     fps: int = 30, width: int = 1920, height: int = 1080, capcut: bool = False,
-    capcut_root: Path = CAPCUT_DRAFTS, ffprobe_path: str = "ffprobe",
+    capcut_root: Path = CAPCUT_DRAFTS, ffprobe_path: str = "ffprobe", missing_positions: list[int] | None = None,
+    library: Path | None = None,
 ) -> dict[str, str]:
     """Copy the rendered clips, voice-over and captions into a folder with a Premiere XML."""
     name = _safe(str(project.get("name") or "Video"))
@@ -48,8 +50,11 @@ def build_edit_package(
     assets_by_id = {asset["id"]: asset for asset in assets}
 
     clips: list[tuple[Path, float, float]] = []
+    editable_dir = project_dir / "cache" / "clips-editable"
     for clip in timeline_clips:
-        rendered = project_dir / "cache" / "clips" / f"timeline-{int(clip['position']):04d}.mp4"
+        rendered = editable_dir / f"timeline-{int(clip['position']):04d}.mp4"
+        if not rendered.is_file():
+            rendered = project_dir / "cache" / "clips" / f"timeline-{int(clip['position']):04d}.mp4"
         if not rendered.is_file():
             raise RuntimeError("Render the video once before exporting an edit package")
         target = media_dir / f"clip-{int(clip['position']):04d}.mp4"
@@ -66,30 +71,112 @@ def build_edit_package(
     if original_vo.is_file():
         voiceover = package / f"voiceover{original_vo.suffix}"
         shutil.copy2(original_vo, voiceover)
-    # Animated highlight captions are already inside the rendered clips.
-    animated = (caption_style or {}).get("animation") == "highlight"
-    captions = [] if animated else [segment for scene in scenes for segment in caption_segments(scene, caption_style)]
-    srt = project_dir / "captions.srt"
-    if srt.is_file():
-        shutil.copy2(srt, package / "captions.srt")
+    # Every word is editable: captions always travel as text, never burned into the clips.
+    captions = [segment for scene in scenes for segment in caption_segments(scene, caption_style)]
+    on_screen = on_screen_text(project, scenes, assets_by_id, library)
+    markers = review_markers(timeline_clips, scenes_by_id, assets_by_id, set(missing_positions or []))
+    write_srt(package / "captions.srt", captions)
+    write_srt(package / "on-screen text (chapters, ingredients).srt",
+              [(layer["start"], layer["end"], layer["text"]) for layer in on_screen])
+    if markers:
+        (package / "MISSING FOOTAGE.txt").write_text(markers_text(markers), encoding="utf-8")
 
     (package / "CREDITS.txt").write_text(credits_text(scenes, assets_by_id), encoding="utf-8")
     vo_duration = probe_duration(voiceover, ffprobe_path) if voiceover else clips[-1][2]
     xml_path = package / f"{name} - Premiere.xml"
-    write_premiere_xml(xml_path, name, clips, voiceover, vo_duration, fps, width, height)
+    write_premiere_xml(xml_path, name, clips, voiceover, vo_duration, fps, width, height, markers)
     (package / "HOW TO OPEN.txt").write_text(
         "Premiere Pro: File > Import > choose the .xml file. A sequence with every clip and the voice-over opens.\n"
-        "Captions: File > Import > captions.srt, then drag it onto the sequence.\n"
+        "  Words: File > Import > captions.srt and 'on-screen text (chapters, ingredients).srt', drag each onto the\n"
+        "  sequence. They are editable caption tracks (right-click > Upgrade caption to graphic for full styling).\n"
+        "  Red markers and red clips = scenes with no footage yet; orange = AI images to replace (see MISSING FOOTAGE.txt).\n"
         "CapCut: open CapCut; the project appears in your project list (quit CapCut before exporting).\n"
-        "media/ holds the edited 1080p clips; originals/ holds the untouched YouTube excerpts.\n",
+        "  Captions, chapter titles and ingredient names are separate text layers; red/orange text on the top\n"
+        "  track marks missing footage and AI images (delete those notes once replaced).\n"
+        "media/ holds the edited 1080p clips (no words on them); originals/ holds the untouched source excerpts.\n",
         encoding="utf-8",
     )
     result = {"package": str(package), "premiere_xml": str(xml_path)}
     if capcut:
         result["capcut_draft"] = str(write_capcut_draft(
             capcut_root, name, clips, voiceover, vo_duration, captions, caption_style or {}, width, height, fps,
+            on_screen=on_screen, markers=markers,
         ))
     return result
+
+
+def on_screen_text(project: dict[str, Any], scenes: list[dict[str, Any]],
+                   assets_by_id: dict[str, dict[str, Any]], library: Path | None = None) -> list[dict[str, Any]]:
+    """Chapter titles and ingredient names, with where and when each appears."""
+    from .channel_styles import get_style
+    from .chapter_cards import card_text_layout
+    from .ingredient_library import redrawable_items
+    from .motion.templates import ingredient_label_layout
+
+    style = get_style((project.get("effects") or {}).get("channel_style"))
+    layers: list[dict[str, Any]] = []
+    for scene in scenes:
+        asset = assets_by_id.get(str(scene.get("selected_asset_id") or "")) or {}
+        metadata = asset.get("metadata") or {}
+        start, end = float(scene["start_seconds"]), float(scene["end_seconds"])
+        # Only cards that were redrawn without words get text layers (else the words would show twice).
+        if (asset.get("provider") == "chapter" and metadata.get("title")
+                and Path(str(metadata.get("plain_path") or "")).is_file()):
+            found = card_text_layout(str(metadata["title"]), int(metadata.get("chapter") or 1), style)
+        elif asset.get("provider") == "graphic" and metadata.get("graphic") == "ingredients":
+            items = redrawable_items(metadata, library)
+            found = ingredient_label_layout([item["label"] for item in items], style) if items else []
+        else:
+            continue
+        for layer in found:
+            layers.append({**layer, "start": min(end - 0.1, start + float(layer.get("appear") or 0)), "end": end})
+    return layers
+
+
+MISSING, AI_IMAGE = "MISSING FOOTAGE", "AI IMAGE - replace with real footage"
+
+
+def review_markers(timeline_clips: list[dict[str, Any]], scenes_by_id: dict[str, dict[str, Any]],
+                   assets_by_id: dict[str, dict[str, Any]], missing: set[int]) -> list[dict[str, Any]]:
+    """Scenes an editor must fill: no footage at all, or only an AI image."""
+    markers = []
+    for clip in timeline_clips:
+        scene = scenes_by_id.get(clip["scene_id"]) or {}
+        asset = assets_by_id.get(str(scene.get("selected_asset_id") or ""))
+        position = int(clip["position"])
+        kind = MISSING if position in missing or not asset else (
+            AI_IMAGE if (asset or {}).get("provider") in {"generated", "runware"} else "")
+        if kind:
+            markers.append({
+                "kind": kind, "position": position, "start": float(clip["start_seconds"]),
+                "end": float(clip["end_seconds"]), "narration": str(scene.get("narration") or "").strip(),
+            })
+    return markers
+
+
+def _timecode(seconds: float) -> str:
+    whole = int(seconds)
+    return f"{whole // 3600:02d}:{whole % 3600 // 60:02d}:{whole % 60:02d}"
+
+
+def markers_text(markers: list[dict[str, Any]]) -> str:
+    lines = ["Scenes to fill before publishing", ""]
+    for marker in markers:
+        lines.append(f"{_timecode(marker['start'])}  scene {marker['position']}  {marker['kind']}")
+        lines.append(f"    \"{marker['narration'][:160]}\"")
+    return "\n".join(lines) + "\n"
+
+
+def _srt_time(seconds: float) -> str:
+    milliseconds = int(round(max(0.0, seconds) * 1000))
+    return (f"{milliseconds // 3_600_000:02d}:{milliseconds % 3_600_000 // 60_000:02d}:"
+            f"{milliseconds % 60_000 // 1000:02d},{milliseconds % 1000:03d}")
+
+
+def write_srt(path: Path, segments: list[tuple[float, float, str]]) -> None:
+    blocks = [f"{index}\n{_srt_time(start)} --> {_srt_time(end)}\n{text}\n"
+              for index, (start, end, text) in enumerate(sorted(segments), start=1) if str(text).strip()]
+    path.write_text("\n".join(blocks), encoding="utf-8")
 
 
 def credits_text(scenes: list[dict[str, Any]], assets_by_id: dict[str, dict[str, Any]]) -> str:
@@ -123,16 +210,24 @@ def _url(path: Path) -> str:
 
 def write_premiere_xml(
     path: Path, name: str, clips: list[tuple[Path, float, float]], voiceover: Path | None,
-    vo_duration: float, fps: int, width: int, height: int,
+    vo_duration: float, fps: int, width: int, height: int, markers: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Final Cut Pro 7 XML (xmeml v4), which Premiere Pro imports as a sequence."""
+    """Final Cut Pro 7 XML (xmeml v4), which Premiere Pro imports as a sequence.
+    Scenes to fill get a sequence marker and a coloured, renamed clip (red: missing, orange: AI image)."""
     total = max(_frames(clips[-1][2], fps), _frames(vo_duration, fps)) if clips else _frames(vo_duration, fps)
+    flagged = {round(marker["start"], 3): marker for marker in markers or []}
     video_items = []
     for index, (file, start, end) in enumerate(clips, start=1):
         first, last = _frames(start, fps), _frames(end, fps)
         length = max(1, last - first)
+        marker = flagged.get(round(start, 3))
+        label = ""
+        clip_name = file.name
+        if marker:
+            clip_name = f"{marker['kind']} - scene {marker['position']}"
+            label = "<labels><label2>{}</label2></labels>".format("Rose" if marker["kind"] == MISSING else "Mango")
         video_items.append(
-            f'<clipitem id="clipitem-{index}"><name>{escape(file.name)}</name><enabled>TRUE</enabled>'
+            f'<clipitem id="clipitem-{index}"><name>{escape(clip_name)}</name><enabled>TRUE</enabled>{label}'
             f"<duration>{length}</duration>{_rate(fps)}<start>{first}</start><end>{first + length}</end>"
             f"<in>0</in><out>{length}</out>"
             f'<file id="file-{index}"><name>{escape(file.name)}</name><pathurl>{escape(_url(file))}</pathurl>'
@@ -160,7 +255,12 @@ def write_premiere_xml(
         "<fielddominance>none</fielddominance></samplecharacteristics></format>"
         f"<track>{''.join(video_items)}</track></video>"
         f"<audio><numOutputChannels>2</numOutputChannels>{audio}</audio></media>"
-        f"<timecode>{_rate(fps)}<string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>"
+        + "".join(
+            f"<marker><name>{escape(marker['kind'])}</name><comment>{escape('scene ' + str(marker['position']) + ': ' + marker['narration'][:200])}</comment>"
+            f"<in>{_frames(marker['start'], fps)}</in><out>{_frames(marker['end'], fps)}</out></marker>"
+            for marker in markers or []
+        )
+        + f"<timecode>{_rate(fps)}<string>00:00:00:00</string><frame>0</frame><displayformat>NDF</displayformat></timecode>"
         "</sequence></xmeml>\n",
         encoding="utf-8",
     )
@@ -192,9 +292,35 @@ def _clone_segment(part: dict[str, Any], materials: dict[str, list[Any]], start:
     return segment
 
 
+def _text_segment(template: dict[str, Any], materials: dict[str, list[Any]], start: float, end: float, text: str,
+                  x: float, y: float, size: float | None = None, color: tuple[int, int, int] | None = None,
+                  font_path: str = "", letter_spacing: float = 0.0) -> dict[str, Any]:
+    """One editable CapCut text layer; x/y are CapCut's -1..1 canvas coordinates (y up)."""
+    content = json.loads(template["text"]["material"]["content"])
+    content["text"] = text
+    for style in content.get("styles", []):
+        style["range"] = [0, len(text)]
+        if size:
+            style["size"] = size
+        if color:
+            style["fill"]["content"]["solid"]["color"] = [round(channel / 255, 4) for channel in color]
+        if font_path:
+            style["font"] = {"id": "", "path": font_path}
+    segment = _clone_segment(template["text"], materials, start, max(0.1, end - start), {
+        "content": json.dumps(content, ensure_ascii=False), "letter_spacing": letter_spacing,
+    }, source=False)
+    segment["clip"]["transform"] = {"x": round(x, 4), "y": round(y, 4)}
+    return segment
+
+
+def _canvas(x_px: float, y_px: float, width: int, height: int) -> tuple[float, float]:
+    return (x_px - width / 2) / (width / 2), -(y_px - height / 2) / (height / 2)
+
+
 def write_capcut_draft(
     root: Path, name: str, clips: list[tuple[Path, float, float]], voiceover: Path | None, vo_duration: float,
     captions: list[tuple[float, float, str]], caption_style: dict[str, Any], width: int, height: int, fps: int,
+    on_screen: list[dict[str, Any]] | None = None, markers: list[dict[str, Any]] | None = None,
 ) -> Path:
     """A CapCut desktop draft that shows up in CapCut's project list."""
     if not root.is_dir():
@@ -236,23 +362,45 @@ def write_capcut_draft(
             "width": width, "height": height, "has_audio": False, "local_material_id": str(uuid.uuid4()),
         }))
 
-    text_track = copy.deepcopy(template["text"]["track"])
-    text_track.update(id=_new_id(), segments=[])
+    def new_text_track() -> dict[str, Any]:
+        track = copy.deepcopy(template["text"]["track"])
+        track.update(id=_new_id(), segments=[])
+        return track
+
     middle = str(caption_style.get("position") or "bottom") == "middle"
+    caption_track = new_text_track()
     for start, end, text in captions:
-        content = json.loads(template["text"]["material"]["content"])
-        content["text"] = text
-        for style in content.get("styles", []):
-            style["range"] = [0, len(text)]
-        segment = _clone_segment(template["text"], materials, start, end - start, {
-            "content": json.dumps(content, ensure_ascii=False),
-        }, source=False)
-        segment["clip"]["transform"] = {"x": 0.0, "y": 0.0 if middle else -0.78}
-        text_track["segments"].append(segment)
+        caption_track["segments"].append(_text_segment(template, materials, start, end, text, 0.0, 0.0 if middle else -0.78))
+
+    # Chapter titles and ingredient names at the exact place the tool drew them; one layer each.
+    # CapCut keeps overlapping text on separate tracks, so each word block gets the first free track.
+    screen_tracks: list[dict[str, Any]] = []
+    for layer in sorted(on_screen or [], key=lambda item: item["start"]):
+        x, y = _canvas(float(layer["x"]), float(layer["y"]), width, height)
+        segment = _text_segment(template, materials, layer["start"], layer["end"], layer["text"], x, y,
+                                size=round(float(layer["size"]) / 5.6, 1), color=tuple(layer["color"]),
+                                font_path=str(layer.get("font") or ""),
+                                letter_spacing=float(layer.get("letter_spacing") or 0.0))
+        for track in screen_tracks:
+            last = track["segments"][-1]["target_timerange"]
+            if last["start"] + last["duration"] <= segment["target_timerange"]["start"]:
+                track["segments"].append(segment)
+                break
+        else:
+            track = new_text_track()
+            track["segments"].append(segment)
+            screen_tracks.append(track)
+
+    # Notes for the editor at the top of the frame: red = no footage, orange = AI image.
+    marker_track = new_text_track()
+    for marker in markers or []:
+        colour = (230, 40, 40) if marker["kind"] == MISSING else (245, 150, 30)
+        marker_track["segments"].append(_text_segment(
+            template, materials, marker["start"], marker["end"], f"⚠ {marker['kind']} (scene {marker['position']})",
+            0.0, 0.85, size=9.0, color=colour))
 
     tracks = [video_track]
-    if text_track["segments"]:
-        tracks.append(text_track)
+    tracks += [track for track in (caption_track, *screen_tracks, marker_track) if track["segments"]]
     if voiceover is not None:
         audio_track = copy.deepcopy(template["audio"]["track"])
         audio_track.update(id=_new_id(), segments=[_clone_segment(template["audio"], materials, 0.0, vo_duration, {

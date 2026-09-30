@@ -22,6 +22,22 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "item"
 
 
+def redrawable_items(metadata: dict[str, Any], library: Path | None) -> list[dict[str, str]]:
+    """An ingredient card's items with their pictures, so it can be drawn again (e.g. without names).
+    Older cards stored only names; their pictures are the library's cached ones. [] if any is missing."""
+    items = []
+    for item in metadata.get("items") or []:
+        if isinstance(item, dict) and item.get("image") and Path(str(item["image"])).is_file():
+            items.append({"label": str(item.get("label") or ""), "image": str(item["image"])})
+            continue
+        name = str(item.get("label") if isinstance(item, dict) else item)
+        cached = (library / f"{_slug(name)}.jpg") if library else None
+        if not cached or not cached.is_file():
+            return []
+        items.append({"label": name, "image": str(cached)})
+    return items
+
+
 def item_image(
     name: str, library: Path, verifier: FootageVerifier, settings: Any, era: str = "",
     allow_generated: bool = True, exclude: set[str] | None = None, judge: Any = None,

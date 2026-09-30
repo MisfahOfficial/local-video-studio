@@ -288,7 +288,37 @@ def _styled_card(image: Image.Image, size: tuple[int, int], style: ChannelStyle)
     return card
 
 
-def ingredient_cards(items: list[tuple[str, Image.Image]], style: ChannelStyle | None = None) -> Frame:
+def ingredient_label_layout(labels: list[str], style: ChannelStyle | None = None) -> list[dict[str, Any]]:
+    """Where each ingredient name lands (centre, size, colour, when it appears) for editable text layers."""
+    style = style or get_style(None)
+    labels = labels[:5]
+    count = max(len(labels), 1)
+    gap = 48
+    card_w = min(480, int((W * 0.86 - gap * (count - 1)) / count))
+    card_h = int(card_w * 1.15)
+    size = 38 if style.label_spaced else 46
+    label_font = font(style.label_fonts, size)
+    on_card = style.card in {"recipe", "polaroid"}
+    left = (W - (card_w * count + gap * (count - 1))) / 2
+    top = (H - card_h) / 2 - 40
+    layers = []
+    for index, label in enumerate(labels):
+        text = label.upper() if style.label_spaced else label.title()
+        if on_card:
+            y_text = top + card_h * 0.80
+            colour = style.card_accent if style.card == "recipe" else style.label_color
+        else:
+            y_text, colour = top + card_h + 34, style.label_color
+        layers.append({
+            "role": "ingredient label", "text": text, "x": left + index * (card_w + gap) + card_w / 2,
+            "y": y_text + size * 0.55, "size": size, "color": tuple(colour), "font": getattr(label_font, "path", ""),
+            "appear": index * 0.45 + 0.35, "letter_spacing": 0.5 if style.label_spaced else 0.0,
+        })
+    return layers
+
+
+def ingredient_cards(items: list[tuple[str, Image.Image]], style: ChannelStyle | None = None,
+                     show_labels: bool = True) -> Frame:
     """Each ingredient pops in as a card (the channel's style) while its name types out."""
     style = style or get_style(None)
     items = items[:5]
@@ -325,6 +355,8 @@ def ingredient_cards(items: list[tuple[str, Image.Image]], style: ChannelStyle |
             canvas.alpha_composite(shadow.resize((int(shadow.width * scale), int(shadow.height * scale))),
                                    (int(x) - int(60 * scale) + 6, int(y) - int(60 * scale) + 14))
             canvas.alpha_composite(card.resize(size), (int(x), int(y)))
+            if not show_labels:
+                continue  # the editable export adds the names as text layers
             letters = int(len(label) * min(1.0, max(0.0, (local - 0.35) / 0.6)))
             text = " ".join(label[:letters]) if style.label_spaced else label[:letters]
             width = draw.textlength(text, font=label_font)

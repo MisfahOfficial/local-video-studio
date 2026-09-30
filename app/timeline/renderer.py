@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -236,7 +237,12 @@ class FFmpegRenderer:
         film_look: bool = False,
         photo_graphics: bool = False,
         subscribe_button: bool = False,
+        editable_dir: Path | None = None,
+        allow_missing: bool = False,
     ) -> Path:
+        """`editable_dir`: also write each clip without any words on it (captions, chapter titles,
+        ingredient names), for Premiere/CapCut projects where the words are editable layers.
+        `allow_missing`: a scene with no footage becomes black and is listed in `missing_positions`."""
         selected = {scene["id"]: scene.get("selected_asset_id") for scene in scenes}
         scenes_by_id = {scene["id"]: scene for scene in scenes}
         by_id = {asset["id"]: asset for asset in assets}
@@ -254,7 +260,8 @@ class FFmpegRenderer:
             or not selected.get(clip["scene_id"])
             or selected[clip["scene_id"]] not in by_id
         ]
-        if missing:
+        self.missing_positions = sorted(int(position) for position in missing)
+        if missing and not allow_missing:
             preview = ", ".join(str(item) for item in missing[:12])
             raise RuntimeError(f"Scenes without selected assets: {preview}{'…' if len(missing) > 12 else ''}")
 
@@ -277,8 +284,18 @@ class FFmpegRenderer:
         self._style = get_style((project.get("effects") or {}).get("channel_style"))
         captioned_scenes: set[str] = set()
         photo_index = 0
+        if editable_dir is not None:
+            editable_dir.mkdir(parents=True, exist_ok=True)
         for index, timeline_clip in enumerate(clips):
-            scene = scenes_by_id[timeline_clip["scene_id"]]
+            scene = scenes_by_id.get(timeline_clip["scene_id"]) or {}
+            if int(timeline_clip["position"]) in self.missing_positions:
+                duration = max(0.1, float(timeline_clip["end_seconds"]) - float(timeline_clip["start_seconds"]))
+                clip = clip_dir / f"timeline-{int(timeline_clip['position']):04d}.mp4"
+                self._black_clip(clip, duration, width, height, fps)
+                if editable_dir is not None:
+                    shutil.copy2(clip, editable_dir / clip.name)
+                clip_paths.append(clip)
+                continue
             asset = by_id[selected[scene["id"]]]
             source = Path(asset["local_path"])
             media_kind = str(asset["media_kind"])
@@ -300,6 +317,10 @@ class FFmpegRenderer:
                 # Chapter cards and generated stills are already period-styled.
                 film_look=film_look and asset.get("provider") not in {"chapter", "generated"},
             )
+            editable = None
+            if editable_dir is not None:
+                editable = editable_dir / clip.name
+                self._text_free_clip(asset, clip, editable, duration, clip_scene, width, height, fps, encoder)
             caption = str(scene.get("caption_text") or "").strip()
             if animated_captions and caption and scene["id"] not in captioned_scenes:
                 captioned_scenes.add(scene["id"])
@@ -308,6 +329,8 @@ class FFmpegRenderer:
                 from ..motion.templates import subscribe_overlay
 
                 self._overlay(clip, subscribe_overlay(style=self._style), duration, fps, encoder, "subscribe")
+                if editable is not None:
+                    self._overlay(editable, subscribe_overlay(style=self._style), duration, fps, encoder, "subscribe")
             clip_paths.append(clip)
             if progress:
                 progress(0.82 * (index + 1) / total)
@@ -377,6 +400,39 @@ class FFmpegRenderer:
         if progress:
             progress(1.0)
         return output
+
+    def _black_clip(self, destination: Path, duration: float, width: int, height: int, fps: int) -> None:
+        """Stand-in for a scene with no footage yet (marked in the Premiere/CapCut projects)."""
+        self._run([self.ffmpeg_path, "-y", "-v", "error", "-f", "lavfi", "-i",
+                   f"color=c=black:s={width}x{height}:r={fps}:d={duration:.3f}", "-c:v", "libx264",
+                   "-pix_fmt", "yuv420p", "-t", f"{duration:.3f}", str(destination)])
+
+    def _text_free_clip(self, asset: dict[str, Any], clip: Path, destination: Path, duration: float,
+                        scene: dict[str, Any], width: int, height: int, fps: int, encoder: str) -> None:
+        """The clip with no words baked in: chapter cards and ingredient cards are redrawn without text."""
+        metadata = asset.get("metadata") or {}
+        plain = Path(str(metadata.get("plain_path") or ""))
+        from ..ingredient_library import redrawable_items
+
+        items = redrawable_items(metadata, getattr(self, "library_dir", None))
+        try:
+            if asset.get("provider") == "chapter" and plain.is_file():
+                self._render_clip(plain, destination, "image", duration, scene, width, height, fps, encoder,
+                                  source_in_seconds=0, crop=None, film_look=False)
+                return
+            if asset.get("provider") == "graphic" and metadata.get("graphic") == "ingredients" and items:
+                from ..graphics_editor import draw_graphic
+
+                bare = destination.with_name(destination.stem + "-bare.mp4")
+                draw_graphic("ingredients", items, getattr(self._style, "key", ""), duration, bare, self.ffmpeg_path,
+                             show_labels=False)
+                self._render_clip(bare, destination, "video", duration, scene, width, height, fps, encoder,
+                                  source_in_seconds=0, crop=None, film_look=False)
+                bare.unlink(missing_ok=True)
+                return
+        except Exception:  # a failed redraw keeps the finished clip rather than losing the scene
+            pass
+        shutil.copy2(clip, destination)
 
     def _render_clip(self, source: Path, destination: Path, media_kind: str, duration: float,
                      scene: dict[str, Any], width: int, height: int, fps: int, encoder: str,
@@ -606,7 +662,16 @@ class RenderManager:
                 sync = self.db.timeline_sync_status(project_id)
                 if sync["status"] != "synced":
                     self.db.fit_timeline_to_duration(project_id, voiceover_duration)
+            wants_words_editable = bool(options.get("edit_package") or options.get("capcut"))
+            if wants_words_editable and self._cards_without_plain(project_id):
+                # Older chapter cards were saved with the title baked in: draw them again (same look)
+                # with a word-free copy, so the Premiere/CapCut titles can be edited.
+                from ..chapter_cards import build_chapter_cards
+
+                build_chapter_cards(self.db, self.paths, project_id, settings.ffmpeg_path)
             renderer = FFmpegRenderer(settings.ffmpeg_path)
+            renderer.library_dir = self.paths.root / "ingredient_library"
+            wants_package = bool(options.get("edit_package") or options.get("capcut"))
             output = renderer.render(
                 project=project,
                 scenes=self.db.list_scenes(project_id),
@@ -627,6 +692,10 @@ class RenderManager:
                 film_look=bool(options.get("film_look", True)),
                 photo_graphics=bool(options.get("photo_graphics", True)),
                 subscribe_button=bool(options.get("subscribe_button", True)),
+                # Premiere/CapCut projects get word-free clips (words become editable layers), and a
+                # scene with no footage yet is kept as a marked black gap instead of stopping the export.
+                editable_dir=self.paths.project_dir(project_id) / "cache" / "clips-editable" if wants_package else None,
+                allow_missing=wants_package,
             )
             rendered_duration = probe_duration(output, settings.ffprobe_path)
             if voiceover_path.is_file() and rendered_duration + 0.25 < voiceover_duration:
@@ -646,6 +715,7 @@ class RenderManager:
                     caption_style=options.get("caption_style"), fps=int(options.get("fps", 30)),
                     width=int(options.get("width", 1920)), height=int(options.get("height", 1080)),
                     capcut=bool(options.get("capcut")), ffprobe_path=settings.ffprobe_path,
+                    missing_positions=renderer.missing_positions, library=renderer.library_dir,
                 )
             self._update(job_id, status="complete", progress=1.0, output_path=str(output))
             self.db.update_project(project_id, status="rendered")
@@ -653,6 +723,14 @@ class RenderManager:
             self._update(job_id, status="failed", error=str(error))
         finally:
             self._threads.pop(project_id, None)
+
+    def _cards_without_plain(self, project_id: str) -> bool:
+        assets = {str(asset["id"]): asset for asset in self.db.list_assets(project_id)}
+        for scene in self.db.list_scenes(project_id):
+            asset = assets.get(str(scene.get("selected_asset_id") or "")) or {}
+            if asset.get("provider") == "chapter" and not (asset.get("metadata") or {}).get("plain_path"):
+                return True
+        return False
 
     def _update(self, job_id: str, **changes: Any) -> None:
         allowed = {"status", "progress", "output_path", "error"}
