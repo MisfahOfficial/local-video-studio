@@ -51,6 +51,11 @@ PLACES: dict[str, tuple[str, float, float]] = {
     "montreal": ("CA", -73.57, 45.5), "vancouver": ("CA", -123.12, 49.28),
 }
 
+# Adjectives shown by the place's own name on the map ("Scottish bakeries" -> Scotland).
+DISPLAY = {"scottish": "Scotland", "welsh": "Wales", "the midlands": "The Midlands", "midlands": "The Midlands",
+           "the north": "The North", "the south": "The South", "the midwest": "The Midwest", "new england": "New England",
+           "washington state": "Washington"}
+
 _PRICE = re.compile(
     r"(?:[£$]\s?\d+(?:[.,]\d{1,2})?|\b\d+(?:\.\d+)?\s?(?:cents?|pence|p|shillings?|dollars?|pounds?)\b|"
     r"\b(?:a |one )?(?:penny|ha'?penny|halfpenny|farthing|nickel|dime|quarter|sixpence|threepence|thruppence|"
@@ -79,7 +84,8 @@ def moment_for(text: str, era: str = "") -> dict[str, Any] | None:
     if len(places) >= 2 or (places and re.search(r"\b(from|in|across|all over|throughout)\b", text, re.IGNORECASE)):
         country = max({place[1] for place in places}, key=lambda code: sum(place[1] == code for place in places))
         return {"type": "map", "country": country,
-                "places": [{"name": name.title(), "lon": lon, "lat": lat} for name, code, lon, lat in places if code == country][:5]}
+                "places": [{"name": DISPLAY.get(name, name.title()), "lon": lon, "lat": lat}
+                            for name, code, lon, lat in places if code == country][:5]}
     price = _PRICE.search(text)
     if price and _COST_WORDS.search(text):
         decade = _DECADE.search(text)

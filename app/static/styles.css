@@ -505,3 +505,7 @@ body.editor-mode .preview-wrap { flex: 1 1 0; min-height: 0; display: flex; alig
 /* The picture keeps 16:9 inside whatever height is left, instead of pushing the timeline off screen. */
 body.editor-mode .preview-stage { height: 100%; width: auto; max-width: 100%; aspect-ratio: 16/9; }
 body.editor-mode .pro-timeline { flex: 0 0 auto; max-height: 40vh; min-height: 210px; }
+
+.inline-row { display: flex; gap: 8px; align-items: center; }
+.inline-row select { flex: 1; min-width: 0; }
+.button.compact-inline { padding: 8px 12px; font-size: 12px; white-space: nowrap; }

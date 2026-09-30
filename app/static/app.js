@@ -2100,6 +2100,25 @@ $("#workflowExportButton").addEventListener("click", openExportDialog);
 $("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
 $("#createPlanButton").addEventListener("click", createVideo);
+// A new channel: its whole look (colours, fonts, captions, graphic designs) is read from its example videos and locked.
+$("#newChannelButton").addEventListener("click", async () => {
+  const name = (window.prompt("New channel name (e.g. V5 Old Irish Kitchens):") || "").trim();
+  if (!name) return;
+  const links = (window.prompt("Paste 1 to 3 example video links (YouTube), separated by spaces:") || "").split(/\s+/).filter(Boolean);
+  if (!links.length) { toast("At least one example video is needed", true); return; }
+  const button = $("#newChannelButton");
+  button.disabled = true; button.textContent = "Reading examples…";
+  try {
+    const result = await api("/api/channel-kits", { method: "POST", body: JSON.stringify({ name, references: links }) });
+    const styles = await api("/api/channel-styles");
+    const options = styles.styles.map(item => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.name)}</option>`).join("");
+    $("#channelStyleSelect").innerHTML = options;
+    $("#effectChannelStyle").innerHTML = options;
+    $("#channelStyleSelect").value = result.key;
+    toast(`Channel "${name}" created from its examples and locked. Its look is used for every new video.`);
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; button.textContent = "+ New channel"; }
+});
 $("#contentKindSelect").addEventListener("change", () => saveContentProfile().catch(error => toast(error.message, true)));
 $("#addReferenceButton").addEventListener("click", () => renderReferences([...referenceLinks(), ""].slice(0, state.maxReferences || 5)));
 $("#referenceList").addEventListener("click", event => {
