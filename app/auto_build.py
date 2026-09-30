@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from .footage_match import detect_era, heading_subject, scene_subjects
@@ -65,11 +66,35 @@ class AutoBuildManager:
                 return
             filled, failed = self._fill_missing(project_id)
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed)
+            # After each video the AI designs one new chapter look and one new ingredients look for the
+            # channel's library (quietly, after the build, so it never slows the video down).
+            threading.Thread(target=self._grow_designs, args=(project_id,), daemon=True, name="design-growth").start()
         except Exception as error:  # the UI shows the reason; the project keeps whatever was made
             self._update(project_id, running=False, stage="Stopped", error=str(error)[:500])
         finally:
             with self._lock:
                 self._threads.pop(project_id, None)
+
+    def _grow_designs(self, project_id: str) -> None:
+        try:
+            from .design_generator import generate_design, library_size
+            from .motion_designs import web_engines_ready
+
+            if not web_engines_ready():
+                return
+            settings = self.app.settings.load()
+            project = self.app.db.get_project(project_id) or {}
+            style_key = str((project.get("effects") or {}).get("channel_style") or "v3")
+            sample = next((str(asset["local_path"]) for asset in self.app.db.list_assets(project_id)
+                           if asset.get("provider") in ("photo", "generated") and Path(str(asset.get("local_path"))).is_file()), "")
+            if not sample:
+                return
+            for kind in ("chapter", "ingredients"):
+                if library_size(kind) < 15:
+                    generate_design(kind, settings, style_key, topic=str(project.get("script") or "")[:400],
+                                    sample_image=sample, ffmpeg_path=str(settings.ffmpeg_path or "ffmpeg"))
+        except Exception:  # growing the library is a bonus; it must never disturb the tool
+            pass
 
     def _fill_missing(self, project_id: str) -> tuple[list[int], list[dict[str, Any]]]:
         """A realistic period still for every scene that still has nothing (and is not a heading)."""
