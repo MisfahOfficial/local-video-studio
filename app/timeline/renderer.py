@@ -261,6 +261,7 @@ class FFmpegRenderer:
             or selected[clip["scene_id"]] not in by_id
         ]
         self.missing_positions = sorted(int(position) for position in missing)
+        self.broken_positions: list[int] = []
         if missing and not allow_missing:
             preview = ", ".join(str(item) for item in missing[:12])
             raise RuntimeError(f"Scenes without selected assets: {preview}{'…' if len(missing) > 12 else ''}")
@@ -310,13 +311,24 @@ class FFmpegRenderer:
                                               duration, fps)
                 media_kind = "video"
                 clip_scene = {**scene, "timeline_actions": [{"type": "motion", "params": {"preset": "static"}}]}
-            self._render_clip(
-                source, clip, media_kind, duration, clip_scene, width, height, fps, encoder,
-                source_in_seconds=0 if graphic else float(timeline_clip.get("source_in_seconds", 0)),
-                crop=None if graphic else active_crop(asset),
-                # Chapter cards and generated stills are already period-styled.
-                film_look=film_look and asset.get("provider") not in {"chapter", "generated"},
-            )
+            try:
+                self._render_clip(
+                    source, clip, media_kind, duration, clip_scene, width, height, fps, encoder,
+                    source_in_seconds=0 if graphic else float(timeline_clip.get("source_in_seconds", 0)),
+                    crop=None if graphic else active_crop(asset),
+                    # Chapter cards and generated stills are already period-styled.
+                    film_look=film_look and asset.get("provider") not in {"chapter", "generated"},
+                )
+            except RuntimeError:
+                # One unreadable file (a download that broke half-way) must not stop a whole export:
+                # the scene goes black and is listed, like a scene with no footage.
+                self._black_clip(clip, duration, width, height, fps)
+                self.missing_positions.append(int(timeline_clip["position"]))
+                self.broken_positions.append(int(timeline_clip["position"]))
+                if editable_dir is not None:
+                    shutil.copy2(clip, editable_dir / clip.name)
+                clip_paths.append(clip)
+                continue
             editable = None
             if editable_dir is not None:
                 editable = editable_dir / clip.name

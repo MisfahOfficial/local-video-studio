@@ -200,6 +200,17 @@ MAX_SOURCE_SECONDS = 45 * 60
 _READ_SLOTS = threading.BoundedSemaphore(2)
 
 
+def _has_video(path: Path, ffmpeg_path: str = "ffmpeg") -> bool:
+    """A saved clip must really contain video (a broken download once left a 261-byte file)."""
+    probe = str(Path(ffmpeg_path).with_name("ffprobe")) if "/" in ffmpeg_path else "ffprobe"
+    try:
+        result = subprocess.run([probe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name",
+                                 "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return path.is_file() and path.stat().st_size > 10_000
+    return bool(result.stdout.strip()) and path.stat().st_size > 1000
+
+
 class _NoFootage(Exception):
     """No real YouTube footage passed the checks for a scene."""
 
@@ -847,6 +858,8 @@ class AutoYouTubeManager:
                         info=run.infos.get(video_id), padding=SHOT_PADDING,
                     )
                     self._single_shot(run, destination, metadata, start_time, duration)
+                    if not _has_video(destination, run.service.ffmpeg_path):
+                        raise ProviderError("The downloaded clip is empty or unreadable")
                     bars = content_box(destination, run.service.ffmpeg_path)
                     if bars and bars[4] < 1.25:
                         raise ProviderError("Portrait picture inside black bars")
