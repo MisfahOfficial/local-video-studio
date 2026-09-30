@@ -72,3 +72,10 @@ def claude_text(settings: Any, prompt: str, model: str = "claude-sonnet-5", max_
     client = anthropic.Anthropic(api_key=key)
     message = client.messages.create(model=model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}])
     return "".join(block.text for block in message.content if getattr(block, "type", "") == "text")
+
+
+def pollinations_text(prompt: str, timeout: int = 180) -> str:
+    """Free text model on Pollinations (no key; best effort, weaker than Claude or Gemini)."""
+    response = post_json("https://text.pollinations.ai/openai",
+                         {"model": "openai-fast", "messages": [{"role": "user", "content": prompt}]}, {}, timeout=timeout)
+    return str(response["choices"][0]["message"]["content"])

@@ -2054,7 +2054,7 @@ function fillSettings() {
   $("#budgetInput").value = state.settings.max_project_cost || 3;
   $("#youtubeLicenseMode").value = youtubeFairUse() ? "fair_use" : "creative_commons";
   $("#blockedChannels").value = state.settings.blocked_channels || "";
-  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"} · Pexels ${state.settings.pexels_api_key_set ? "connected" : "not connected"} · Claude judge ${state.settings.anthropic_api_key_set ? "connected" : "not connected"}`;
+  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"} · Pexels ${state.settings.pexels_api_key_set ? "connected" : "not connected"} · Claude ${state.settings.anthropic_api_key_set ? "connected" : "not connected"} · Pollinations ${state.settings.pollinations_token_set ? "connected" : "not connected"}`;
 }
 
 async function saveSettings(event) {
@@ -2074,10 +2074,11 @@ async function saveSettings(event) {
   if ($("#youtubeKey").value) body.youtube_api_key = $("#youtubeKey").value;
   if ($("#pexelsKey").value) body.pexels_api_key = $("#pexelsKey").value;
   if ($("#anthropicKey").value) body.anthropic_api_key = $("#anthropicKey").value;
+  if ($("#pollinationsToken").value) body.pollinations_token = $("#pollinationsToken").value;
   try {
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
     $("#settingsDialog").close();
-    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey,#pexelsKey,#anthropicKey").forEach(input => input.value = "");
+    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey,#pexelsKey,#anthropicKey,#pollinationsToken").forEach(input => input.value = "");
     fillSettings(); toast("Settings saved locally");
   } catch (error) { toast(error.message, true); }
 }

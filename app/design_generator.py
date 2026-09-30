@@ -131,7 +131,12 @@ def generate_design(kind: str, settings: Any, style_key: str, topic: str = "", r
 
                 answer = claude_text(settings, prompt)
             else:
-                answer = gemini_text(settings, prompt, temperature=1.0, timeout=180)
+                try:
+                    answer = gemini_text(settings, prompt, temperature=1.0, timeout=180)
+                except Exception:
+                    from .llm import pollinations_text
+
+                    answer = pollinations_text(prompt)  # free last resort; the art director still decides
         except Exception:
             return None
         html = _clean_html(answer)

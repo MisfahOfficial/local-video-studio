@@ -17,6 +17,8 @@ class StudioSettings:
     # Claude looks at the best few candidates per scene and picks the one that truly fits.
     anthropic_api_key: str = ""
     judge_model: str = "claude-sonnet-5"
+    # Free Pollinations account token: its images carry no logo (anonymous ones do, so they are not used).
+    pollinations_token: str = ""
     youtube_license_mode: str = "creative_commons"
     # Your own channels and others whose footage should never be reused (comma separated).
     blocked_channels: str = "Vintage Life of USA, Forgotten Flavors of USA, Britain We Lived In, Canada We Lived In"
@@ -36,7 +38,7 @@ class StudioSettings:
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
         for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key", "pexels_api_key",
-                    "anthropic_api_key"):
+                    "anthropic_api_key", "pollinations_token"):
             data[f"{key}_set"] = bool(data.pop(key))
         return data
 

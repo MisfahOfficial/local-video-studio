@@ -67,16 +67,53 @@ def film_finish(content: bytes, seed: int, size: tuple[int, int] = (1920, 1080))
 def generate_vintage_still(
     settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path, people: bool = True,
 ) -> dict[str, Any]:
-    """Generate, age and save a still; returns asset metadata. Raises ProviderError without a key."""
-    if not settings.runware_api_key:
-        raise ProviderError("No real footage passed and no Runware key is set for a fallback image")
+    """Generate, age and save a still; returns asset metadata.
+
+    Runware first (paid, fast, reliable); when it has no key, no balance or fails, the free
+    Pollinations service (FLUX, no key) makes the image instead."""
     seed = random.randint(1, 2**31 - 1)
     prompt = still_prompt(scene_text, subject, era, people)
     negative = NEGATIVE if people else f"{NEGATIVE}, person, people, woman, man, face, hands, crowd"
-    result = RunwareImageProvider(settings.runware_api_key).generate(GenerationRequest(
-        prompt=prompt, negative_prompt=negative, model=settings.runware_default_model,
-        width=settings.width, height=settings.height, seed=seed, steps=4,
-    ))
     destination.parent.mkdir(parents=True, exist_ok=True)
-    film_finish(result.content, seed).save(destination, quality=92)
-    return {"prompt": prompt, "cost": result.cost, "model": result.model, "generated_still": True}
+    runware_error = "no Runware key"
+    if settings.runware_api_key:
+        try:
+            result = RunwareImageProvider(settings.runware_api_key).generate(GenerationRequest(
+                prompt=prompt, negative_prompt=negative, model=settings.runware_default_model,
+                width=settings.width, height=settings.height, seed=seed, steps=4,
+            ))
+            film_finish(result.content, seed).save(destination, quality=92)
+            return {"prompt": prompt, "cost": result.cost, "model": result.model, "generated_still": True}
+        except ProviderError as error:
+            runware_error = str(error)[:160]
+    token = str(getattr(settings, "pollinations_token", "") or "").strip()
+    if not token:
+        # Without an account token Pollinations stamps its logo on the picture, which must not reach a video.
+        raise ProviderError(f"No image could be made (Runware: {runware_error}; add a free Pollinations token for a free fallback)")
+    try:
+        content = pollinations_image(prompt, settings.width, settings.height, seed, people, token)
+    except ProviderError as error:
+        raise ProviderError(f"No image could be made (Runware: {runware_error}; Pollinations: {str(error)[:160]})") from error
+    film_finish(content, seed).save(destination, quality=92)
+    return {"prompt": prompt, "cost": 0.0, "model": "pollinations-flux", "generated_still": True}
+
+
+def pollinations_image(prompt: str, width: int, height: int, seed: int, people: bool = True, token: str = "") -> Any:
+    """Free image from Pollinations (free account token, no logo). Best effort: can be slow or down."""
+    import io
+    import urllib.parse
+
+    from PIL import Image
+
+    from .providers.http import download_bytes
+
+    text = prompt if people else f"{prompt}, no people"
+    query = urllib.parse.urlencode({"width": min(width, 1920), "height": min(height, 1080), "seed": seed,
+                                    "nologo": "true", "model": "flux", **({"token": token} if token else {})})
+    data = download_bytes(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(text[:900])}?{query}",
+                          timeout=120, max_bytes=20 * 1024 * 1024)
+    try:
+        Image.open(io.BytesIO(data)).verify()
+    except OSError as error:
+        raise ProviderError("Pollinations returned something that is not an image") from error
+    return data  # raw bytes, like the Runware result
