@@ -176,12 +176,26 @@ def _font_file(paths: tuple[str, ...]) -> str:
     return next((path for path in paths if Path(path).is_file()), "")
 
 
+def design_layout(key: str) -> dict[str, Any]:
+    """An AI design's own layout (where its words and pictures go), saved with it."""
+    try:
+        return dict(json.loads((GENERATED / key / "meta.json").read_text()).get("layout") or {})
+    except (OSError, ValueError):
+        return {}
+
+
 def ingredient_payload(design: str, items: list[dict[str, str]], style: ChannelStyle, seconds: float,
                        show_text: bool = True) -> dict[str, Any]:
     items = items[:5]
     count = max(1, len(items))
     placed = []
-    if design == "recipe_book":
+    layout = design_layout(design)
+    slots = (layout.get("slots") or {}).get(str(count)) if isinstance(layout.get("slots"), dict) else None
+    photo = int(layout.get("photo") or 360)
+    if slots and len(slots) >= count:
+        for item, slot in zip(items, slots):
+            placed.append({**item, "photo_x": slot[0], "photo_y": slot[1], "text_x": slot[2], "text_y": slot[3]})
+    elif design == "recipe_book":
         for index, item in enumerate(items):
             placed.append({**item, "photo_x": 1150 + (index % 2) * 160, "photo_y": 150 + index * 150,
                            "tilt": (-6, 5, -3, 7, -5)[index], "text_x": 700, "text_y": 290 + index * 120})
@@ -196,6 +210,7 @@ def ingredient_payload(design: str, items: list[dict[str, str]], style: ChannelS
         "accent": _hex(style.highlight), "ink": _hex(style.highlight_text if design == "carousel" else style.label_color
                                                     if style.background != "vignette" else (40, 34, 26)),
         "label_font": _family(style.label_fonts), "title_font": _family(style.chapter_title_fonts),
+        "photo_size": photo,
         "heading": "Ingredients" if design == "recipe_book" else "", "heading_x": 760, "heading_y": 170,
         "heading_color": _hex(style.card_accent),
         "items": [{"label": item["label"].title(), "image": item["image"], "photo_x": item["photo_x"],
@@ -208,7 +223,17 @@ def chapter_payload(design: str, title: str, number: int, style: ChannelStyle, s
                     show_text: bool = True) -> dict[str, Any]:
     title_font = _family(style.chapter_title_fonts)
     label_font = _family(style.chapter_label_fonts)
-    if design == "newspaper":
+    layout = design_layout(design)
+    if layout.get("label") and layout.get("title"):
+        label, main = layout["label"], layout["title"]
+        texts = [
+            {"text": f"{style.chapter_label} {number}", "x": label["x"], "y": label["y"], "size": label.get("size", 38),
+             "color": label.get("color") or _hex(style.chapter_accent), "font": label_font, "spacing": 8},
+            {"text": title.upper(), "x": main["x"], "y": main["y"],
+             "size": main.get("size", 110) if len(title) < 16 else int(main.get("size", 110) * 0.75),
+             "color": main.get("color") or "#f6f0e4", "font": title_font},
+        ]
+    elif design == "newspaper":
         texts = [
             {"text": "THE DAILY KITCHEN", "x": 960, "y": 245, "size": 70, "color": "#2b241b", "font": "Georgia", "spacing": 4},
             {"text": f"{style.chapter_label} {number}", "x": 960, "y": 370, "size": 36, "color": "#6b5a44", "font": label_font, "spacing": 6},

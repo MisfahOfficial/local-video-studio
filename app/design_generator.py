@@ -45,20 +45,36 @@ CHAPTER_DATA = """Data p for a CHAPTER TITLE card:
 p.seconds (number), p.show_text (bool), p.background (image file name or ""), p.bg_inner / p.bg_outer / p.accent / p.ink
 (hex colours of the channel), p.title_font, p.label_font,
 p.texts = [{text, x, y, size, color, font, spacing}]  (the chapter label then the title; draw each at its x,y).
-Use p.background (if given) as a full-frame backdrop, treated in the design's own way."""
+Use p.background (if given) as a full-frame backdrop, treated in the design's own way.
+YOU choose where the words go: after the HTML write one line
+LAYOUT: {"label": {"x": .., "y": .., "size": .., "color": "#hex"}, "title": {"x": .., "y": .., "size": .., "color": "#hex"}}
+(pixel centres on 1920x1080; the tool puts p.texts exactly there, so design the frame around those points).
+Titles can be up to 26 characters: keep room for them at your size."""
 
 INGREDIENT_DATA = """Data p for an INGREDIENTS card:
-p.seconds, p.show_text, p.bg_inner, p.bg_outer, p.accent, p.ink, p.label_font, p.title_font,
+p.seconds, p.show_text, p.bg_inner, p.bg_outer, p.accent, p.ink, p.label_font, p.title_font, p.photo_size,
 p.items = [{label, image, photo_x, photo_y, text_x, text_y}]:
-draw each picture (file name in image) as a 360x360 box with its top-left corner at photo_x, photo_y,
-and its label word centred at text_x, text_y. Pictures and labels appear one after another."""
+draw each picture (file name in image) as a p.photo_size square box with its top-left corner at photo_x, photo_y,
+and its label word centred at text_x, text_y. Pictures and labels appear one after another.
+YOU choose the arrangement (any composition that fills the frame: staggered, scattered, circular, board, shelf...):
+after the HTML write one line
+LAYOUT: {"photo": <box size px>, "slots": {"2": [[photo_x, photo_y, text_x, text_y], ...2 entries], "3": [...3], "4": [...4], "5": [...5]}}
+(the tool fills p.items from the slots for that many items)."""
+
+
+def _sample_images(image: str) -> list[str]:
+    """Three different pictures for the test renders (one repeated picture made reviews fail)."""
+    library = Path(image).parent
+    pictures = [str(path) for path in sorted(library.glob("*.jpg"))[:40:13]] if library.is_dir() else []
+    return (pictures + [image] * 3)[:3]
 
 
 def _sample_payload(kind: str, style_key: str, seconds: float, show_text: bool, image: str) -> dict[str, Any]:
     style = get_style(style_key)
+    pictures = _sample_images(image)
     if kind == "chapter":
-        return chapter_payload("generated", "Traffic Light Biscuits", 3, style, seconds, image, show_text)
-    items = [{"label": name, "image": image} for name in ("sugar", "butter", "eggs")]
+        return chapter_payload("generated", "Traffic Light Biscuits", 3, style, seconds, pictures[0], show_text)
+    items = [{"label": name, "image": picture} for name, picture in zip(("sugar", "butter", "eggs"), pictures)]
     return ingredient_payload("generated", items, style, seconds, show_text)
 
 
@@ -101,10 +117,12 @@ def generate_design(kind: str, settings: Any, style_key: str, topic: str = "", r
             + CONTRACT.replace("__ID__", key) + "\n" + (CHAPTER_DATA if kind == "chapter" else INGREDIENT_DATA)
             + "\n\nA working design that follows the contract (for structure only; do NOT copy its look):\n"
             + (WEB_ROOT / "hf" / ("film_slate" if kind == "chapter" else "recipe_book") / "index.html").read_text()[:6000]
-            + "\n\nQuality bar: big, fully visible, high-contrast words; a rich, finished layout filling the frame; "
-              "clear motion (reveals, parallax, light sweeps, paper/film textures made with CSS); nothing clipped."
+            + "\n\nQuality bar: big, fully visible, high-contrast words (light text needs a dark panel behind it and dark "
+              "text a light one; never put text in the channel colours straight on a similar background); a rich, "
+              "finished layout filling the frame; clear motion (reveals, parallax, light sweeps, paper/film textures "
+              "made with CSS); nothing clipped. You may override the text colour from the data for contrast."
             + (f"\n\nYour previous attempt was rejected by the art director: {feedback}\nFix every point." if feedback else "")
-            + "\n\nAnswer with the HTML file only. Then, on the very last line, write: NAME: <3-6 word name> | MOOD: <what it suits>"
+            + "\n\nAnswer with the HTML file, then the LAYOUT line, then on the very last line: NAME: <3-6 word name> | MOOD: <what it suits>"
         )
         try:
             answer = gemini_text(settings, prompt, temperature=1.0, timeout=180)
@@ -112,6 +130,11 @@ def generate_design(kind: str, settings: Any, style_key: str, topic: str = "", r
             return None
         html = _clean_html(answer)
         meta_line = re.search(r"NAME:\s*(.+?)\s*\|\s*MOOD:\s*(.+)", answer)
+        layout_line = re.search(r"LAYOUT:\s*(\{.*\})", answer)
+        try:
+            layout = json.loads(layout_line.group(1)) if layout_line else {}
+        except ValueError:
+            layout = {}
         if 'data-composition-id="' + key not in html or "__timelines" not in html:
             continue
         folder = GENERATED / key
@@ -120,6 +143,7 @@ def generate_design(kind: str, settings: Any, style_key: str, topic: str = "", r
         (folder / "meta.json").write_text(json.dumps({
             "kind": kind, "name": (meta_line.group(1) if meta_line else key)[:60],
             "mood": (meta_line.group(2) if meta_line else "")[:120], "channel": style_key, "created": time.time(),
+            "layout": layout,
             "pending": True,
         }))
         passed, feedback = _passes(key, kind, style_key, sample_image, ffmpeg_path, settings, existing)
@@ -156,6 +180,7 @@ def _passes(key: str, kind: str, style_key: str, image: str, ffmpeg_path: str, s
         review = gemini_look(settings, (
             f"You are a strict art director for a YouTube documentary channel. These are the last frames of a new "
             f"{'chapter title card' if kind == 'chapter' else 'ingredients card'} design (4-second and 1.2-second versions). "
+            "The photos are random placeholders: do NOT judge what they show, only the design around them. "
             "Score 1-10. Deduct heavily if: any word is cut off, overlapping, too small or low-contrast/unreadable; "
             "the layout looks empty, broken or amateur; pictures are missing or badly placed; "
             f"{'the background photo is not used; ' if kind == 'chapter' else ''}"
