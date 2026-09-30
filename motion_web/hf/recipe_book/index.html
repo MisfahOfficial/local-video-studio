@@ -30,11 +30,12 @@
   document.getElementById("bg").style.background = `radial-gradient(circle at 50% 40%, ${p.bg_inner}, ${p.bg_outer})`;
   const layer = document.getElementById("layer");
   const tl = gsap.timeline({paused: true});
-  tl.from("#page", {y: 80, opacity: 0, rotation: -2, duration: 0.7, ease: "power3.out"}, 0);
+  const k = Math.min(1, (p.seconds || 6) / 4.5);  // everything lands within short scenes too
+  tl.from("#page", {y: 80, opacity: 0, rotation: -2, duration: 0.7 * k, ease: "power3.out"}, 0);
   if (p.show_text && p.heading) {
     const h = document.createElement("div"); h.className = "heading"; h.textContent = p.heading;
     h.style.cssText += `font-family:${p.title_font};color:${p.heading_color};left:${p.heading_x}px;top:${p.heading_y}px;transform:translate(-50%,-50%)`;
-    layer.appendChild(h); tl.from(h, {opacity: 0, duration: 0.5}, 0.4);
+    layer.appendChild(h); tl.from(h, {opacity: 0, duration: 0.5 * k}, 0.4 * k);
   }
   (p.items || []).forEach((item, i) => {
     const photo = document.createElement("div"); photo.className = "photo";
@@ -42,13 +43,13 @@
     photo.style.transform = `rotate(${item.tilt}deg)`;
     const img = document.createElement("img"); img.src = item.image; photo.appendChild(img);
     layer.appendChild(photo);
-    tl.from(photo, {x: 500, opacity: 0, rotation: item.tilt + 12, duration: 0.6, ease: "back.out(1.4)"}, 0.5 + i * 0.45);
+    tl.from(photo, {x: 500, opacity: 0, rotation: item.tilt + 12, duration: 0.6 * k, ease: "back.out(1.4)"}, (0.5 + i * 0.45) * k);
     if (p.show_text) {
       const line = document.createElement("div"); line.className = "line";
       line.style.cssText = `left:${item.text_x}px;top:${item.text_y}px;transform:translate(-50%,-50%);font-family:${p.label_font};color:${p.ink}`;
       line.innerHTML = `<span class="tick">✓</span>${item.label}`;
       layer.appendChild(line);
-      tl.from(line, {clipPath: "inset(0 100% 0 0)", duration: 0.6, ease: "none"}, 0.7 + i * 0.45);
+      tl.from(line, {clipPath: "inset(0 100% 0 0)", duration: 0.6 * k, ease: "none"}, (0.7 + i * 0.45) * k);
     }
   });
   window.__timelines = window.__timelines || {}; window.__timelines.recipe_book = tl;

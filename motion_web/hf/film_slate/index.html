@@ -10,6 +10,10 @@
   .crossv{position:absolute;top:0;bottom:0;left:958px;width:4px;background:rgba(255,255,255,.5)}
   #count{position:absolute;left:0;right:0;top:420px;text-align:center;color:#fff;font:bold 220px Futura, sans-serif}
   .text{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;text-align:center}
+  .strip{position:absolute;top:0;bottom:0;width:110px;background:#0b0b0b;
+         background-image:repeating-linear-gradient(to bottom, transparent 0 34px, #d8d2c4 34px 70px, transparent 70px 104px);
+         background-size:46px 104px;background-repeat:repeat-y;background-position:32px 0}
+  .scratch{position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.35)}
   #grain{position:absolute;inset:0;opacity:.12;background-image:repeating-radial-gradient(circle at 17% 32%, #fff 0 1px, transparent 1px 3px)}
 </style></head>
 <body>
@@ -20,7 +24,11 @@
     <div class="cross"></div><div class="crossv"></div><div class="ring"></div><div id="count">3</div>
   </div>
   <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
-  <div id="grain" class="clip" data-start="0" data-duration="600" data-track-index="3"></div>
+  <div id="film" class="clip" data-start="0" data-duration="600" data-track-index="3">
+    <div class="strip" style="left:0"></div><div class="strip" style="right:0"></div>
+    <div class="scratch" id="s1" style="left:520px"></div><div class="scratch" id="s2" style="left:1390px"></div>
+  </div>
+  <div id="grain" class="clip" data-start="0" data-duration="600" data-track-index="4"></div>
 </div>
 <script>
   const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
@@ -28,19 +36,30 @@
   document.getElementById("stage").setAttribute("data-duration", String(p.seconds || 4));
   if (p.background) document.getElementById("bg").style.backgroundImage = `url(${p.background})`;
   const tl = gsap.timeline({paused: true});
+  const seconds = p.seconds || 4;
+  // Short headings (about a second) still show the whole move: every step scales to the scene.
+  const k = Math.min(1, seconds / 4);
   const count = document.getElementById("count");
-  [3, 2, 1].forEach((n, i) => tl.call(() => { count.textContent = String(n); }, null, i * 0.3));
-  tl.to("#leader", {opacity: 0, duration: 0.25}, 0.9);
-  tl.fromTo("#bg", {scale: 1.12}, {scale: 1.0, duration: (p.seconds || 4), ease: "none"}, 0);
+  if (seconds >= 2.5) {
+    [3, 2, 1].forEach((n, i) => tl.call(() => { count.textContent = String(n); }, null, i * 0.3 * k));
+    tl.to("#leader", {opacity: 0, duration: 0.25 * k}, 0.9 * k);
+  } else {
+    tl.set("#leader", {opacity: 0}, 0);
+    tl.from("#stage", {filter: "brightness(3)", duration: 0.25}, 0);  // a quick film flash instead of the countdown
+  }
+  tl.fromTo("#bg", {scale: 1.12}, {scale: 1.0, duration: seconds, ease: "none"}, 0);
   if (p.show_text) {
     (p.texts || []).forEach((t, i) => {
       const el = document.createElement("div"); el.className = "text"; el.textContent = t.text;
       el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};letter-spacing:${t.spacing || 0}px`;
       document.getElementById("words").appendChild(el);
-      tl.from(el, {opacity: 0, y: 30, duration: 0.6, ease: "power2.out"}, 1.0 + i * 0.25);
+      tl.from(el, {opacity: 0, y: 30, duration: 0.6 * k, ease: "power2.out"}, (seconds >= 2.5 ? 1.0 : 0.1) * k + i * 0.15 * k);
     });
   }
   tl.to("#grain", {x: 6, y: -4, duration: 0.08, repeat: 60, yoyo: true, ease: "none"}, 0);
+  tl.to(".strip", {backgroundPositionY: "+=520px", duration: seconds, ease: "none"}, 0);  // the film runs through the gate
+  tl.to("#s1", {x: 90, opacity: 0.1, duration: 0.12, repeat: 20, yoyo: true, ease: "none"}, 0);
+  tl.to("#s2", {x: -140, opacity: 0.5, duration: 0.17, repeat: 14, yoyo: true, ease: "none"}, 0);
   window.__timelines = window.__timelines || {}; window.__timelines.film_slate = tl;
 </script>
 </body></html>

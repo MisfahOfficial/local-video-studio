@@ -15,8 +15,11 @@ const place = (t: Text): React.CSSProperties => ({
   fontSize: t.size, fontFamily: t.font, color: t.color, letterSpacing: t.spacing || 0,
 });
 
+// Short scenes (about a second) still show the whole move: timings shrink with the scene.
+const pace = (p: Payload) => Math.min(1, (p.seconds || 4) / 4);
+
 const Carousel: React.FC<{payload: Payload}> = ({payload: p}) => {
-  const frame = useCurrentFrame();
+  const frame = useCurrentFrame() / pace(p);
   const {fps} = useVideoConfig();
   return (
     <AbsoluteFill style={{background: `radial-gradient(circle at 50% 35%, ${p.bg_inner}, ${p.bg_outer})`}}>
@@ -47,7 +50,7 @@ const Carousel: React.FC<{payload: Payload}> = ({payload: p}) => {
 };
 
 const Newspaper: React.FC<{payload: Payload}> = ({payload: p}) => {
-  const frame = useCurrentFrame();
+  const frame = useCurrentFrame() / pace(p);
   const {fps} = useVideoConfig();
   const spin = spring({frame, fps, config: {damping: 16, mass: 1.4}});
   return (
