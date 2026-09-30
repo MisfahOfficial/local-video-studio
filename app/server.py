@@ -167,6 +167,15 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
 EFFECT_KEYS = ("film_look", "photo_graphics", "subscribe_button")
 
 
+def require_reference(project: dict[str, Any] | None) -> None:
+    """No footage, images or graphics are made before the project has an example video to follow."""
+    if project is None:
+        raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+    missing = missing_reference_message(project)
+    if missing:
+        raise ApiError(missing + " (Script & VO tab > Example videos).")
+
+
 def normalize_effects(value: Any) -> dict[str, Any]:
     """Timeline effects (each on unless turned off) and the project's channel style."""
     from .channel_styles import DEFAULT_STYLE, STYLES
@@ -816,6 +825,7 @@ def build_handler(application: StudioApplication):
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/generate", path)
             if match:
                 project_id = match.group(1)
+                require_reference(application.db.get_project(project_id))
                 body = self._read_json()
                 scene_ids = self._scene_ids(body.get("scene_ids"))
                 queued = application.db.queue_generation(project_id, scene_ids, bool(body.get("force", False)))
@@ -848,6 +858,7 @@ def build_handler(application: StudioApplication):
                 project_id = match.group(1)
                 if not application.db.get_project(project_id):
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                require_reference(application.db.get_project(project_id))
                 body = self._read_json()
                 settings = application.settings.load()
                 if normalize_license_mode(settings.youtube_license_mode) != FAIR_USE and not settings.youtube_api_key:
