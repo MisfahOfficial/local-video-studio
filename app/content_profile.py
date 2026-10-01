@@ -79,7 +79,14 @@ BUILTIN: dict[str, ContentProfile] = {
         context_words=("food", "ketchup", "sauce", "tomato", "tomatoes", "mustard", "mayo", "mayonnaise", "condiment",
                        "commercial", "ad", "advert", "factory", "production", "brand", "bottle", "jar", "can",
                        "grocery", "supermarket", "product", "recipe", "taste", "review", "company", "history",
-                       "documentary", "ingredients", "label", "organic", "snack", "cereal", "soup", "juice"),
+                       "documentary", "ingredients", "label", "organic", "snack", "cereal", "soup", "juice",
+                       # Restaurant chains (C1 lists): "Red Robin Is Closing Restaurants" was refused for
+                       # naming no packaged food.
+                       "restaurant", "chain", "menu", "diner", "dining", "eat", "eating", "breakfast", "lunch",
+                       "dinner", "burger", "fries", "pancake", "pizza", "steak", "steakhouse", "wings", "chicken",
+                       "coffee", "drive thru", "drive-thru", "fast food", "closing", "closed", "bankrupt",
+                       "bankruptcy", "location", "store", "stores", "buffet", "seafood", "lobster", "shrimp",
+                       "waitress", "server", "kitchen", "inside", "tour"),
         blocked_words=("faucet", "shower", "gold rush", "fertilizer", "fertiliser", "garden", "plant care",
                        "pest control", "weed killer", "walking tour", "real estate", "gaming", "minecraft"),
         recipe_cards=False,

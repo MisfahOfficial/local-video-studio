@@ -543,7 +543,12 @@ class AutoYouTubeManager:
                     "finished": time.time(), "scenes": len(scenes), "completed": run.completed, "failed": run.failed,
                     "timings": {**timings, "total_s": round(time.time() - started)},
                     "youtube_blocked": bool(getattr(run.service, "youtube_blocked", False)),
-                }))
+                    # What each scene got and why a scene failed, so a bad run can be diagnosed afterwards.
+                    "generated": sorted(run.generated), "photos": sorted(run.photos), "graphics": sorted(run.graphics),
+                    "errors": run.errors[-400:], "notes": {str(key): value for key, value in run.notes.items()},
+                    "sections": [{"subject": subject, "recipe": recipe, "sources": [str(item.get("title") or "")[:90] for item in sources]}
+                                 for subject, recipe, sources in run.section_pools],
+                }, indent=1))
             except (OSError, NameError):
                 pass
             with self._lock:

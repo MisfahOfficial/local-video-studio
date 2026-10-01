@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import io
 import random
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +53,23 @@ def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, c
     )
 
 
+# The Runware account takes one image request at a time: three at once returned
+# "concurrentRequestLimitExceeded" and left 137 scenes of the C1 video empty.
+_RUNWARE_SLOT = threading.Semaphore(1)
+
+
+def _runware_one_at_a_time(make: Any) -> Any:
+    for attempt in range(4):
+        with _RUNWARE_SLOT:
+            try:
+                return make()
+            except ProviderError as error:
+                if "concurrentRequestLimit" not in str(error) or attempt == 3:
+                    raise
+        time.sleep(3 * (attempt + 1))  # another program may be using the account: wait, then try again
+    raise ProviderError("Runware stayed busy")
+
+
 def film_finish(content: bytes, seed: int, size: tuple[int, int] = (1920, 1080)) -> Any:
     """Make a generated image read like a scanned period photo."""
     import numpy as np
@@ -87,10 +106,10 @@ def generate_vintage_still(
     runware_error = "no Runware key"
     if settings.runware_api_key:
         try:
-            result = RunwareImageProvider(settings.runware_api_key).generate(GenerationRequest(
+            result = _runware_one_at_a_time(lambda: RunwareImageProvider(settings.runware_api_key).generate(GenerationRequest(
                 prompt=prompt, negative_prompt=negative, model=settings.runware_default_model,
                 width=settings.width, height=settings.height, seed=seed, steps=4,
-            ))
+            )))
             film_finish(result.content, seed).save(destination, quality=92)
             return {"prompt": prompt, "cost": result.cost, "model": result.model, "generated_still": True}
         except ProviderError as error:

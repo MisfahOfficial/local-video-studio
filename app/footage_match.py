@@ -108,18 +108,30 @@ def mentions_topic(text: str, topic: str) -> bool:
     return any(form in normalized or form.replace(" ", "") in squeezed for form in topic_forms(topic))
 
 
-_NUMBERING = re.compile(r"^\s*(?:#?\d+\s*[.):\-]|number\s+\d+\s*[.:\-]?)\s*", re.IGNORECASE)
+_COUNT = (r"\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+          r"sixteen|seventeen|eighteen|nineteen|twenty(?:[\s-](?:one|two|three|four|five|six|seven|eight|nine))?|"
+          r"thirty|forty|fifty")
+# List numbering before a section's name: "2. Vinegar Pie", "#12 Red Robin", "Number Twelve — Red Robin",
+# "No. 3: IHOP", "Part Two - Hooters". Left in, it made the C1 subject "number twelve red robin" and every
+# YouTube title without "number twelve" was refused (4 real clips in a 277-scene video).
+_NUMBERING = re.compile(
+    r"^\s*(?:#?\d+\s*[.):\-\u2013\u2014]|#\d+|(?:number|no\.?|part|chapter|step|rank)\s*#?(?:" + _COUNT + r")\b\s*[.:\-\u2013\u2014]?"
+    r"|(?:" + _COUNT + r")\s*[.):\u2013\u2014])\s*",
+    re.IGNORECASE,
+)
 
 
 def heading_subject(sentence: str) -> str:
     """'POOR MAN'S COOKIES' or '2. Vinegar Pie' -> the section's subject; '' for normal sentences."""
     text = sentence.strip().strip('"\u201c\u201d')
     numbered = bool(_NUMBERING.match(text))
-    text = _NUMBERING.sub("", text).strip(" .:!-")
+    text = _NUMBERING.sub("", text).strip(" .:!-\u2013\u2014")
     words = re.findall(r"[A-Za-z][A-Za-z'\u2019-]*", text)
     if not 1 <= len(words) <= 7:
         return ""
     letters = "".join(words)
+    if not numbered and len(words) == 1 and sentence.strip().endswith("."):
+        return ""  # "IHOP." is the brand read aloud, not a second heading (it made a duplicate chapter card)
     if (letters.isupper() and len(letters) > 3) or (numbered and not sentence.strip().endswith("?")):
         return text.lower().replace("\u2019", "'")
     # A Title Case line with no closing punctuation ("Chicken and Rice Casserole").
@@ -137,8 +149,18 @@ def core_subject(subject: str) -> str:
     """The filmable thing: 'poor man's cookies' -> 'cookies', 'musk ox' -> 'musk ox'."""
     subject = subject.lower().replace("\u2019", "'").strip()
     if "'s " in subject:
-        subject = subject.split("'s ", 1)[1]
+        owner, rest = subject.split("'s ", 1)
+        # Only a vague owner is dropped ("poor man's", "grandma's"); a brand keeps its name
+        # ("peet's coffee" became "coffee" and coffee-cake videos were accepted).
+        if set(owner.split()) & _VAGUE_OWNERS:
+            subject = rest
     return subject.strip()
+
+
+_VAGUE_OWNERS = {"man", "men", "grandma", "granny", "grandmother", "nana", "mom", "mum", "mother", "mama", "ma",
+                 "pa", "dad", "farmer", "farmers", "baker", "bakers", "cook", "cowboy", "shepherd", "hunter",
+                 "miner", "sailor", "soldier", "worker", "workers", "aunt", "auntie", "uncle", "lady", "ladies",
+                 "children", "kid", "kids", "church", "preacher", "pastor", "hobo", "wife", "housewife", "nanny"}
 
 
 def detect_era(script: str) -> str:

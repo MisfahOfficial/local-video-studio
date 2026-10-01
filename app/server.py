@@ -176,6 +176,16 @@ def require_reference(project: dict[str, Any] | None) -> None:
         raise ApiError(missing + " (Script & VO tab > Example videos).")
 
 
+def _kit_keys() -> set[str]:
+    try:
+        from .channel_kits import load_kits
+        from .paths import AppPaths
+
+        return set(load_kits(AppPaths.resolve().root))
+    except Exception:
+        return set()
+
+
 def normalize_effects(value: Any) -> dict[str, Any]:
     """Timeline effects (each on unless turned off) and the project's channel style."""
     from .channel_styles import DEFAULT_STYLE, STYLES
@@ -183,7 +193,9 @@ def normalize_effects(value: Any) -> dict[str, Any]:
     supplied = value if isinstance(value, dict) else {}
     effects: dict[str, Any] = {key: bool(supplied.get(key, True)) for key in EFFECT_KEYS}
     style = str(supplied.get("channel_style") or DEFAULT_STYLE).lower()
-    effects["channel_style"] = style if style in STYLES else DEFAULT_STYLE
+    # Channels made from example videos ("c-...") are kept too; only V1-V4 were accepted before, so a C1
+    # video silently got the V3 Britain look.
+    effects["channel_style"] = style if style in STYLES or style in _kit_keys() else DEFAULT_STYLE
     return effects
 
 
