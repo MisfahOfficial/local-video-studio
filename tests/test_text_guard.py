@@ -34,6 +34,8 @@ class VisionFileHandleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             image = Path(folder) / "frame.jpg"
             Image.new("RGB", (320, 180), (200, 180, 150)).save(image)
+            text_guard.face_areas(image)  # Vision opens its own model files once, on first use
+            text_guard.read_text(image)
             before = len(os.listdir("/dev/fd"))
             for _ in range(60):
                 text_guard.face_areas(image)
