@@ -199,6 +199,9 @@ _GOOD_MATCH = 4.0
 
 MAX_SOURCE_SECONDS = 45 * 60
 _READ_SLOTS = threading.BoundedSemaphore(2)
+# YouTube serves each video at its own (often slow, ~0.2 MB/s) speed, whatever the line speed: downloads of
+# different videos overlap instead of waiting for a reading slot. Four at once keeps the request rate modest.
+_DOWNLOAD_SLOTS = threading.BoundedSemaphore(4)
 
 
 def _has_video(path: Path, ffmpeg_path: str = "ffmpeg") -> bool:
@@ -743,9 +746,10 @@ class AutoYouTubeManager:
             if not run.verifier.has_whole_video(video_id) and run.verifier.load_analysis(video_id, analyses):
                 return candidate  # read in an earlier run: instant
             if not run.verifier.has_whole_video(video_id):
+                with _DOWNLOAD_SLOTS:  # downloading holds no frames in memory: it does not need a reading slot
+                    copy = analysis_copy(info, cache)
                 # A whole read holds hundreds of frames; two at a time keeps an 8 GB Mac alive.
                 with _READ_SLOTS:
-                    copy = analysis_copy(info, cache)
                     frames, cuts = read_source(copy, run.service.ffmpeg_path, float(info.get("duration") or 0)) if copy else ([], [])
                     read = bool(frames)
                     if read:

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.parse
 import uuid
 from http import HTTPStatus
@@ -787,6 +788,12 @@ def build_handler(application: StudioApplication):
                 except Exception:
                     pass
                 project = application.db.update_project(project_id, voiceover_path=str(destination), duration_seconds=duration)
+                # Start listening now: by the time the script and examples are in, the words are ready
+                # (a 45-minute voice-over took ~7 min of "Create video").
+                from .whisper_planner import CachedTranscriber
+
+                threading.Thread(target=CachedTranscriber(destination.parent / "transcript.json").transcribe_quietly,
+                                 args=(destination,), daemon=True, name=f"listen-{project_id[:8]}").start()
                 self._json({"project": project, "filename": filename, "duration_seconds": duration})
                 return
 

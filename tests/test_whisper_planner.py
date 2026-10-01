@@ -110,3 +110,29 @@ class VoiceTimesTest(unittest.TestCase):
         self.assertAlmostEqual(times[2][0], (5.6 + 9.0) / 2, places=2)
         self.assertEqual(times[-1][1], 12.0)
         self.assertTrue(all(end > start for start, end in times))
+
+
+class EarlyListenTest(unittest.TestCase):
+    def test_the_voice_over_is_heard_once_and_reused(self):
+        import tempfile
+        import threading as threads
+
+        from app.whisper_planner import CachedTranscriber
+
+        calls = []
+
+        class Slow:
+            def transcribe(self, _path):
+                calls.append(1)
+                return [{"words": [{"word": "hello", "start": 0.0, "end": 0.4}]}]
+
+        with tempfile.TemporaryDirectory() as folder:
+            audio = Path(folder) / "voiceover.mp3"
+            audio.write_bytes(b"x" * 10)
+            listener = CachedTranscriber(Path(folder) / "transcript.json", Slow())
+            early = threads.Thread(target=listener.transcribe_quietly, args=(audio,))
+            early.start()
+            segments = CachedTranscriber(Path(folder) / "transcript.json", Slow()).transcribe(audio)
+            early.join()
+            self.assertEqual(segments[0]["words"][0]["word"], "hello")
+            self.assertEqual(len(calls), 1)

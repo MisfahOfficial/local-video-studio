@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import threading
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -271,6 +272,10 @@ def voice_times(narrations: list[str], segments: list[dict[str, Any]], duration:
     return times
 
 
+_LISTENING: dict[str, threading.Lock] = {}
+_LISTENING_GUARD = threading.Lock()
+
+
 class CachedTranscriber:
     """Whisper once per voice-over: the words are saved next to it, so re-syncing is instant."""
 
@@ -279,6 +284,19 @@ class CachedTranscriber:
         self.inner = inner or FasterWhisperTranscriber()
 
     def transcribe(self, audio_path: Path) -> list[dict[str, Any]]:
+        # One listener per voice-over: "Create video" during the upload's early listen waits and reuses it.
+        with _LISTENING_GUARD:
+            lock = _LISTENING.setdefault(str(self.cache), threading.Lock())
+        with lock:
+            return self._transcribe(audio_path)
+
+    def transcribe_quietly(self, audio_path: Path) -> None:
+        try:
+            self.transcribe(audio_path)
+        except Exception:  # an early listen is only a head start; planning listens again if it failed
+            pass
+
+    def _transcribe(self, audio_path: Path) -> list[dict[str, Any]]:
         import json
 
         stat = audio_path.stat()
