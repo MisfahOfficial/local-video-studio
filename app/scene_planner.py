@@ -70,7 +70,15 @@ def _sentences(script: str) -> list[str]:
     if not normalized:
         return []
     parts = re.split(r"(?<=[.!?])\s+|\n+", normalized)
-    return [part.strip() for part in parts if part.strip()]
+    sentences: list[str] = []
+    for part in (part.strip() for part in parts):
+        if not part:
+            continue
+        if sentences and re.fullmatch(r"#?\d+[.)]", sentences[-1]):
+            sentences[-1] = f"{sentences[-1]} {part}"  # "1." + "Banana Split" is one heading, not a 0.6 s scene
+        else:
+            sentences.append(part)
+    return sentences
 
 
 def _word_count(text: str) -> int:

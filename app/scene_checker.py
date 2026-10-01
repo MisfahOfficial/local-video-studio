@@ -109,13 +109,17 @@ def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any) -> dict[str, dic
         "shop, a brownie sundae is not ice cream cone cakes, Applebee's is not Red Robin); or it is unrelated to "
         "the section (a sandwich film for biscuits, random people, a blank or title screen); or the sentence "
         "clearly names something else that should be seen instead (a map, a factory, a specific person).\n"
+        "Lines that talk to the viewer (comment, subscribe, which one do you miss) fit any shot of the section's "
+        "subject.\n"
         "score 0-10 for how well it works there. reason: at most 10 words.\n\n" + lines)
     for attempt in range(3):
         try:
             answer = gemini_look(settings, prompt, [buffer.getvalue()], SCHEMA)
             break
-        except Exception as error:  # "high demand" (503) passes in seconds; a used-up quota does not
-            if attempt == 2 or not any(code in str(error) for code in ("503", "UNAVAILABLE", "high demand")):
+        except Exception as error:
+            # "high demand" (503) and dropped connections pass in seconds; a used-up quota (429) does not.
+            if attempt == 2 or not any(code in str(error) for code in (
+                    "503", "UNAVAILABLE", "high demand", "Broken pipe", "timed out", "Connection reset", "urlopen error")):
                 raise
             time.sleep(8 * (attempt + 1))
     return {str(item.get("label") or "").strip().upper(): item for item in (answer or {}).get("verdicts") or []}

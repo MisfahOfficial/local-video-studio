@@ -273,6 +273,7 @@ class _Run:
     teasers: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     plan_for: set[str] = field(default_factory=set)
     by_position: dict[int, str] = field(default_factory=dict)
+    section_reuse: list[int] = field(default_factory=list)  # scenes given another shot of the section's dish
     banned: dict[str, set[str]] = field(default_factory=dict)  # subject -> sources refused for it (AI checker / Ishaq)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -307,7 +308,8 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
         # "Chicken and Rice Casserole" must be the video's own dish: every word of the name in its
         # title ("Buffalo Chicken Dynamite Rice" only lists it among others in the description).
         dish_words = [word for word in core.split() if word not in _STOPWORDS]
-        named = (all(mentions_topic(title, word) for word in dish_words)
+        # Numbers in a name ("7 Brew") are matched as numbers; the word matcher only reads letters.
+        named = (all(word in re.findall(r"\d+", title) if word.isdigit() else mentions_topic(title, word) for word in dish_words)
                  if len(dish_words) >= 2 else mentions_topic(text, core))
     channel = str(item.get("channel") or item.get("uploader") or "")
     if is_hook and run.era and MODERN_TITLE.search(title):
@@ -548,12 +550,15 @@ class AutoYouTubeManager:
             try:  # a small record per run, so slow steps can be found later
                 logs = self.paths.root / "logs"
                 logs.mkdir(exist_ok=True)
-                (logs / f"sourcing-{project_id}.json").write_text(json.dumps({
+                # A re-run of some scenes (the AI checker's) gets its own file and keeps the full run's record.
+                partial = len(scenes) < len(all_scenes)
+                (logs / f"sourcing-{project_id}{'-rerun' if partial else ''}.json").write_text(json.dumps({
                     "finished": time.time(), "scenes": len(scenes), "completed": run.completed, "failed": run.failed,
                     "timings": {**timings, "total_s": round(time.time() - started)},
                     "youtube_blocked": bool(getattr(run.service, "youtube_blocked", False)),
                     # What each scene got and why a scene failed, so a bad run can be diagnosed afterwards.
                     "generated": sorted(run.generated), "photos": sorted(run.photos), "graphics": sorted(run.graphics),
+                    "section_reuse": sorted(run.section_reuse),
                     "errors": run.errors[-400:], "notes": {str(key): value for key, value in run.notes.items()},
                     "sections": [{"subject": subject, "recipe": recipe, "sources": [str(item.get("title") or "")[:90] for item in sources]}
                                  for subject, recipe, sources in run.section_pools],
@@ -997,7 +1002,12 @@ class AutoYouTubeManager:
                 run.notes[position] = "no matching clip" if isinstance(error, _NoFootage) else str(error)[:300]
             try:
                 photo_subject = subject or (run.section_pools[0][1] or run.section_pools[0][0] if run.section_pools else run.theme)
-                if self._real_photo(run, scene, position, scene_text, photo_subject, queries):
+                if not is_hook and self._section_footage(run, scene, position, subject, recipe):
+                    # Like an editor: another shot of the same dish from the section's own videos.
+                    with run.lock:
+                        run.completed += 1
+                        run.section_reuse.append(position)
+                elif self._real_photo(run, scene, position, scene_text, photo_subject, queries):
                     with run.lock:
                         run.completed += 1
                         run.photos.append(position)
@@ -1026,6 +1036,72 @@ class AutoYouTubeManager:
                     run.failed += 1
                     run.errors.append({"scene": position, "error": str(reason)[:500], "query": query})
         self._progress(run)
+
+    def _section_footage(self, run: "_Run", scene: dict[str, Any], position: int, subject: str, recipe: str) -> bool:
+        """Before a photo or an AI image: another unused moment of the dish from this section's own source
+        videos. The sentence's planned moment often fails a check (burned-in captions, a host's face) while the
+        same video has other clean shots of the dish; the V2 test turned those scenes into AI images."""
+        if run.verifier is None or not subject:
+            return False
+        pool = next((sources for name, _recipe, sources in run.section_pools if name == subject), [])
+        duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+        dish = (recipe if vague_heading(subject) else core_subject(subject)) or recipe or core_subject(subject)
+        for candidate in pool:
+            video_id = str(candidate["video_id"])
+            if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
+                continue  # the neighbour already shows this video: a different source looks less repetitive
+            for _attempt in range(3):
+                with run.lock:
+                    avoid = list(run.used.get(video_id, []))
+                moment = run.verifier.best_moment(video_id, run.infos[video_id], subject, dish, duration, avoid=avoid,
+                                                  recipe=recipe, prefer_vintage=bool(run.era), avoid_radius=6.0)
+                if moment is None:
+                    break
+                start = moment[0]
+                with run.lock:
+                    run.used.setdefault(video_id, []).append(float(start))
+                destination = (self.paths.project_dir(run.project_id) / "assets" / "youtube"
+                               / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4")
+                try:
+                    metadata = run.service.source_clip(video_id=video_id, query=dish, duration=duration,
+                                                       destination=destination, source_start_seconds=start,
+                                                       info=run.infos.get(video_id), padding=SHOT_PADDING)
+                    self._single_shot(run, destination, metadata, start, duration)
+                    if not _has_video(destination, run.service.ffmpeg_path):
+                        raise ProviderError("The downloaded clip is empty or unreadable")
+                    bars = content_box(destination, run.service.ffmpeg_path)
+                    if bars and bars[4] < 1.25:
+                        raise ProviderError("Portrait picture inside black bars")
+                    if has_burned_in_text(destination, run.service.ffmpeg_path):
+                        raise ProviderError("Burned-in captions")
+                    if self._shows_creator(run, destination):
+                        raise ProviderError("A present-day person is on camera")
+                except Exception:
+                    destination.unlink(missing_ok=True)
+                    continue
+                metadata.update({"auto_sourced": True, "search_query": dish, "topic": subject, "section_reuse": True,
+                                 "relevance_score": round(candidate_relevance(candidate, scene), 3),
+                                 "visual_match": round(moment[1], 3), "needs_review": False})
+                try:
+                    logo = analyse_clip(destination, run.service.ffmpeg_path, run.verifier.grey_frames(video_id))
+                except Exception:
+                    logo = {"logo_boxes": [], "safe_crop": None, "logo_hidden": True}
+                if bars:
+                    logo["safe_crop"] = fit_crop(bars, logo.get("safe_crop"))
+                    logo["black_bars"] = [round(value, 4) for value in bars[:4]]
+                metadata.update(logo)
+                metadata["needs_review"] = not logo["logo_hidden"]
+                asset = self.db.add_asset(
+                    project_id=run.project_id, scene_id=str(scene["id"]),
+                    candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                    media_kind="video", provider="youtube", model=run.model, local_path=str(destination),
+                    remote_url=metadata.get("source_url"), provider_asset_id=video_id, cost=0.0, metadata=metadata,
+                )
+                self.db.select_asset(str(scene["id"]), str(asset["id"]))
+                with run.lock:
+                    run.by_position[position] = video_id
+                return True
+        return False
 
     def _real_photo(
         self, run: "_Run", scene: dict[str, Any], position: int, scene_text: str, subject: str, queries: list[str],
