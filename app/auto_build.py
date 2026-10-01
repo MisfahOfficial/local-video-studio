@@ -6,6 +6,7 @@ aged still, so the Visual plan step is no longer needed.
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -64,8 +65,9 @@ class AutoBuildManager:
                 self._update(project_id, running=False, stage="Paused: YouTube is blocking this computer. Run it again later; "
                              "finished scenes are kept.", filled=[], fill_failed=[])
                 return
+            checked = self._check(project_id)
             filled, failed = self._fill_missing(project_id)
-            self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed)
+            self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked)
             # After each video the AI designs one new chapter look and one new ingredients look for the
             # channel's library (quietly, after the build, so it never slows the video down).
             threading.Thread(target=self._grow_designs, args=(project_id,), daemon=True, name="design-growth").start()
@@ -95,6 +97,50 @@ class AutoBuildManager:
                                     sample_image=sample, ffmpeg_path=str(settings.ffmpeg_path or "ffmpeg"))
         except Exception:  # growing the library is a bonus; it must never disturb the tool
             pass
+
+    def _check(self, project_id: str) -> dict[str, Any]:
+        """The AI checker looks at every real clip next to its sentence; the ones that do not fit are
+        sourced again once (their source excluded) before anything becomes an AI image."""
+        from .scene_checker import check_scenes
+
+        settings = self.app.settings.load()
+        ffmpeg = str(settings.ffmpeg_path or "ffmpeg")
+        self._update(project_id, stage="AI checker: looking at every clip", step=3)
+
+        def progress(done: int, total: int) -> None:
+            self._update(project_id, stage=f"AI checker: {done}/{total} clips looked at")
+
+        result = check_scenes(self.app.db, self.app.paths.root, settings, project_id, ffmpeg, progress)
+        rejected = result.get("rejected") or []
+        kept = 0
+        if rejected:
+            self._update(project_id, stage=f"AI checker: finding new footage for {len(rejected)} wrong clips")
+            before = {str(scene["id"]): str(scene.get("selected_asset_id") or "") for scene in self.app.db.list_scenes(project_id)}
+            self.app.youtube_auto.start(project_id, rejected, force=True, exclude_current=True)
+            time.sleep(1)
+            while self.app.youtube_auto.status(project_id).get("running"):
+                time.sleep(2)
+            # Never worse than before: a scene that found no other REAL footage keeps its first clip
+            # (an AI image or an empty scene would be a bigger miss than a near-fit clip).
+            assets = {str(asset["id"]): asset for asset in self.app.db.list_assets(project_id)}
+            for scene in self.app.db.list_scenes(project_id):
+                scene_id = str(scene["id"])
+                if scene_id not in rejected or not before.get(scene_id):
+                    continue
+                now = assets.get(str(scene.get("selected_asset_id") or ""), {})
+                if now.get("provider") not in ("youtube", "photo") and before[scene_id] in assets:
+                    self.app.db.select_asset(scene_id, before[scene_id])
+                    kept += 1
+        result["kept_first_clip"] = kept
+        self._update(project_id, stage="Filling missing scenes")
+        try:
+            logs = self.app.paths.root / "logs"
+            logs.mkdir(exist_ok=True)
+            (logs / f"checker-{project_id}.json").write_text(json.dumps(result, indent=1))
+        except OSError:
+            pass
+        return {"checked": result.get("checked", 0), "rejected": len(rejected), "kept_first_clip": kept,
+                "error": result.get("error", "")}
 
     def _fill_missing(self, project_id: str) -> tuple[list[int], list[dict[str, Any]]]:
         """A realistic period still for every scene that still has nothing (and is not a heading)."""

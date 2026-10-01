@@ -1134,6 +1134,12 @@ def build_handler(application: StudioApplication):
                     local_path=str(destination), remote_url=None, provider_asset_id=None,
                     cost=0.0, metadata={"original_filename": filename},
                 )
+                try:  # the clip it replaces was wrong for this subject
+                    from .scene_checker import remember_replacement
+
+                    remember_replacement(application.db, application.paths.root, str(scene["id"]), str(asset["id"]))
+                except Exception:
+                    pass
                 selected_scene = application.db.select_asset(str(scene["id"]), str(asset["id"]))
                 payload = next(
                     item for item in application.asset_payloads(str(scene["project_id"])) if item["id"] == asset["id"]
@@ -1179,6 +1185,12 @@ def build_handler(application: StudioApplication):
                     local_path=str(destination), remote_url=metadata["source_url"],
                     provider_asset_id=video_id, cost=0.0, metadata=metadata,
                 )
+                try:  # the clip it replaces was wrong for this subject
+                    from .scene_checker import remember_replacement
+
+                    remember_replacement(application.db, application.paths.root, str(scene["id"]), str(asset["id"]))
+                except Exception:
+                    pass
                 selected_scene = application.db.select_asset(str(scene["id"]), str(asset["id"]))
                 payload = next(
                     item for item in application.asset_payloads(str(scene["project_id"])) if item["id"] == asset["id"]
@@ -1188,6 +1200,12 @@ def build_handler(application: StudioApplication):
             match = re.fullmatch(r"/api/scenes/([a-zA-Z0-9_-]+)/select-asset", path)
             if match:
                 body = self._read_json()
+                try:  # a replaced auto-sourced clip is remembered as wrong for its subject
+                    from .scene_checker import remember_replacement
+
+                    remember_replacement(application.db, application.paths.root, match.group(1), str(body.get("asset_id", "")))
+                except Exception:
+                    pass
                 scene = application.db.select_asset(match.group(1), str(body.get("asset_id", "")))
                 self._json(scene)
                 return

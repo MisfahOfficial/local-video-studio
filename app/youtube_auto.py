@@ -273,6 +273,7 @@ class _Run:
     teasers: dict[str, list[tuple[dict[str, Any], float | None, float | None]]] = field(default_factory=dict)
     plan_for: set[str] = field(default_factory=set)
     by_position: dict[int, str] = field(default_factory=dict)
+    banned: dict[str, set[str]] = field(default_factory=dict)  # subject -> sources refused for it (AI checker / Ishaq)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
 
@@ -314,6 +315,8 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
     return (not NON_FOOTAGE_TITLE.search(title) and not NON_FOOTAGE_TITLE.search(channel)
             and not off_cuisine(title, run.script)
             and str(item.get("video_id")) not in run.exclude_videos
+            # Sources the AI checker refused twice for this subject, or that Ishaq replaced by hand.
+            and str(item.get("video_id")) not in getattr(run, "banned", {}).get(core.strip().lower(), ())
             and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
             and run.profile.title_allowed(title)
             and (seen or (named and exact)))
@@ -469,6 +472,12 @@ class AutoYouTubeManager:
         if run.gallery_id in redo:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
+        try:
+            from .scene_checker import banned_sources
+
+            run.banned = banned_sources(self.paths.root)
+        except Exception:
+            run.banned = {}
         run.style = get_style((project.get("effects") or {}).get("channel_style"))
         # Each ingredient graphic gets a design the AI picked for this video, never the same look twice in a row
         # and led by one this channel has not used lately.
