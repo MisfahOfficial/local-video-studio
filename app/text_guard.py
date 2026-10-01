@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 
 # A sentence-like line, or this much readable writing in one frame, means an overlay.
 MIN_LINE_WORDS = 3
@@ -26,14 +27,22 @@ def available() -> bool:
     return True
 
 
+def _handler(Vision: Any, image_path: Path) -> Any:
+    """Vision reads the picture from memory: a handler opened on the file's URL kept the file open, and a
+    277-scene run reached 7,000 open files, after which the tool could open nothing (1 Oct, C1 video)."""
+    from Foundation import NSData
+
+    data = Path(image_path).read_bytes()
+    return Vision.VNImageRequestHandler.alloc().initWithData_options_(NSData.dataWithBytes_length_(data, len(data)), None)
+
+
 def read_text(image_path: Path) -> list[tuple[str, float]]:
     """(line, confidence) for every line of text macOS Vision finds in the image."""
     import objc
     import Vision
-    from Foundation import NSURL
 
     with _vision_lock, objc.autorelease_pool():
-        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
+        handler = _handler(Vision, image_path)
         request = Vision.VNRecognizeTextRequest.alloc().init()
         request.setRecognitionLevel_(0)  # accurate; still ~50 ms per frame
         request.setUsesLanguageCorrection_(False)
@@ -56,10 +65,9 @@ def face_areas(image_path: Path) -> list[float]:
         return []
     import objc
     import Vision
-    from Foundation import NSURL
 
     with _vision_lock, objc.autorelease_pool():
-        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(image_path)), None)
+        handler = _handler(Vision, image_path)
         request = Vision.VNDetectFaceRectanglesRequest.alloc().init()
         handler.performRequests_error_([request], None)
         return [
