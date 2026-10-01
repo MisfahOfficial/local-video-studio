@@ -601,7 +601,13 @@ class ClipScorer:
                 import open_clip
                 import torch
 
-                device = "mps" if torch.backends.mps.is_available() else "cpu"
+                # CPU by default: on an 8 GB Mac under memory pressure the GPU (MPS) once never answered a copy,
+                # and the thread holding the verifier lock froze the whole run (1 Oct, C1 video). CPU costs ~10 s
+                # more per source; LVS_CLIP_GPU=1 brings the GPU back on a Mac with memory to spare.
+                import os
+
+                use_gpu = os.environ.get("LVS_CLIP_GPU") == "1" and torch.backends.mps.is_available()
+                device = "mps" if use_gpu else "cpu"
                 model, _, preprocess = open_clip.create_model_and_transforms(
                     "ViT-B-32", pretrained="laion2b_s34b_b79k", device=device,
                 )
