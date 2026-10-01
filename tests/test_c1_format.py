@@ -73,3 +73,14 @@ class RunwareQueueTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SceneOrderTest(unittest.TestCase):
+    def test_scenes_alternate_between_items(self):
+        from app.youtube_auto import interleave_sections, pool_size
+
+        scenes = [{"id": f"{item}{index}", "item": item} for item in "AB" for index in range(3)]
+        order = [scene["id"] for scene in interleave_sections(scenes, lambda scene: scene["item"])]
+        self.assertEqual(order, ["A0", "B0", "A1", "B1", "A2", "B2"])
+        self.assertEqual(pool_size(20), 2)
+        self.assertEqual(pool_size(34), 3)

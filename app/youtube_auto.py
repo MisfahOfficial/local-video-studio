@@ -223,7 +223,22 @@ class _NoFootage(Exception):
 SHOT_PADDING = 2.0
 
 # Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
-SCENE_WORKERS = 4
+SCENE_WORKERS = 6
+
+
+def interleave_sections(scenes: list[dict[str, Any]], key: Any) -> list[dict[str, Any]]:
+    """Scenes in turn from each section (item): YouTube slows every video on its own, so six downloads from
+    six different videos run six times faster than six downloads from the same cook's video."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for scene in scenes:
+        groups.setdefault(str(key(scene) or ""), []).append(scene)
+    ordered: list[dict[str, Any]] = []
+    queues = list(groups.values())
+    while any(queues):
+        for queue in queues:
+            if queue:
+                ordered.append(queue.pop(0))
+    return ordered
 
 
 @dataclass
@@ -337,9 +352,10 @@ POOL_SIZE = 2
 
 
 def pool_size(scene_count: int) -> int:
-    """Sources read for one section: two for a short dish, more for a long one. With two sources a
-    30-scene section ran out of fresh moments and half of it became AI images (V3 45-minute test)."""
-    return POOL_SIZE if scene_count <= 12 else 3 if scene_count <= 22 else 4
+    """Sources read for one section: two, and three for a very long item (30+ scenes ran out of moments)."""
+    # 3-4 sources made a 20-minute video read ~45 videos (an hour of YouTube downloads); scenes that run out
+    # now take another shot of the dish, stock, a photo or a graphic first, so a third source only for long items.
+    return POOL_SIZE if scene_count <= 25 else 3
 
 
 class AutoYouTubeManager:
@@ -518,9 +534,10 @@ class AutoYouTubeManager:
             # Several scenes at once: most of the time is spent waiting on YouTube.
             timings["plan_sources_s"] = round(time.time() - started)
             with ThreadPoolExecutor(max_workers=SCENE_WORKERS) as pool:
-                list(pool.map(lambda scene: self._source_scene_safely(run, scene), [
-                    scene for scene in scenes if str(scene["id"]) not in headings  # headings become chapter cards
-                ]))
+                list(pool.map(lambda scene: self._source_scene_safely(run, scene), interleave_sections(
+                    [scene for scene in scenes if str(scene["id"]) not in headings],  # headings become chapter cards
+                    lambda scene: run.subject_by_id.get(str(scene["id"]), ""),
+                )))
             if headings:
                 try:
                     timings["scenes_s"] = round(time.time() - started - timings.get("plan_sources_s", 0))
@@ -1006,19 +1023,24 @@ class AutoYouTubeManager:
                 run.notes[position] = "no matching clip" if isinstance(error, _NoFootage) else str(error)[:300]
             try:
                 photo_subject = subject or (run.section_pools[0][1] or run.section_pools[0][0] if run.section_pools else run.theme)
+                # Ishaq's order: the item's other clip, stock video, a real photo (it moves on the timeline),
+                # a motion graphic, and an AI image only when nothing else exists.
                 if not is_hook and self._section_footage(run, scene, position, subject, recipe):
-                    # Like an editor: another shot of the same dish from the section's own videos.
                     with run.lock:
                         run.completed += 1
                         run.section_reuse.append(position)
-                elif self._real_photo(run, scene, position, scene_text, photo_subject, queries):
-                    with run.lock:
-                        run.completed += 1
-                        run.photos.append(position)
                 elif self._stock_video(run, scene, position, scene_text, subject, queries):
                     with run.lock:
                         run.completed += 1
                         run.stock.append(position)
+                elif self._real_photo(run, scene, position, scene_text, photo_subject, queries):
+                    with run.lock:
+                        run.completed += 1
+                        run.photos.append(position)
+                elif not is_hook and self._fallback_graphic(run, scene, position):
+                    with run.lock:
+                        run.completed += 1
+                        run.graphics.append(position)
                 elif is_hook and self._theme_gallery(run, scene, position):
                     # Last real option for the opening: a gallery of genuine photos of the theme's dishes.
                     with run.lock:
@@ -1040,6 +1062,21 @@ class AutoYouTubeManager:
                     run.failed += 1
                     run.errors.append({"scene": position, "error": str(reason)[:500], "query": query})
         self._progress(run)
+
+    def _fallback_graphic(self, run: "_Run", scene: dict[str, Any], position: int) -> bool:
+        """A map, price, years or question card when the sentence names one (before any AI image)."""
+        from .graphic_moments import moment_for
+
+        try:
+            from .channel_kits import kit_for
+
+            allowed = set(kit_for(self.paths.root, run.style.key).get("extras") or [])
+        except Exception:
+            allowed = set()
+        moment = moment_for(str(scene.get("narration") or ""), run.era)
+        if not moment or moment["type"] not in allowed:
+            return False
+        return self._extra_graphic(run, scene, position, moment)
 
     def _section_footage(self, run: "_Run", scene: dict[str, Any], position: int, subject: str, recipe: str) -> bool:
         """Before a photo or an AI image: another unused moment of the dish from this section's own source

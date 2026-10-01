@@ -67,5 +67,5 @@ class PoolSizeTest(unittest.TestCase):
         from app.youtube_auto import pool_size
 
         self.assertEqual(pool_size(10), 2)
-        self.assertEqual(pool_size(16), 3)
-        self.assertEqual(pool_size(34), 4)
+        self.assertEqual(pool_size(24), 2)
+        self.assertEqual(pool_size(34), 3)
