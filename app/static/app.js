@@ -1185,7 +1185,7 @@ async function setCaptionAnimation(animation) {
   state.current.caption_style = result.caption_style;
   fillEffectsControls();
   updatePreviewAt(state.previewTime, false);
-  $("#autosaveStatus").textContent = animation === "highlight" ? "Highlight captions on" : "Plain captions on";
+  $("#autosaveStatus").textContent = { highlight: "Highlight captions on", pop: "Pop captions on" }[animation] || "Plain captions on";
 }
 
 function renderMediaBin() {

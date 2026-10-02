@@ -130,7 +130,8 @@ def style_report(style: dict[str, Any], scenes: list[dict[str, Any]], assets: di
         previous = ""
         for scene in scenes:
             asset = assets.get(str(scene.get("selected_asset_id") or "")) or {}
-            source = str(asset.get("provider_asset_id") or "") if asset.get("provider") == "youtube" else ""
+            held = bool((asset.get("metadata") or {}).get("held_from_scene"))  # a held shot is one shot, on purpose
+            source = str(asset.get("provider_asset_id") or "") if asset.get("provider") == "youtube" and not held else ""
             if source and source == previous:
                 repeats.append(int(scene.get("position") or 0))
             previous = source

@@ -78,6 +78,39 @@ def find_places(text: str) -> list[tuple[str, str, float, float]]:
     return found
 
 
+_FACT = re.compile(
+    r"(?:\b(over|nearly|about|almost|more than|up to|under)\s+)?(\$?\d[\d,]*(?:\.\d+)?)\s*"
+    r"(%|percent|degrees(?:\s+fahrenheit)?|°f|locations|stores|restaurants|outlets|million|billion|thousand|cents|"
+    r"calories|miles|employees|workers|people|bars|pounds|ounces|boxes|cans|copies|units|times)\b",
+    re.IGNORECASE)
+
+
+def fact_moment(text: str) -> dict[str, Any] | None:
+    """A key number with its unit ('260 degrees Fahrenheit', 'over 2,000 locations', '4.7 percent')."""
+    match = _FACT.search(text)
+    if not match:
+        return None
+    qualifier, number, unit = (match.group(1) or "").lower(), match.group(2), match.group(3).lower()
+    digits = number.lstrip("$").replace(",", "")
+    try:
+        amount = float(digits)
+    except ValueError:
+        return None
+    decimals = len(digits.split(".")[1]) if "." in digits else 0
+    prefix = "$" if number.startswith("$") else ""
+    if unit in ("%", "percent"):
+        suffix, label = "%", "percent"
+    elif unit.startswith("degrees") or unit == "°f":
+        suffix, label = ("°F", "degrees fahrenheit") if "fahrenheit" in unit or unit == "°f" else ("°", "degrees")
+    else:
+        suffix, label = "", unit
+    if unit in ("%", "percent"):
+        label = "percent"
+    value = prefix + (f"{amount:,.{decimals}f}") + suffix
+    return {"type": "fact", "value": value, "label": label.strip(), "qualifier": qualifier,
+            "count": {"to": amount, "decimals": decimals, "prefix": prefix, "suffix": suffix}}
+
+
 def moment_for(text: str, era: str = "") -> dict[str, Any] | None:
     """The one extra graphic a sentence calls for, or None."""
     places = find_places(text)
@@ -93,6 +126,9 @@ def moment_for(text: str, era: str = "") -> dict[str, Any] | None:
     span = _RANGE.search(text)
     if span:
         return {"type": "years", "start": span.group(1), "end": span.group(2)}
+    fact = fact_moment(text)
+    if fact:
+        return fact
     if _QUESTION.search(text) and "?" in text:
         question = [part.strip() for part in re.split(r"(?<=\?)", text) if part.strip().endswith("?")]
         return {"type": "comment", "question": (question[-1] if question else text)[:140]}
@@ -109,16 +145,37 @@ def plan_moments(scenes: list[dict[str, Any]], era: str = "", skip: set[str] | N
     chosen: dict[str, dict[str, Any]] = {}
     section_used: set[str] = set()
     last_comment = -1e9
+    # Whole sentences, not scenes: with short shots "throughout the 1950s / to the 1990s" sits in two scenes
+    # and neither alone shows a span of years (the V2 test got one graphic in five minutes).
+    sentences: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
     for scene in scenes:
-        text = str(scene.get("narration") or "")
+        text = str(scene.get("narration") or "").strip()
+        if heading_subject(text):
+            if current:
+                sentences.append(current)
+                current = []
+            sentences.append([scene])  # a heading starts a new section
+            continue
+        current.append(scene)
+        if text.endswith((".", "?", "!", "\u201d", '"')):
+            sentences.append(current)
+            current = []
+    if current:
+        sentences.append(current)
+    for group in sentences:
+        text = " ".join(str(scene.get("narration") or "").strip() for scene in group)
         if heading_subject(text):
             section_used = set()
             continue
-        if str(scene["id"]) in skip:
+        usable = [scene for scene in group if str(scene["id"]) not in skip]
+        if not usable:
             continue
         moment = moment_for(text, era)
         if not moment or moment["type"] in section_used:
             continue
+        # The graphic takes the sentence's longest shot (a short one would cut its animation off).
+        scene = max(usable, key=lambda item: float(item.get("end_seconds") or 0) - float(item.get("start_seconds") or 0))
         start = float(scene.get("start_seconds") or 0)
         if moment["type"] == "comment":
             if start - last_comment < comment_gap_seconds:

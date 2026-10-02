@@ -14,8 +14,11 @@ class HouseStyleInheritance(unittest.TestCase):
             self.assertEqual(kits["v3"]["captions"], {"animation": "highlight", "position": "bottom"})
             self.assertEqual(kits["v3"]["chapter_designs"], ["film_slate", "typewriter_card"])
             self.assertEqual(kits["v1"]["extras"], ["map", "price", "years", "comment"])
-            for key in ("v1", "v2", "v3", "v4"):
+            for key in ("v1", "v3", "v4"):
                 self.assertIs(kit_style(kits[key]), STYLES[key])
+            # V2 took its viral video's look on Ishaq's approval (2 Oct); the old V2 look lives on as v2_classic.
+            self.assertIs(kit_style(kits["v2_classic"]), STYLES["v2"])
+            self.assertNotEqual(kit_style(kits["v2"]).bg_outer, STYLES["v2"].bg_outer)
 
     def test_one_house_change_reaches_every_channel_and_a_channel_change_only_that_one(self):
         with tempfile.TemporaryDirectory() as folder:

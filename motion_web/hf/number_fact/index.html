@@ -1,0 +1,52 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden}
+  #bg{position:absolute;inset:0}
+  #grain{position:absolute;inset:0;opacity:.07;
+         background:repeating-linear-gradient(0deg,rgba(255,255,255,.5) 0 1px,transparent 1px 3px)}
+  #bar{position:absolute;left:560px;top:690px;width:800px;height:16px;transform-origin:0 50%}
+  #glow{position:absolute;left:460px;top:250px;width:1000px;height:420px;border-radius:50%;filter:blur(90px);opacity:.22}
+  .word{position:absolute;white-space:nowrap;text-align:center;font-weight:800}
+</style></head>
+<body>
+<div id="stage" data-composition-id="number_fact" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="bg" class="clip" data-start="0" data-duration="600" data-track-index="0"><div id="glow"></div><div id="grain"></div></div>
+  <div id="shapes" class="clip" data-start="0" data-duration="600" data-track-index="1"><div id="bar"></div></div>
+  <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="2"></div>
+</div>
+<script>
+  // A big number that counts up, its unit underneath and an orange bar sliding in: a key fact on its own.
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4, k = Math.min(1, seconds / 4);
+  document.getElementById("bg").style.background = `radial-gradient(circle at 50% 45%, ${p.bg_inner}, ${p.bg_outer})`;
+  document.getElementById("glow").style.background = p.accent;
+  document.getElementById("bar").style.background = p.card;
+  const tl = gsap.timeline({paused: true});
+  tl.from("#glow", {opacity: 0, scale: 0.6, duration: 0.5 * k, ease: "power2.out"}, 0);
+  tl.from("#bar", {scaleX: 0, duration: 0.45 * k, ease: "power3.out"}, 0.35 * k);
+  if (p.show_text) {
+    (p.texts || []).forEach((t, i) => {
+      const el = document.createElement("div"); el.className = "word"; el.textContent = t.text;
+      el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};letter-spacing:${t.spacing || 0}px;text-shadow:0 6px 24px rgba(0,0,0,.55)`;
+      document.getElementById("words").appendChild(el);
+      gsap.set(el, {xPercent: -50, yPercent: -50});  // centred on its point however wide the counting number gets
+      if (i === 0 && p.count && p.count.to > 0) {
+        // Count up to the number, keeping its own prefix, separators, decimals and unit ("$1.64", "2,000", "260°F").
+        const c = p.count, state = {v: 0};
+        const show = v => c.prefix + (c.decimals ? v.toFixed(c.decimals) : Math.round(v).toLocaleString("en-US")) + c.suffix;
+        el.textContent = show(0);
+        tl.to(state, {v: c.to, duration: 0.9 * k, ease: "power2.out", onUpdate: () => { el.textContent = show(state.v); }}, 0.1 * k);
+        tl.from(el, {scale: 0.7, opacity: 0, duration: 0.35 * k, ease: "back.out(1.6)"}, 0.05 * k);
+      } else {
+        tl.from(el, {y: 30, opacity: 0, duration: 0.35 * k, ease: "power2.out"}, (0.45 + i * 0.15) * k);
+      }
+    });
+  }
+  window.__timelines = window.__timelines || {}; window.__timelines.number_fact = tl;
+</script>
+</body></html>

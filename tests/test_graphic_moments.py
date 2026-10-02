@@ -36,3 +36,24 @@ class ExtraGraphics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FactAndSentenceTest(unittest.TestCase):
+    def test_key_numbers_become_counting_facts(self):
+        from app.graphic_moments import fact_moment
+
+        fact = fact_moment("Over 2,000 locations across the country closed.")
+        self.assertEqual((fact["value"], fact["label"], fact["qualifier"]), ("2,000", "locations", "over"))
+        self.assertEqual(fact_moment("Boil it to 260 degrees Fahrenheit.")["value"], "260°F")
+        self.assertEqual(fact_moment("Sales fell 4.7 percent.")["count"]["decimals"], 1)
+        self.assertIsNone(fact_moment("In 1976 the FDA banned it."))
+
+    def test_a_span_split_over_two_short_shots_is_still_found(self):
+        from app.graphic_moments import plan_moments
+
+        scenes = [
+            {"id": "a", "narration": "Families bought it throughout the 1950s", "start_seconds": 0, "end_seconds": 2.5},
+            {"id": "b", "narration": "to the 1980s.", "start_seconds": 2.5, "end_seconds": 4.0},
+        ]
+        chosen = plan_moments(scenes)
+        self.assertEqual(chosen["a"]["type"], "years")  # the longer shot of the sentence carries it

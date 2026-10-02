@@ -161,7 +161,7 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
         "max_lines": max_lines,
         "words_per_line": words_per_line,
         # "highlight": animated reference-style captions with key words in yellow boxes.
-        "animation": "highlight" if style.get("animation") == "highlight" else "none",
+        "animation": str(style.get("animation")) if style.get("animation") in ("highlight", "pop") else "none",
     }
 
 

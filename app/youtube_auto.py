@@ -791,11 +791,16 @@ class AutoYouTubeManager:
         sources: list[dict[str, Any]] = []
         # Read the best first (more of them for a long section); spares only when one is unusable.
         size = 2 if is_hook else pool_size(len(members))
+        tried = 0
         for start in range(0, min(len(ordered), size + 4), size):
             sources += self._prepare_sources(run, ordered[start:start + size])
+            tried = start + size
             if len(sources) >= size:
                 break
         sources = sources[:size]
+        if not is_hook and len(sources) == 1 and len(members) > 8 and len(ordered) > tried:
+            # One source for a long item (V2 rum cake: 15 clips from one video) feels repetitive: read one more.
+            sources += self._prepare_sources(run, ordered[tried:tried + 3])[:1]
         if not is_hook:
             with run.lock:
                 run.section_pools.append((subject, recipe, sources))
@@ -804,6 +809,8 @@ class AutoYouTubeManager:
         taken: dict[str, list[float]] = {vid: list(times) for vid, times in run.used.items()}
         previous: tuple[str, float] | None = None
         best_scores: dict[str, float] = {}
+        picks: dict[str, int] = {}  # clips planned from each source in this item
+        share_cap = max(3, len(members) // 2)
         for scene in members:
             duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
             scene_text = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
@@ -818,6 +825,8 @@ class AutoYouTubeManager:
                 if moment is None:
                     continue
                 start, topic_score, score = moment
+                if len(sources) > 1 and picks.get(video_id, 0) >= share_cap:
+                    score -= 0.25  # no source carries more than about half of an item when others exist
                 if previous and previous[0] == video_id:
                     if (run.style_rules or {}).get("no_neighbour_repeat"):
                         score -= 0.15  # the style wants a different source in neighbouring scenes
@@ -833,6 +842,7 @@ class AutoYouTubeManager:
             best_scores[str(scene["id"])] = options[0][0]
             _score, best, start, _topic = options[0]
             taken.setdefault(str(best["video_id"]), []).append(start)
+            picks[str(best["video_id"])] = picks.get(str(best["video_id"]), 0) + 1
             previous = (str(best["video_id"]), start)
         if not is_hook:
             # 80:20 - the weakest fifth of the item's moments (and any with no moment) are offered to a photo.
@@ -936,6 +946,8 @@ class AutoYouTubeManager:
         # ("1950s christmas table footage"), period footage preferred, no theme requirement.
         moment = run.moments.get(str(scene["id"]))
         if moment and self._extra_graphic(run, scene, position, moment):
+            if str(scene.get("caption_text") or "").strip():
+                self.db.update_scene(str(scene["id"]), {"caption_text": ""})  # the graphic already says it
             with run.lock:
                 run.completed += 1
                 run.graphics.append(position)

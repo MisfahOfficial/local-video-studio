@@ -67,7 +67,11 @@ class AutoBuildManager:
                 return
             checked = self._check(project_id)
             filled, failed = self._fill_missing(project_id)
+            held = self._hold_empty(project_id)  # an empty scene keeps the previous shot running (no black frames)
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
+            if report is not None and held:
+                report["checks"].append({"rule": "Scenes holding the previous shot (no footage found)",
+                                         "value": f"{len(held)} (scenes {held[:12]})", "ok": True})
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked,
                          style_report=report)
             # After each video the AI designs one new chapter look and one new ingredients look for the
@@ -143,6 +147,47 @@ class AutoBuildManager:
             pass
         return {"checked": result.get("checked", 0), "rejected": len(rejected), "kept_first_clip": kept,
                 "error": result.get("error", "")}
+
+    def _hold_empty(self, project_id: str) -> list[int]:
+        """Like an editor: a scene that found no footage (and may not get an AI image) lets the previous shot run
+        on, continuing where it stopped, instead of a black frame. Marked for review; returns the positions."""
+        db = self.app.db
+        scenes = db.list_scenes(project_id)
+        assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
+        clips = {str(clip["scene_id"]): clip for clip in db.list_timeline_clips(project_id)}
+        held: list[int] = []
+        for index, scene in enumerate(scenes):
+            if scene.get("selected_asset_id"):
+                continue
+            donor = None
+            for other in [*reversed(scenes[:index]), *scenes[index + 1:]]:  # the previous shot, else the next one
+                asset = assets.get(str(other.get("selected_asset_id") or "")) or {}
+                if asset.get("media_kind") == "video" and asset.get("provider") in ("youtube", "stock") \
+                        and Path(str(asset.get("local_path"))).is_file():
+                    donor = (other, asset)
+                    break
+            if donor is None:
+                continue
+            other, asset = donor
+            copy = db.add_asset(
+                project_id=project_id, scene_id=str(scene["id"]),
+                candidate_index=db.next_asset_candidate_index(str(scene["id"])),
+                media_kind="video", provider=str(asset["provider"]), model=str(asset.get("model") or ""),
+                local_path=str(asset["local_path"]), remote_url=asset.get("remote_url"),
+                provider_asset_id=asset.get("provider_asset_id"), cost=0.0,
+                metadata={**(asset.get("metadata") or {}), "held_from_scene": int(other.get("position") or 0),
+                          "needs_review": True},
+            )
+            db.select_asset(str(scene["id"]), str(copy["id"]))
+            mine, theirs = clips.get(str(scene["id"])), clips.get(str(other["id"]))
+            if mine and theirs and int(other.get("position") or 0) < int(scene.get("position") or 0):
+                # Continue the shot from where the previous scene's piece ends.
+                follow = float(theirs.get("source_in_seconds") or 0) + float(theirs["end_seconds"]) - float(theirs["start_seconds"])
+                db.set_timeline_clip_duration(str(mine["id"]), float(mine["end_seconds"]) - float(mine["start_seconds"]), follow)
+            assets[str(copy["id"])] = copy
+            scene["selected_asset_id"] = copy["id"]
+            held.append(int(scene.get("position") or 0))
+        return held
 
     def _fill_missing(self, project_id: str) -> tuple[list[int], list[dict[str, Any]]]:
         """A realistic period still for every scene that still has nothing (and is not a heading)."""

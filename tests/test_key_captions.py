@@ -43,8 +43,25 @@ class KeyCaptionTests(unittest.TestCase):
         with patch("app.key_captions.gemini_key_captions", side_effect=ProviderError("quota")):
             captions, source = key_captions(_scenes(["It took 3 cups of oats to start."]), "key", "model")
         self.assertEqual(source, "local")
-        self.assertEqual(captions, {0: "3 cups of oats to start"})
+        self.assertEqual(captions, {0: "3 cups of oats"})
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SentenceCaptionTests(unittest.TestCase):
+    def test_captions_come_from_whole_sentences_and_end_on_full_words(self) -> None:
+        from app.key_captions import body_phrase, local_key_captions
+
+        self.assertEqual(body_phrase("Over 2,000 locations across the country closed."), "Over 2,000 locations")
+        self.assertEqual(body_phrase("It opened on November 3rd 1973 in Fayetteville."), "November 3rd 1973")
+        self.assertEqual(body_phrase("Press a pecan half into each piece."), "")
+        scenes = [
+            {"narration": "Do you remember when Christmas baking started before Christmas Day?", "start_seconds": 0, "end_seconds": 4},
+            {"narration": "But the 1970s Bacardi", "start_seconds": 20, "end_seconds": 21.5},
+            {"narration": "version was made with boxed cake mix.", "start_seconds": 21.5, "end_seconds": 24},
+        ]
+        captions = local_key_captions(scenes)
+        self.assertEqual(captions[0], "Christmas baking started before Christmas Day")
+        self.assertNotIn("1970s Bacardi", captions.values())

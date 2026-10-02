@@ -54,8 +54,10 @@ DESIGNS: dict[str, Design] = {item.key: item for item in (
 )}
 
 
-EXTRA_DESIGNS = {"map": "map_pins", "price": "price_tag", "years": "year_timeline", "comment": "comment_card"}
+EXTRA_DESIGNS = {"map": "map_pins", "price": "price_tag", "years": "year_timeline", "comment": "comment_card",
+                 "fact": "number_fact"}
 for _key, _name, _mood in (("map_pins", "Map with dropping pins", "places, regions"),
+                           ("number_fact", "Big counting number with its unit", "key numbers: degrees, percent, locations"),
                            ("price_tag", "Hanging price tag with a coin", "prices back then"),
                            ("year_timeline", "Timeline bar between two years", "periods, decades"),
                            ("comment_card", "Speech-bubble question for the comments", "questions to viewers")):
@@ -130,16 +132,26 @@ def extra_payload(moment: dict[str, Any], style: ChannelStyle, seconds: float, s
                 "label_bg": _hex(style.print_border)}
     if kind == "price":
         return {**base, "texts": [
-            {"text": "IT COST", "x": 960, "y": 380, "size": 46, "color": "#5a4632", "font": label_font, "spacing": 8},
+            {"text": "IT COST", "x": 960, "y": 380, "size": 50, "color": "#2a1a0e", "font": label_font, "spacing": 8},
             {"text": moment["price"].title(), "x": 960, "y": 540, "size": 150 if len(moment["price"]) < 10 else 110,
              "color": "#1e180e", "font": title_font},
             {"text": f"in the {moment['when']}" if moment.get("when") else "back then", "x": 960, "y": 700, "size": 58,
-             "color": "#5a4632", "font": label_font},
+             "color": "#2a1a0e", "font": label_font},
         ]}
     if kind == "years":
         return {**base, "texts": [
             {"text": moment["start"], "x": 360, "y": 470, "size": 110, "color": ink, "font": title_font},
             {"text": moment["end"], "x": 1560, "y": 470, "size": 110, "color": ink, "font": title_font},
+        ]}
+    if kind == "fact":
+        value, label = moment["value"], moment["label"].upper()
+        return {**base, "count": moment.get("count"), "texts": [
+            {"text": value, "x": 960, "y": 470, "size": 260 if len(value) <= 6 else 190, "color": _hex(style.highlight),
+             "font": title_font},
+            {"text": label, "x": 960, "y": 780, "size": 72 if len(label) <= 18 else 54, "color": "#ffffff",
+             "font": title_font, "spacing": 4},
+            *([{"text": moment["qualifier"].upper(), "x": 960, "y": 255, "size": 64, "color": _hex(style.card_accent),
+                "font": title_font, "spacing": 6}] if moment.get("qualifier") else []),
         ]}
     lines = _wrap_words(moment["question"], 34)[:4]
     first = 500 - (len(lines) - 1) * 45

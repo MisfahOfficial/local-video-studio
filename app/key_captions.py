@@ -20,7 +20,7 @@ NUMBER_WORDS = {
 REVEAL_CUES = ("the truth", "turned out", "secret", "the real reason", "never", "only", "first time", "last")
 CLAUSE_BREAKS = {"until", "when", "that", "which", "because", "while", "so", "but", "who", "where"}
 EDGE_STOP = {"a", "an", "the", "to", "of", "for", "and", "or", "in", "on", "at", "with", "by", "as", "was", "were"}
-LEADING_KEEP = {"between", "from", "since", "in", "under", "over", "about", "nearly", "almost", "just", "only"}
+LEADING_KEEP = {"between", "from", "since", "in", "under", "over", "about", "nearly", "almost", "just", "only", "chapter"}
 
 KEY_POINT_STYLE = {
     "animation": "highlight",
@@ -93,7 +93,7 @@ def _space(picks: dict[int, tuple[int, str]], scenes: list[dict[str, Any]], limi
     return {index: picks[index][1] for index in chosen}
 
 
-def hook_phrase(sentence: str) -> str:
+def hook_phrase(sentence: str, limit: int = MAX_WORDS) -> str:
     """The opening line as big on-screen words ('Christmas baking used to start weeks before' ->
     'CHRISTMAS BAKING USED TO START WEEKS BEFORE'): its first clause, at most MAX_WORDS words."""
     words: list[str] = []
@@ -103,29 +103,109 @@ def hook_phrase(sentence: str) -> str:
             break
         if word:
             words.append(word)
-        if len(words) >= MAX_WORDS or token.rstrip().endswith((",", ".", ";", ":", "—", "?", "!")):
+        if len(words) >= limit or token.rstrip().endswith((",", ".", ";", ":", "—", "?", "!")):
             break
     while len(words) > 2 and words[-1].lower() in EDGE_STOP:
         words.pop()
     return " ".join(words) if len(words) >= 2 else ""
 
 
-def local_key_captions(scenes: list[dict[str, Any]]) -> dict[int, str]:
-    """Free, offline choice of key points: hook question, numbers, dates and prices. The opening always
-    gets words on screen, like the reference videos (a script without numbers got no captions at all)."""
-    picks: dict[int, tuple[int, str]] = {}
+_TAIL_STOP = EDGE_STOP | {"across", "into", "from", "its", "their", "his", "her", "is", "are", "be", "been", "being",
+                         "against", "under", "over", "after", "before", "about", "through", "this", "that", "these",
+                         "those", "it", "they", "we", "you", "our", "my", "kept", "later", "running", "cracking",
+                         "looks", "nothing", "like", "single"}
+_YEAR = re.compile(r"^(?:1[89]|20)\d\d$")
+
+
+def body_phrase(sentence: str) -> str:
+    """A short caption around the sentence's first number, ending on a full word ('FOUNDED IN 1958',
+    'OVER 2,000 LOCATIONS', '23 CLOSED IN 2025'); '' when the sentence has no number written with digits."""
+    tokens = [token for token in re.split(r"\s+", sentence.strip()) if token]
+    index = next((position for position, token in enumerate(tokens)
+                  if re.search(r"\d", token) or _clean(token).lower() in NUMBER_WORDS), None)
+    if index is None or not any(re.search(r"\d", token) for token in tokens):
+        return ""
+    words = [_clean(token) for token in tokens]
+    if re.fullmatch(r"\d+(st|nd|rd|th)", words[index].lower()):
+        # A day ("3rd") belongs to its date: build the caption around the year that follows.
+        index = next((position for position in range(index, min(len(words), index + 3)) if _YEAR.match(words[position])), index)
+    if _YEAR.match(words[index]):
+        # A year reads best with the verb before it: "founded in 1958", "closed in 2025".
+        begin = index
+        while begin > 0 and index - begin < 2 and not tokens[begin - 1].endswith((",", ".", ";", ":")):
+            begin -= 1
+        phrase = words[begin:index + 1]
+    else:
+        begin = index - 1 if index > 0 and words[index - 1].lower() in LEADING_KEEP else index
+        phrase = []
+        for position in range(begin, min(len(tokens), index + 4)):
+            if phrase and words[position].lower() in CLAUSE_BREAKS:
+                break
+            phrase.append(words[position])
+            if tokens[position].endswith((",", ".", ";", ":", "?", "!")):
+                break
+    while len(phrase) > 1 and phrase[-1].lower() in _TAIL_STOP:
+        phrase.pop()
+    while len(phrase) > 1 and phrase[0].lower() in EDGE_STOP | {"by", "in"} and not _YEAR.match(phrase[-1]):
+        phrase.pop(0)
+    text = " ".join(word for word in phrase if word)
+    return text if len(text.split()) >= 2 and re.search(r"\d", text) else ""
+
+
+def sentence_groups(scenes: list[dict[str, Any]]) -> list[list[int]]:
+    """Scene indexes grouped into whole spoken sentences (short shots split one sentence over several scenes)."""
+    groups: list[list[int]] = []
+    current: list[int] = []
     for index, scene in enumerate(scenes):
-        if heading_subject(str(scene.get("narration") or "")):
-            continue  # chapter cards carry the heading
-        score, phrase = _score(scene, index, len(scenes))
-        if score:
-            picks[index] = (score, phrase)
-    first = next((index for index, scene in enumerate(scenes)
-                  if not heading_subject(str(scene.get("narration") or ""))), None)
-    if first is not None and not any(index <= first + 1 for index in picks):
-        phrase = hook_phrase(str(scenes[first].get("narration") or ""))
-        if phrase:
-            picks[first] = (4, phrase)  # the strongest claim on screen: it always survives the spacing
+        text = str(scene.get("narration") or "").strip()
+        if heading_subject(text):
+            if current:
+                groups.append(current)
+                current = []
+            continue
+        current.append(index)
+        if text.endswith((".", "?", "!", "\u201d", '"')):
+            groups.append(current)
+            current = []
+    if current:
+        groups.append(current)
+    return groups
+
+
+_REMEMBER = re.compile(r"^\s*(do|did|can|could)\s+you\s+remember\s+(when\s+|the\s+)?", re.IGNORECASE)
+
+
+def local_key_captions(scenes: list[dict[str, Any]]) -> dict[int, str]:
+    """Free, offline choice of key points, read from whole sentences (never a broken piece like '1970s Bacardi'):
+    the opening line in at most 6 words, then numbers, dates and prices written with digits."""
+    picks: dict[int, tuple[int, str]] = {}
+    used_decades: set[str] = set()
+    groups = sentence_groups(scenes)
+    for number, group in enumerate(groups):
+        sentence = " ".join(str(scenes[index].get("narration") or "").strip() for index in group)
+        hook = number == 0
+        sentence = re.sub(r"\s*[—–]\s*", " — ", sentence)  # "version—homemade": the dash ends a phrase
+        if hook:
+            # A number makes the punchiest opener; otherwise the line's first clause, at most 6 words.
+            phrase = body_phrase(sentence) or hook_phrase(_REMEMBER.sub("", sentence), limit=8)
+            score = 4
+        else:
+            phrase = body_phrase(sentence)
+            score = 3 if any(cue in sentence.lower() for cue in REVEAL_CUES) else 2
+            if not re.search(r"[\d$£]", phrase):
+                phrase = ""  # "half into each piece" was cut from "press a pecan half into each piece"
+            decade = re.fullmatch(r"(?:the\s+)?(1[89]\d0s)\b.*", phrase, flags=re.IGNORECASE)
+            if decade and not re.search(r"[$£]|\d{3}|\d+\s*(?:%|degrees|cents|dollars|cups|minutes|hours)", phrase[len(decade.group(1)):]):
+                if decade.group(1).lower() in used_decades or len(phrase.split()) < 3:
+                    continue  # also too thin alone ("1970s version")  # "1970s ..." five times in one video says nothing new: once is enough
+                used_decades.add(decade.group(1).lower())
+        if not phrase:
+            continue
+        first = _clean(phrase.split()[0]).lower()
+        # The scene where the phrase is actually spoken.
+        target = next((index for index in group if first in [_clean(word).lower()
+                       for word in str(scenes[index].get("narration") or "").split()]), group[0])
+        picks[target] = (score, phrase)
     duration = float(scenes[-1]["end_seconds"]) if scenes else 0
     return _space(picks, scenes, max(1, int(duration // MIN_GAP_SECONDS)))
 

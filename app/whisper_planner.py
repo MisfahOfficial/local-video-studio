@@ -18,6 +18,7 @@ from .transcription import FasterWhisperTranscriber
 
 # No visual stays on screen longer than this; long sentences get several clips.
 MAX_SCENE_SECONDS = 7.0
+MIN_SHOT_SECONDS = 1.2  # a piece of a split sentence shorter than this is merged into its neighbour
 
 
 class Transcriber(Protocol):
@@ -102,7 +103,8 @@ def split_long_sentences(
         # item and would get its own name label): it joins the next piece (or the previous, at the end).
         index = 0
         while len(chunks) > 1 and index < len(chunks):
-            if heading_subject(chunks[index][0]):
+            # Also no flash shots: a piece under MIN_SHOT_SECONDS ("But the", 0.7 s) joins its neighbour.
+            if heading_subject(chunks[index][0]) or chunks[index][2] - chunks[index][1] < MIN_SHOT_SECONDS:
                 if index + 1 < len(chunks):
                     text, start, _end = chunks[index]
                     chunks[index:index + 2] = [(f"{text} {chunks[index + 1][0]}", start, chunks[index + 1][2])]

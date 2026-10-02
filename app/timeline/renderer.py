@@ -206,7 +206,9 @@ def write_scene_ass(
                     f"{{\\pos({x:.1f},{y:.1f})\\blur{glow_radius:.1f}\\bord{max(1, glow_radius / 2):.1f}"
                     f"\\1a&HFF&\\3c{glow}}}{text}"
                 )
-            events.append(f"Dialogue: 1,{start},{end},Default,,0,0,0,,{{\\pos({x:.1f},{y:.1f})}}{text}")
+            # "pop": the words fade in and settle from 90% size in a quarter second, like the V2 reference.
+            pop = "\\fad(140,90)\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)" if value.get("animation") == "pop" else ""
+            events.append(f"Dialogue: 1,{start},{end},Default,,0,0,0,,{{\\pos({x:.1f},{y:.1f}){pop}}}{text}")
     destination.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
 
@@ -279,7 +281,12 @@ class FFmpegRenderer:
         total = max(1, len(clips))
         encoder = self._choose_encoder()
         animated_captions = burn_captions and (caption_style or {}).get("animation") == "highlight"
-        subscribe_clip = _subscribe_clip(clips, scenes_by_id) if subscribe_button else None
+        # The button sits on real footage, never on a graphic or a name label (it covered the years graphic).
+        footage_clips = [clip for clip in clips
+                         if (by_id.get(selected.get(clip["scene_id"]) or "") or {}).get("provider") in ("youtube", "stock", "photo", "local")
+                         and not any(isinstance(action, dict) and action.get("type") == "label"
+                                     for action in scenes_by_id[clip["scene_id"]].get("timeline_actions") or [])]
+        subscribe_clip = _subscribe_clip(footage_clips or clips, scenes_by_id) if subscribe_button else None
         from ..channel_styles import get_style
 
         self._style = get_style((project.get("effects") or {}).get("channel_style"))

@@ -48,8 +48,19 @@ DEFAULT_KITS: dict[str, dict[str, Any]] = {
            "chapter_style": "name_label", "chapter_designs": [], "ingredient_designs": ["recipe_book", "scrapbook"],
            "ingredient_cards": False, "film_look": False, "photo_graphics": False, "pacing": {"shot_seconds_max": 4.0},
            "story_stock": True,  # laws, companies, sales: present-day stock shots, like the reference
+           "extras": ["map", "price", "years", "comment", "fact"],  # + big counting numbers ("260°F", "2,000 locations")
+           # Graphics (maps, price, years, question cards) in the reference palette: near-black, lime-yellow,
+           # orange labels with white type, bold sans; no sepia. v2_classic keeps the old pink/gingham colours.
+           "style_overrides": {"background": "vignette", "bg_inner": [40, 40, 40], "bg_outer": [14, 14, 14],
+                               "card": "rounded", "card_accent": [243, 107, 33], "label_color": [255, 255, 255],
+                               "highlight": [216, 228, 24], "highlight_text": [17, 17, 17],
+                               "chapter_tint": [58, 58, 58], "chapter_accent": [243, 107, 33],
+                               "print_border": [243, 107, 33], "sepia": 0.0, "subscribe": [243, 107, 33],
+                               "chapter_title_fonts": ["/System/Library/Fonts/Supplemental/Futura.ttc"],
+                               "chapter_label_fonts": ["/System/Library/Fonts/Supplemental/Futura.ttc"],
+                               "label_fonts": ["/System/Library/Fonts/Supplemental/Futura.ttc"]},
            "references": ["https://www.youtube.com/watch?v=uVYtlsvecP4"],
-           "caption_style": {"animation": "none", "font": "Montserrat ExtraBold", "bold": True, "text_color": "#D8E418",
+           "caption_style": {"animation": "pop", "font": "Montserrat ExtraBold", "bold": True, "text_color": "#D8E418",
                              "stroke_enabled": True, "stroke_color": "#000000", "stroke_width": 5,
                              "shadow_enabled": True, "shadow_color": "#000000", "shadow_blur": 8, "shadow_x": 0,
                              "shadow_y": 4, "background_enabled": False, "position": "middle", "case": "upper",
