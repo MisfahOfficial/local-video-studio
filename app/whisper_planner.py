@@ -76,6 +76,7 @@ def split_long_sentences(
         for index, (start, end) in enumerate(times):
             guess = sentence_start + index * step
             filled.append((start if start is not None else guess, end if end is not None else guess + step))
+        chunks: list[tuple[str, float, float]] = []
         first = 0
         while first < len(pieces):
             chunk_start = sentence_start if first == 0 else filled[first][0]
@@ -95,8 +96,23 @@ def split_long_sentences(
                     ),
                 )
             chunk_end = sentence_end if cut == len(pieces) else (filled[cut - 1][1] + filled[cut][0]) / 2
-            units.append((" ".join(pieces[first:cut]), chunk_start, chunk_end))
+            chunks.append((" ".join(pieces[first:cut]), chunk_start, chunk_end))
             first = cut
+        # A piece of a sentence must never look like an item heading ("In 1976 the FDA" was taken for a new
+        # item and would get its own name label): it joins the next piece (or the previous, at the end).
+        index = 0
+        while len(chunks) > 1 and index < len(chunks):
+            if heading_subject(chunks[index][0]):
+                if index + 1 < len(chunks):
+                    text, start, _end = chunks[index]
+                    chunks[index:index + 2] = [(f"{text} {chunks[index + 1][0]}", start, chunks[index + 1][2])]
+                else:
+                    text, _start, end = chunks[index]
+                    chunks[index - 1:index + 1] = [(f"{chunks[index - 1][0]} {text}", chunks[index - 1][1], end)]
+                    index -= 1
+                continue
+            index += 1
+        units.extend(chunks)
     return units
 
 

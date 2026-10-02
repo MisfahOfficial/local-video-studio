@@ -294,6 +294,10 @@ class _Run:
     by_position: dict[int, str] = field(default_factory=dict)
     section_reuse: list[int] = field(default_factory=list)  # scenes given another shot of the section's dish
     banned: dict[str, set[str]] = field(default_factory=dict)  # subject -> sources refused for it (AI checker / Ishaq)
+    style_rules: dict[str, Any] = field(default_factory=dict)  # the channel's editing style file (footage rules)
+    style_doc: dict[str, Any] = field(default_factory=dict)
+    story_stock: bool = False  # story lines (laws, companies, sales) try stock footage first, like the V2 reference
+    ai_budget: int = 10 ** 6  # AI stills allowed in this video by the style's max AI share
     name_labels: bool = False  # headings get the item's own footage plus an orange name label (no chapter card)
     prefer_read: bool = False  # a re-run of a few scenes: sources already read come first (no new downloads)
     stock: list[int] = field(default_factory=list)
@@ -342,6 +346,8 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
             and str(item.get("video_id")) not in getattr(run, "banned", {}).get(core.strip().lower(), ())
             and not looks_like_ai_slideshow(item, run.settings.blocked_channels)
             and run.profile.title_allowed(title)
+            and not any(re.search(rf"\b{re.escape(word)}\b", title.lower())  # whole words: "shorts" is not "shortbread"
+                        for word in (getattr(run, "style_rules", {}) or {}).get("avoid_titles", ()))
             and (seen or (named and exact)))
 
 
@@ -352,6 +358,24 @@ _CLASSIC_TITLE = re.compile(
 )
 # Each item is cut from its two best source videos (two spares are read in case one fails).
 POOL_SIZE = 2
+
+
+def _ai_rules(style: dict[str, Any]) -> str:
+    try:
+        from .editing_style import ai_image_rules
+
+        return ai_image_rules(style or {})
+    except Exception:
+        return ""
+
+
+# Story lines (laws, companies, money, closures): the V2 reference covers these with present-day stock footage
+# (an FDA building, a lab, a factory floor) rather than the dish.
+STORY_LINE = re.compile(
+    r"\b(fda|government|congress|law|laws|banned?|ban|lawsuits?|court|regulat\w*|company|companies|corporation|"
+    r"factory|factories|plant|sales|profits?|revenue|bankrupt\w*|closed|closing|shut down|stores?|"
+    r"supermarkets?|scientists?|lab|laboratory|study|studies|tests?|investors?|stock market|headquarters)\b",
+    re.IGNORECASE)
 
 
 def pool_size(scene_count: int) -> int:
@@ -485,6 +509,14 @@ class AutoYouTubeManager:
 
         kit = kit_for(self.paths.root, (project.get("effects") or {}).get("channel_style"))
         run.name_labels = kit.get("chapter_style") == "name_label"
+        run.story_stock = bool(kit.get("story_stock"))
+        try:
+            from .editing_style import footage_rules, load_style
+
+            run.style_doc = load_style(self.paths.root, (project.get("effects") or {}).get("channel_style"))
+            run.style_rules = footage_rules(run.style_doc) if run.style_doc else {}
+        except Exception:
+            run.style_doc, run.style_rules = {}, {}
         cards_on = profile.recipe_cards and kit.get("ingredient_cards", True)  # V2's reference has no ingredient cards
         for item in all_scenes if cards_on else []:
             if ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"])):
@@ -530,6 +562,9 @@ class AutoYouTubeManager:
         filmable = [item for item in all_scenes if not heading_subject(str(item["narration"]))
                     and str(item["id"]) not in run.card_ids and str(item["id"]) != run.gallery_id]
         run.photo_budget = len(filmable) // 5
+        if run.style_rules:
+            # The style's AI limit (V2: 5%): past it a scene stays empty and is reported, never quietly AI-filled.
+            run.ai_budget = int(run.style_rules["max_ai_share"] * len(filmable) + 1e-9)
         headings = {str(item["id"]) for item in heading_scenes(scenes)}
         clean_cache(self.paths.root / "source_cache")
         timings: dict[str, float] = {}
@@ -742,8 +777,9 @@ class AutoYouTubeManager:
             def length(item: dict[str, Any]) -> float:
                 return float(item.get("duration_seconds") or item.get("duration") or 0)
 
-            short = [item for item in ordered if length(item) <= LONG_SOURCE_SECONDS]
-            ordered = short + [item for item in ordered if length(item) > LONG_SOURCE_SECONDS]
+            limit = float((run.style_rules or {}).get("max_source_minutes") or LONG_SOURCE_SECONDS / 60) * 60
+            short = [item for item in ordered if length(item) <= limit]
+            ordered = short + [item for item in ordered if length(item) > limit]
             if run.prefer_read:
                 analyses = self.paths.root / "analysis_cache"
 
@@ -783,8 +819,11 @@ class AutoYouTubeManager:
                     continue
                 start, topic_score, score = moment
                 if previous and previous[0] == video_id:
-                    # The next step comes later in the same cook's video; going backwards looks wrong.
-                    score += 0.06 if start > previous[1] else -0.08
+                    if (run.style_rules or {}).get("no_neighbour_repeat"):
+                        score -= 0.15  # the style wants a different source in neighbouring scenes
+                    else:
+                        # The next step comes later in the same cook's video; going backwards looks wrong.
+                        score += 0.06 if start > previous[1] else -0.08
                 options.append((score, candidate, start, topic_score))
             options.sort(key=lambda item: item[0], reverse=True)
             if not options:
@@ -914,6 +953,16 @@ class AutoYouTubeManager:
                 run.graphics.append(position)
             self._progress(run)
             return
+        narration = str(scene.get("narration") or "")
+        if (run.story_stock and not is_hook and STORY_LINE.search(narration) and not (core and mentions_topic(narration, core))
+                and not heading_subject(narration)):
+            story_queries = [" ".join(scene_keywords(narration, "", limit=3)) or narration[:60]]
+            if self._stock_video(run, scene, position, scene_text, subject, story_queries):
+                with run.lock:
+                    run.completed += 1
+                    run.stock.append(position)
+                self._progress(run)
+                return
         own = topic_queries(scene, subject, run.era, recipe) or scene_search_queries(scene)
         queries = list(dict.fromkeys(
             [q if not subject or mentions_topic(q, core) else f"{subject} {q}" for q in run.ai_queries.get(position, [])]
@@ -995,8 +1044,9 @@ class AutoYouTubeManager:
                     radius = 6 if teasers_only else 15  # a teaser previews a later shot, never repeats it
                     if start_time is not None and any(abs(start_time - used) < radius for used in run.used.get(video_id, [])):
                         continue  # another scene took this moment meanwhile
-                    if not planned and video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
-                        continue  # unplanned: the same source in neighbouring scenes may repeat a shot
+                    neighbours = {run.by_position.get(position - 1), run.by_position.get(position + 1)}
+                    if video_id in neighbours and (not planned or (run.style_rules or {}).get("no_neighbour_repeat")):
+                        continue  # the same source in neighbouring scenes may repeat a shot (and the style forbids it)
                     run.used.setdefault(video_id, []).append(float(start_time or 0))
                     run.by_position[position] = video_id
                 destination = (
@@ -1108,7 +1158,13 @@ class AutoYouTubeManager:
                     if getattr(run.service, "youtube_blocked", False):
                         # A blocked YouTube is not "no footage exists": leave the scene for the next run.
                         raise ProviderError("YouTube is blocking this computer for now; run sourcing again later")
-                    self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings)
+                    with run.lock:
+                        over = len(run.generated) >= run.ai_budget
+                    if over:
+                        raise ProviderError("No real footage found and the style's AI image limit is reached: "
+                                            "this scene needs footage")
+                    self._fallback_still(run.project_id, scene, position, scene_text, subject, run.era, run.settings,
+                                         extra=_ai_rules(run.style_doc))
                     with run.lock:
                         run.completed += 1
                         run.generated.append(position)
@@ -1502,7 +1558,7 @@ class AutoYouTubeManager:
 
     def _fallback_still(
         self, project_id: str, scene: dict[str, Any], position: int, scene_text: str, subject: str, era: str,
-        settings: Any,
+        settings: Any, extra: str = "",
     ) -> None:
         destination = self.paths.project_dir(project_id) / "assets" / "stills" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
         try:
@@ -1510,7 +1566,7 @@ class AutoYouTubeManager:
 
             effects = (self.db.get_project(project_id) or {}).get("effects") or {}
             country = str(kit_for(self.paths.root, get_style(effects.get("channel_style")).key).get("country") or "US")
-            metadata = generate_vintage_still(settings, scene_text, subject, era, destination, country=country)
+            metadata = generate_vintage_still(settings, scene_text, subject, era, destination, country=country, extra=extra)
         except ProviderError as error:
             raise ProviderError(
                 f'No real footage of "{subject or scene_text[:40]}" passed the checks and a fallback image '

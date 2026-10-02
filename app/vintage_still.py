@@ -127,14 +127,14 @@ def film_finish(content: bytes, seed: int, size: tuple[int, int] = (1920, 1080))
 
 def generate_vintage_still(
     settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path, people: bool = True,
-    country: str = "US",
+    country: str = "US", extra: str = "",
 ) -> dict[str, Any]:
     """Generate, age and save a still; returns asset metadata.
 
     Runware first (paid, fast, reliable); when it has no key, no balance or fails, the free
     Pollinations service (FLUX, no key) makes the image instead."""
     seed = random.randint(1, 2**31 - 1)
-    prompt = still_prompt(scene_text, subject, era, people, country)
+    prompt = still_prompt(scene_text, subject, era, people, country) + extra  # + the channel style's "never" list
     negative = NEGATIVE if people else f"{NEGATIVE}, person, people, woman, man, face, hands, crowd"
     destination.parent.mkdir(parents=True, exist_ok=True)
     runware_error = "no Runware key"

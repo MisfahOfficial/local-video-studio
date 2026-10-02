@@ -36,7 +36,7 @@ from .footage_match import storyboard_frames
 from .logo_guard import analyse_clip, storyboard_stack
 from .key_captions import KEY_POINT_STYLE, key_captions
 from .motion.templates import caption_keywords
-from .footage_match import auto_topic, core_subject, detect_era, scene_subjects, topic_queries
+from .footage_match import auto_topic, core_subject, detect_era, heading_subject, scene_subjects, topic_queries
 from .youtube_auto import AutoYouTubeManager
 
 
@@ -444,6 +444,32 @@ class StudioApplication:
             del metadata
         return {"checked": len(clips), "zoomed": hidden, "needs_review": review}
 
+    def style_report(self, project_id: str) -> dict[str, Any] | None:
+        """The channel editing style's measurable rules for this project (None when the channel has no style)."""
+        from .editing_style import load_style, style_report
+        from .footage_match import scene_subjects
+
+        project = self.db.get_project(project_id) or {}
+        style = load_style(self.paths.root, (project.get("effects") or {}).get("channel_style"))
+        if not style:
+            return None
+        scenes = self.db.list_scenes(project_id)
+        assets = {str(asset["id"]): asset for asset in self.db.list_assets(project_id)}
+        first = next((index for index, scene in enumerate(scenes) if heading_subject(str(scene.get("narration") or ""))), 0)
+        hook_ids = {str(scene["id"]) for scene in scenes[:first]}
+        sections: dict[str, list[dict[str, Any]]] = {}
+        for scene, subject in zip(scenes, scene_subjects(scenes, "")):
+            if subject and str(scene["id"]) not in hook_ids:
+                sections.setdefault(subject.title(), []).append(scene)
+        report = style_report(style, scenes, assets, list(sections.items()), hook_ids)
+        try:
+            logs = self.paths.root / "logs"
+            logs.mkdir(exist_ok=True)
+            (logs / f"style-report-{project_id}.json").write_text(json.dumps(report, indent=1))
+        except OSError:
+            pass
+        return report
+
     def sync_to_voice(self, project_id: str, project: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
         """Line every scene up with the words in the voice-over (Whisper); stretching evenly only
         when the voice-over cannot be heard or matched."""
@@ -712,6 +738,16 @@ def build_handler(application: StudioApplication):
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
                 self._json(application.youtube_auto.status(match.group(1)))
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/style-report", path)
+            if match:
+                self._json({"report": application.style_report(match.group(1))})
+                return
+            match = re.fullmatch(r"/api/editing-styles/([a-zA-Z0-9_-]+)", path)
+            if match:
+                from .editing_style import load_style
+
+                self._json({"channel": match.group(1), "style": load_style(application.paths.root, match.group(1))})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/render-status", path)
             if match:
                 self._json({"render": application.render_payload(match.group(1))})
@@ -929,6 +965,16 @@ def build_handler(application: StudioApplication):
                 application.db.update_project(project_id, effects=normalize_effects(effects))
                 self._json(application.auto_build.start(project_id, body), HTTPStatus.ACCEPTED)
                 return
+            match = re.fullmatch(r"/api/editing-styles/([a-zA-Z0-9_-]+)", path)
+            if match:  # import a channel's editing style JSON (it applies to that channel's next videos)
+                from .editing_style import save_style
+
+                try:
+                    save_style(application.paths.root, match.group(1), self._read_json())
+                except ValueError as error:
+                    raise ApiError(str(error)) from error
+                self._json({"channel": match.group(1), "saved": True})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-source", path)
             if match:
                 project_id = match.group(1)
@@ -1083,6 +1129,14 @@ def build_handler(application: StudioApplication):
                 if not project:
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
                 supplied = self._read_json()
+                if not supplied.get("force"):
+                    from .editing_style import gate_message
+
+                    report = application.style_report(project_id)
+                    message = gate_message(report) if report else ""
+                    if message:
+                        # The style's quality gates: fix the listed scenes, or export anyway on purpose.
+                        raise ApiError(message, HTTPStatus.CONFLICT)
                 if not supplied.get("caption_style"):
                     supplied["caption_style"] = project.get("caption_style")
                 # Effects are chosen on the timeline, not in the export dialog.

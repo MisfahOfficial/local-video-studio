@@ -79,3 +79,18 @@ class PacingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FragmentHeadingTest(unittest.TestCase):
+    def test_a_piece_of_a_sentence_is_never_a_heading(self):
+        from app.footage_match import heading_subject
+        from app.whisper_planner import split_long_sentences
+
+        sentence = "In 1976 the FDA banned that red dye after laboratory tests on rats and the Candy Company changed it."
+        words = sentence.rstrip(".").split()
+        segments = [{"words": [{"word": word, "start": index * 0.42, "end": index * 0.42 + 0.38}
+                               for index, word in enumerate(words)]}]
+        for limit in (2.0, 3.0, 4.0):
+            units = split_long_sentences([sentence], [(0, len(words) * 0.42)], segments, limit)
+            self.assertFalse([text for text, _start, _end in units if heading_subject(text)], limit)
+            self.assertEqual(" ".join(text for text, _start, _end in units), sentence)

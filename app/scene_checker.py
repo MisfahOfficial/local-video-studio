@@ -101,7 +101,7 @@ def era_rule(era: str) -> str:
             "without modern objects are fine.\n")
 
 
-def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "") -> dict[str, dict[str, Any]]:
+def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "", style_lines: str = "") -> dict[str, dict[str, Any]]:
     from .llm import gemini_look
 
     buffer = io.BytesIO()
@@ -120,7 +120,7 @@ def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "") -
         "shop, a brownie sundae is not ice cream cone cakes, Applebee's is not Red Robin); or it is unrelated to "
         "the section (a sandwich film for biscuits, random people, a blank or title screen); or the sentence "
         "clearly names something else that should be seen instead (a map, a factory, a specific person).\n"
-        + era_rule(era) +
+        + era_rule(era) + style_lines +
         "Lines that talk to the viewer (comment, subscribe, which one do you miss) fit any shot of the section's "
         "subject.\n"
         "score 0-10 for how well it works there. reason: at most 10 words.\n\n" + lines)
@@ -156,6 +156,13 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
             era = detect_era(str(project.get("script") or "")) or "mid-century"
     except Exception:
         era = ""
+    style_lines = ""
+    try:  # the channel's editing style: its never-show list and reject/accept rules
+        from .editing_style import checker_rules, load_style
+
+        style_lines = checker_rules(load_style(root, ((db.get_project(project_id) or {}).get("effects") or {}).get("channel_style")))
+    except Exception:
+        style_lines = ""
     todo = []
     for scene, subject in zip(scenes, subjects):
         asset = assets.get(str(scene.get("selected_asset_id") or ""))
@@ -181,7 +188,7 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
         if not rows:
             return
         try:
-            verdicts = _ask(settings, rows, contact_sheet(frames), era)
+            verdicts = _ask(settings, rows, contact_sheet(frames), era, style_lines)
         except Exception as error:  # no quota or no key: the video is kept as sourced, and the user is told
             with _lock:
                 result["error"] = f"AI checker stopped early: {str(error)[:160]}"

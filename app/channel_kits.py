@@ -41,18 +41,19 @@ DEFAULT_KITS: dict[str, dict[str, Any]] = {
            "chapter_designs": ["vintage_tv", "newspaper"], "ingredient_designs": ["carousel", "scrapbook"]},
     # V2 follows Ishaq's most viral V2 video (uVYtlsvecP4, checked frame by frame on 2 Oct): no chapter cards
     # (an orange name label over the item's first shot), lime-yellow bold captions on key facts only, no film
-    # look, no photo frames, no ingredient cards, shots of about 2-4 s. The reference's Montserrat ExtraBold is a
-    # variable font the subtitle engine cannot use, so captions take Futura Bold (closest on every Mac).
+    # look, no photo frames, no ingredient cards, shots of about 2-4 s. Captions use the reference's Montserrat
+    # ExtraBold (static file in the data fonts folder; the variable one is not read by the subtitle engine).
     # The previous look is kept as "v2_classic".
     "v2": {"name": "V2 · Forgotten Flavors of USA", "style": "v2", "country": "US",
            "chapter_style": "name_label", "chapter_designs": [], "ingredient_designs": ["recipe_book", "scrapbook"],
            "ingredient_cards": False, "film_look": False, "photo_graphics": False, "pacing": {"shot_seconds_max": 4.0},
+           "story_stock": True,  # laws, companies, sales: present-day stock shots, like the reference
            "references": ["https://www.youtube.com/watch?v=uVYtlsvecP4"],
-           "caption_style": {"animation": "none", "font": "Futura", "bold": True, "text_color": "#D8E418",
+           "caption_style": {"animation": "none", "font": "Montserrat ExtraBold", "bold": True, "text_color": "#D8E418",
                              "stroke_enabled": True, "stroke_color": "#000000", "stroke_width": 5,
                              "shadow_enabled": True, "shadow_color": "#000000", "shadow_blur": 8, "shadow_x": 0,
                              "shadow_y": 4, "background_enabled": False, "position": "middle", "case": "upper",
-                             "size": 104, "words_per_line": 4, "max_lines": 2}},
+                             "size": 112, "words_per_line": 4, "max_lines": 2}},
     "v2_classic": {"name": "V2 · Forgotten Flavors (classic look, backup)", "style": "v2", "country": "US",
                    "chapter_designs": ["typewriter_card", "classic"], "ingredient_designs": ["recipe_book", "scrapbook"]},
     "v3": {"name": "V3 · Britain We Lived In", "style": "v3", "country": "GB",

@@ -67,7 +67,9 @@ class AutoBuildManager:
                 return
             checked = self._check(project_id)
             filled, failed = self._fill_missing(project_id)
-            self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked)
+            report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
+            self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked,
+                         style_report=report)
             # After each video the AI designs one new chapter look and one new ingredients look for the
             # channel's library (quietly, after the build, so it never slows the video down).
             threading.Thread(target=self._grow_designs, args=(project_id,), daemon=True, name="design-growth").start()
@@ -128,7 +130,7 @@ class AutoBuildManager:
                 if scene_id not in rejected or not before.get(scene_id):
                     continue
                 now = assets.get(str(scene.get("selected_asset_id") or ""), {})
-                if now.get("provider") not in ("youtube", "photo") and before[scene_id] in assets:
+                if now.get("provider") not in ("youtube", "photo", "stock") and before[scene_id] in assets:
                     self.app.db.select_asset(scene_id, before[scene_id])
                     kept += 1
         result["kept_first_clip"] = kept
@@ -165,6 +167,24 @@ class AutoBuildManager:
         todo = [(scene, subject) for scene, subject in zip(scenes, subjects)
                 if not scene.get("selected_asset_id") and str(scene["id"]) not in hook
                 and (labels or not heading_subject(str(scene.get("narration") or "")))]
+        extra = ""
+        try:  # the channel's editing style: its AI limit, and what AI images must never show
+            from .editing_style import ai_image_rules, footage_rules, load_style
+
+            style_doc = load_style(self.app.paths.root, (project.get("effects") or {}).get("channel_style"))
+            if style_doc:
+                extra = ai_image_rules(style_doc)
+                assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
+                filmable = [scene for scene in scenes if not heading_subject(str(scene.get("narration") or "")) or labels]
+                made = sum(1 for scene in scenes
+                           if (assets.get(str(scene.get("selected_asset_id") or "")) or {}).get("provider") == "generated")
+                room = max(0, int(footage_rules(style_doc)["max_ai_share"] * len(filmable) + 1e-9) - made)
+                for scene, _subject in todo[room:]:
+                    failed.append({"scene": int(scene.get("position") or 0),
+                                   "error": "Needs footage: the style's AI image limit is reached"})
+                todo = todo[:room]
+        except Exception:
+            pass
 
         def fill(pair: tuple[dict[str, Any], str]) -> None:
             scene, subject = pair
@@ -173,7 +193,7 @@ class AutoBuildManager:
                            / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg")
             try:
                 metadata = generate_vintage_still(settings, str(scene.get("narration") or ""), subject, era, destination,
-                                                  country=country)
+                                                  country=country, extra=extra)
             except Exception as error:
                 with lock:
                     failed.append({"scene": position, "error": str(error)[:200]})

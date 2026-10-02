@@ -341,6 +341,12 @@ async function createVideo() {
     finishPlanningProgress("Video created");
     const filled = (status.filled || []).length;
     toast(`Video ready · ${status.scenes || 0} scenes${filled ? ` · ${filled} filled with realistic images` : ""}. Review it on the Timeline.`);
+    const report = status.style_report;
+    if (report && report.checks) {
+      // The channel editing style's rules for this video, met (✅) or not (❌).
+      window.alert(`Editing style check · ${report.met}/${report.total} rules met\n\n` + report.checks
+        .map(check => `${check.ok ? "✅" : "❌"} ${check.rule}: ${check.value}`).join("\n"));
+    }
     await refreshProjects();
     await openProject(state.current.id, true);
     activateTab("timeline");
@@ -2004,7 +2010,8 @@ async function startRender() {
   button.disabled = true;
   button.textContent = "Starting export…";
   try {
-    const result = await api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
+    const request = force => api(`/api/projects/${state.current.id}/render`, { method: "POST", body: JSON.stringify({
+      force,
       width, height,
       fps: Number($("#exportFps").value), burn_captions: $("#burnCaptions").checked,
       edit_package: $("#exportEditPackage").checked, capcut: $("#exportCapCut").checked,
@@ -2015,6 +2022,16 @@ async function startRender() {
       audio_bitrate_kbps: Number($("#exportAudioBitrate").value),
       caption_style: captionStyleFromInputs(),
     }) });
+    let result;
+    try {
+      result = await request(false);
+    } catch (error) {
+      // The channel's editing style found problems (empty scenes, too little real video): say what, and let
+      // the editor export anyway on purpose.
+      if (!String(error.message).startsWith("Quality check")) throw error;
+      if (!window.confirm(`${error.message}\n\nExport anyway?`)) return;
+      result = await request(true);
+    }
     if (result.timeline_clips) state.timelineClips = result.timeline_clips;
     state.timelineSync = result.timeline_sync || state.timelineSync;
     renderTimeline();

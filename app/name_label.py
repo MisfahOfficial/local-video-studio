@@ -18,6 +18,7 @@ PAD_X, PAD_Y = 26, 16
 LEFT, BOTTOM = 44, 108  # box corner from the left and bottom edges
 MAX_WIDTH = 1100
 FONTS = (
+    str(Path.home() / "Library/Application Support/LocalVideoStudio/fonts/Montserrat-ExtraBold.ttf"),
     str(Path.home() / "Library/Application Support/LocalVideoStudio/fonts/Montserratwght.ttf"),
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
