@@ -303,11 +303,7 @@ async function saveContentProfile() {
 // One click: plan + auto-source + chapter cards + realistic fill for anything missing.
 async function createVideo() {
   if (!state.current) return;
-  if (!referenceLinks().length) {
-    toast("Add at least one example video (a YouTube link) first", true);
-    document.querySelector(".reference-input")?.focus();
-    return;
-  }
+  // The channel's own example video is used when none is pasted here (the server says if neither exists).
   const button = $("#createPlanButton");
   button.disabled = true;
   button.textContent = "Creating video…";

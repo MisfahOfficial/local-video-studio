@@ -392,7 +392,11 @@ class StudioApplication:
             settings = self.settings.load()
             captions, source = key_captions(scenes, settings.gemini_api_key, settings.gemini_model)
             texts = [captions.get(index, "") for index in range(len(scenes))]
-            style = normalize_caption_style({**current, **KEY_POINT_STYLE})
+            from .channel_kits import kit_for
+
+            kit = kit_for(self.paths.root, (project.get("effects") or {}).get("channel_style"))
+            # The channel's own caption look (V2: lime-yellow bold capitals) over the generic key-point preset.
+            style = normalize_caption_style({**current, **KEY_POINT_STYLE, **(kit.get("caption_style") or {})})
         else:
             source = "script"
             texts = [str(scene["narration"]) for scene in scenes]
@@ -508,8 +512,13 @@ class StudioApplication:
                 if voiceover_duration <= 0:
                     raise ApiError("The voice-over duration could not be measured. Re-upload it before using Whisper Sync.")
                 duration = voiceover_duration
+                from .channel_kits import kit_for
+
+                pacing = kit_for(self.paths.root, body.get("channel_style") or (project.get("effects") or {}).get(
+                    "channel_style")).get("pacing") or {}
                 try:
-                    drafts = WhisperScenePlanner(CachedTranscriber(voiceover_path.parent / "transcript.json")).plan(
+                    drafts = WhisperScenePlanner(CachedTranscriber(voiceover_path.parent / "transcript.json"),
+                                                 max_scene_seconds=float(pacing.get("shot_seconds_max") or 0) or None).plan(
                         script=script,
                         voiceover_path=voiceover_path,
                         duration_seconds=duration,
@@ -903,10 +912,20 @@ def build_handler(application: StudioApplication):
                 if isinstance(body.get("content_profile"), dict):
                     project = application.db.update_project(
                         project_id, content_profile=normalize_profile(body["content_profile"]))
+                from .channel_kits import kit_for
+
+                kit = kit_for(application.paths.root, body.get("channel_style") or (project.get("effects") or {}).get("channel_style"))
+                if missing_reference_message(project) and kit.get("references"):
+                    # The channel's own example video counts: it no longer has to be pasted into every project.
+                    profile = {**(project.get("content_profile") or {}), "references": list(kit["references"])}
+                    project = application.db.update_project(project_id, content_profile=normalize_profile(profile))
                 missing = missing_reference_message(project)
                 if missing:
                     raise ApiError(missing)
                 effects = {**(project.get("effects") or {}), "channel_style": body.get("channel_style")}
+                for key in ("film_look", "photo_graphics"):  # the channel's look decides (V2: neither)
+                    if key in kit:
+                        effects[key] = bool(kit[key])
                 application.db.update_project(project_id, effects=normalize_effects(effects))
                 self._json(application.auto_build.start(project_id, body), HTTPStatus.ACCEPTED)
                 return
@@ -1246,8 +1265,13 @@ def build_handler(application: StudioApplication):
                 if not isinstance(actions, list):
                     raise ApiError("Timeline actions must be a list")
                 for action in actions:
-                    if not isinstance(action, dict) or action.get("type") not in {"motion", "transition"}:
+                    if not isinstance(action, dict) or action.get("type") not in {"motion", "transition", "label"}:
                         raise ApiError("Unknown timeline action")
+                    if action.get("type") == "label":  # the orange item-name label (editable text, short)
+                        text = str((action.get("params") or {}).get("text") or "") if isinstance(action.get("params"), dict) else ""
+                        if not 1 <= len(text) <= 80:
+                            raise ApiError("A name label must be 1-80 characters")
+                        continue
                     preset = action.get("params", {}).get("preset") if isinstance(action.get("params"), dict) else None
                     if action.get("type") == "motion" and preset not in build_default_motion_registry().names():
                         raise ApiError("Unknown motion preset")

@@ -784,7 +784,7 @@ class Database:
                             "preset": transition or (current_transition or {}).get("params", {}).get("preset", "fade"),
                             "duration": (current_transition or {}).get("params", {}).get("duration", 0.32),
                         }},
-                    ]
+                    ] + [item for item in actions if item.get("type") == "label"]  # bulk edits keep the name label
                 if "timeline_actions" in patch:
                     patch["timeline_actions"] = json.dumps(patch["timeline_actions"])
                 patch["updated_at"] = utc_now()

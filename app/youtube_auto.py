@@ -17,7 +17,7 @@ from .database import Database
 from .paths import AppPaths
 from .providers.base import ProviderError
 from .providers.http import post_json
-from .chapter_cards import build_chapter_cards, heading_scenes
+from .chapter_cards import build_chapter_cards, label_headings, heading_scenes
 from .text_guard import available as text_guard_available, face_areas, has_burned_in_text, sample_frames
 from .ai_judge import ClaudeJudge, best_usable
 from .content_profile import BUILTIN, DEFAULT_KIND, profile_for
@@ -294,6 +294,7 @@ class _Run:
     by_position: dict[int, str] = field(default_factory=dict)
     section_reuse: list[int] = field(default_factory=list)  # scenes given another shot of the section's dish
     banned: dict[str, set[str]] = field(default_factory=dict)  # subject -> sources refused for it (AI checker / Ishaq)
+    name_labels: bool = False  # headings get the item's own footage plus an orange name label (no chapter card)
     prefer_read: bool = False  # a re-run of a few scenes: sources already read come first (no new downloads)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
@@ -480,10 +481,15 @@ class AutoYouTubeManager:
         )
         # Graphics are planned in story order: one gallery per video.
         # Every scene that talks about ingredients is an ingredient card (motion graphics, never a clip).
-        for item in all_scenes if profile.recipe_cards else []:
+        from .channel_kits import kit_for
+
+        kit = kit_for(self.paths.root, (project.get("effects") or {}).get("channel_style"))
+        run.name_labels = kit.get("chapter_style") == "name_label"
+        cards_on = profile.recipe_cards and kit.get("ingredient_cards", True)  # V2's reference has no ingredient cards
+        for item in all_scenes if cards_on else []:
             if ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"])):
                 run.card_ids.add(str(item["id"]))
-        run.gallery_id = next((str(item["id"]) for item in all_scenes if profile.recipe_cards
+        run.gallery_id = next((str(item["id"]) for item in all_scenes if cards_on
                                and not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
         # A gallery already on the timeline (outside this run) counts as the video's one gallery.
         redo = {str(item["id"]) for item in scenes}
@@ -530,7 +536,8 @@ class AutoYouTubeManager:
         started = time.time()
         # Each item's scenes start as soon as its own sources are read, instead of waiting for the slowest
         # item (the V2 test waited 8 minutes on two long videos before the first scene began).
-        pending = [scene for scene in scenes if str(scene["id"]) not in headings]  # headings become chapter cards
+        # Headings become chapter cards, or (name-label channels) are sourced like any shot of their item.
+        pending = [scene for scene in scenes if run.name_labels or str(scene["id"]) not in headings]
         pending_ids = {str(scene["id"]) for scene in pending}
         submitted: set[str] = set()
         futures: list[Any] = []
@@ -560,10 +567,13 @@ class AutoYouTubeManager:
             if headings:
                 try:
                     timings["scenes_s"] = round(time.time() - started - timings.get("plan_sources_s", 0))
-                    made = build_chapter_cards(self.db, self.paths, project_id, service.ffmpeg_path)
+                    if run.name_labels:
+                        label_headings(self.db, project_id)  # the scenes already hold their item's footage
+                    else:
+                        made = build_chapter_cards(self.db, self.paths, project_id, service.ffmpeg_path)
+                        with run.lock:
+                            run.completed += made
                     timings["chapters_s"] = round(time.time() - started - sum(timings.values()))
-                    with run.lock:
-                        run.completed += made
                 except Exception as error:  # cards are a finishing touch; never lose the footage
                     with run.lock:
                         run.errors.append({"scene": 0, "error": f"Chapter cards failed: {str(error)[:300]}", "query": ""})
@@ -622,7 +632,7 @@ class AutoYouTubeManager:
         for scene in sorted(all_scenes or scenes, key=lambda item: int(item.get("position") or 0)):
             scene_id = str(scene["id"])
             if (scene_id in run.card_ids or scene_id == run.gallery_id
-                    or heading_subject(str(scene.get("narration") or ""))):
+                    or (heading_subject(str(scene.get("narration") or "")) and not run.name_labels)):
                 continue
             key = "hook" if scene_id in run.hook_ids else (
                 run.recipe_by_id.get(scene_id) or run.subject_by_id.get(scene_id) or "")

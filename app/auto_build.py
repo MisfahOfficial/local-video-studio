@@ -155,8 +155,16 @@ class AutoBuildManager:
         from .channel_kits import kit_for
 
         country = str(kit_for(self.app.paths.root, (project.get("effects") or {}).get("channel_style") or "v3").get("country") or "US")
+        kit = kit_for(self.app.paths.root, (project.get("effects") or {}).get("channel_style") or "v3")
+        labels = kit.get("chapter_style") == "name_label"  # headings are ordinary shots there
+        # The opening (everything before the first heading) never gets an AI image: a hook scene that found no
+        # real footage stays empty and is listed (the V2 test got one AI image in its hook here).
+        first_heading = next((index for index, scene in enumerate(scenes)
+                              if heading_subject(str(scene.get("narration") or ""))), 0)
+        hook = {str(scene["id"]) for scene in scenes[:first_heading]}
         todo = [(scene, subject) for scene, subject in zip(scenes, subjects)
-                if not scene.get("selected_asset_id") and not heading_subject(str(scene.get("narration") or ""))]
+                if not scene.get("selected_asset_id") and str(scene["id"]) not in hook
+                and (labels or not heading_subject(str(scene.get("narration") or "")))]
 
         def fill(pair: tuple[dict[str, Any], str]) -> None:
             scene, subject = pair

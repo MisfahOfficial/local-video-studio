@@ -205,6 +205,28 @@ def heading_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [scene for scene in scenes if heading_subject(str(scene.get("narration") or "")) and not is_signpost(scene)]
 
 
+def label_headings(db: Database, project_id: str) -> int:
+    """Name-label channels (V2's reference style): every item heading keeps the footage it was given and
+    gets an orange name label on top, instead of a full-screen chapter card. Returns how many were labelled."""
+    labelled = 0
+    for scene in db.list_scenes(project_id):
+        if is_signpost(scene):
+            if str(scene.get("caption_text") or "").strip():
+                db.update_scene(str(scene["id"]), {"caption_text": ""})  # never show "OUTRO" on screen
+            continue
+        raw = str(scene.get("narration") or "").strip()
+        if not heading_subject(raw):
+            continue
+        title = _NUMBERING.sub("", raw).strip(" .:")
+        actions = [action for action in scene.get("timeline_actions") or []
+                   if not (isinstance(action, dict) and action.get("type") == "label")]
+        actions.append({"type": "label", "params": {"text": title}})
+        # The label already names the item, so no caption on top of it.
+        db.update_scene(str(scene["id"]), {"caption_text": "", "timeline_actions": actions})
+        labelled += 1
+    return labelled
+
+
 def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_path: str = "ffmpeg") -> int:
     """Create and select a chapter card for every heading scene. Returns how many were made."""
     project = db.get_project(project_id) or {}

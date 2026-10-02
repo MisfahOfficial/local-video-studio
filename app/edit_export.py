@@ -122,6 +122,10 @@ def on_screen_text(project: dict[str, Any], scenes: list[dict[str, Any]],
         # Only cards that were redrawn without words get text layers (else the words would show twice).
         from .motion_designs import is_web
 
+        from .name_label import label_layers
+
+        for layer in label_layers(scene):  # the orange item-name label (reference V2 style)
+            layers.append({**layer, "start": min(end - 0.1, start + float(layer.get("appear") or 0)), "end": end})
         if is_web(metadata.get("design")):
             from .motion_designs import text_layers
 

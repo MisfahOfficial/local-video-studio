@@ -333,6 +333,11 @@ class FFmpegRenderer:
             if editable_dir is not None:
                 editable = editable_dir / clip.name
                 self._text_free_clip(asset, clip, editable, duration, clip_scene, width, height, fps, encoder)
+            from ..name_label import label_text
+
+            if label_text(scene):
+                # The item's name in an orange box over its first shot; the editable copy (made above) stays clean.
+                self._overlay_label(clip, label_text(scene), encoder)
             caption = str(scene.get("caption_text") or "").strip()
             if animated_captions and caption and scene["id"] not in captioned_scenes:
                 captioned_scenes.add(scene["id"])
@@ -527,6 +532,31 @@ class FFmpegRenderer:
 
         self._overlay(clip, highlight_caption(text, caption_keywords(text), style=getattr(self, "_style", None)),
                       duration, fps, encoder, "caption")
+
+    def _overlay_label(self, clip: Path, text: str, encoder: str) -> None:
+        """Lay the orange name label over a rendered clip, in place (fades in after 0.15 s)."""
+        from ..name_label import render_label
+
+        png = render_label(text, clip.with_suffix(".label.png"))
+        combined = clip.with_suffix(".label.mp4")
+        command = [
+            self.ffmpeg_path, "-y", "-i", str(clip), "-loop", "1", "-i", str(png), "-filter_complex",
+            "[1:v]format=rgba,fade=t=in:st=0.15:d=0.25:alpha=1[label];[label][0:v]scale2ref[l][base];"
+            "[base][l]overlay=shortest=1:format=auto", "-c:v", encoder,
+        ]
+        if encoder == "libx264":
+            command += ["-preset", "veryfast", "-crf", "20"]
+        command += ["-pix_fmt", "yuv420p", "-an", str(combined)]
+        try:
+            self._run(command)
+        except RuntimeError:
+            if encoder == "libx264":
+                raise
+            fallback = ["libx264" if item == encoder else item for item in command]
+            fallback[-4:-4] = ["-preset", "veryfast", "-crf", "20"]
+            self._run(fallback)
+        combined.replace(clip)
+        png.unlink(missing_ok=True)
 
     def _overlay(self, clip: Path, frame: Any, duration: float, fps: int, encoder: str, name: str) -> None:
         """Composite an animated transparent graphic over a rendered clip, in place."""

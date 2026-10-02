@@ -157,7 +157,8 @@ def _fill_unmatched(spans: list[tuple[float, float] | None], sentences: list[str
         index = run_end
 
 
-def _group_by_pacing(sentences: list[str], spans: list[tuple[float, float]]) -> list[list[int]]:
+def _group_by_pacing(sentences: list[str], spans: list[tuple[float, float]],
+                     max_seconds: float = MAX_SCENE_SECONDS) -> list[list[int]]:
     groups: list[list[int]] = []
     current: list[int] = []
     for index, (start, end) in enumerate(spans):
@@ -168,7 +169,7 @@ def _group_by_pacing(sentences: list[str], spans: list[tuple[float, float]]) -> 
                 current = []
             groups.append([index])
             continue
-        if current and end - spans[current[0]][0] > min(MAX_SCENE_SECONDS, scene_duration_limit(spans[current[0]][0])):
+        if current and end - spans[current[0]][0] > min(max_seconds, scene_duration_limit(spans[current[0]][0])):
             groups.append(current)
             current = []
         current.append(index)
@@ -201,8 +202,11 @@ def _group_by_target(spans: list[tuple[float, float]], target: int) -> list[list
 class WhisperScenePlanner:
     """Free, offline VO sync: Whisper word timings plus the local scene director."""
 
-    def __init__(self, transcriber: Transcriber | None = None, model_size: str = "small"):
+    def __init__(self, transcriber: Transcriber | None = None, model_size: str = "small",
+                 max_scene_seconds: float | None = None):
         self.transcriber = transcriber or FasterWhisperTranscriber(model_size=model_size)
+        # A channel's own pacing (V2: about 2-4 s shots, like its most viral video); 7 s otherwise.
+        self.max_seconds = max(1.5, min(MAX_SCENE_SECONDS, max_scene_seconds or MAX_SCENE_SECONDS))
 
     def plan(
         self,
@@ -218,10 +222,10 @@ class WhisperScenePlanner:
             raise ValueError("The script is empty")
         segments = self.transcriber.transcribe(voiceover_path)
         sentence_spans = align_sentences(sentences, segments, duration_seconds)
-        units = split_long_sentences(sentences, sentence_spans, segments, MAX_SCENE_SECONDS)
+        units = split_long_sentences(sentences, sentence_spans, segments, self.max_seconds)
         sentences = [text for text, _start, _end in units]
         spans = [(start, end) for _text, start, end in units]
-        groups = _group_by_target(spans, target_scene_count) if target_scene_count else _group_by_pacing(sentences, spans)
+        groups = _group_by_target(spans, target_scene_count) if target_scene_count else _group_by_pacing(sentences, spans, self.max_seconds)
 
         # Cut between scenes in the middle of the pause, so every visual change
         # lands between spoken sentences and the timeline stays gapless.

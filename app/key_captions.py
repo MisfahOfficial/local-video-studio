@@ -93,8 +93,26 @@ def _space(picks: dict[int, tuple[int, str]], scenes: list[dict[str, Any]], limi
     return {index: picks[index][1] for index in chosen}
 
 
+def hook_phrase(sentence: str) -> str:
+    """The opening line as big on-screen words ('Christmas baking used to start weeks before' ->
+    'CHRISTMAS BAKING USED TO START WEEKS BEFORE'): its first clause, at most MAX_WORDS words."""
+    words: list[str] = []
+    for token in sentence.split():
+        word = _clean(token)
+        if words and word.lower() in CLAUSE_BREAKS:
+            break
+        if word:
+            words.append(word)
+        if len(words) >= MAX_WORDS or token.rstrip().endswith((",", ".", ";", ":", "—", "?", "!")):
+            break
+    while len(words) > 2 and words[-1].lower() in EDGE_STOP:
+        words.pop()
+    return " ".join(words) if len(words) >= 2 else ""
+
+
 def local_key_captions(scenes: list[dict[str, Any]]) -> dict[int, str]:
-    """Free, offline choice of key points: hook question, numbers, dates and prices."""
+    """Free, offline choice of key points: hook question, numbers, dates and prices. The opening always
+    gets words on screen, like the reference videos (a script without numbers got no captions at all)."""
     picks: dict[int, tuple[int, str]] = {}
     for index, scene in enumerate(scenes):
         if heading_subject(str(scene.get("narration") or "")):
@@ -102,6 +120,12 @@ def local_key_captions(scenes: list[dict[str, Any]]) -> dict[int, str]:
         score, phrase = _score(scene, index, len(scenes))
         if score:
             picks[index] = (score, phrase)
+    first = next((index for index, scene in enumerate(scenes)
+                  if not heading_subject(str(scene.get("narration") or ""))), None)
+    if first is not None and not any(index <= first + 1 for index in picks):
+        phrase = hook_phrase(str(scenes[first].get("narration") or ""))
+        if phrase:
+            picks[first] = (4, phrase)  # the strongest claim on screen: it always survives the spacing
     duration = float(scenes[-1]["end_seconds"]) if scenes else 0
     return _space(picks, scenes, max(1, int(duration // MIN_GAP_SECONDS)))
 
