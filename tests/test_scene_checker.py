@@ -29,7 +29,7 @@ class FakeDb:
 
 
 def fake_ask(refuse):
-    def ask(_settings, rows, _sheet):
+    def ask(_settings, rows, _sheet, *_rest):
         return {row["label"]: {"label": row["label"], "fits": row["sentence"] not in refuse, "score": 2 if row["sentence"] in refuse else 8,
                                "reason": "wrong dish"} for row in rows}
     return ask

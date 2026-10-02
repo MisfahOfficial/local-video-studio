@@ -148,6 +148,9 @@ _TITLE_SMALL = {"a", "an", "and", "or", "of", "the", "in", "on", "with", "for", 
 def core_subject(subject: str) -> str:
     """The filmable thing: 'poor man's cookies' -> 'cookies', 'musk ox' -> 'musk ox'."""
     subject = subject.lower().replace("\u2019", "'").strip()
+    # "Fruitcake (Old English Style)": the words in brackets describe the dish; demanding them in every
+    # title left the V2 fruitcake item with no footage at all (16 AI images). They become a second search.
+    subject = re.sub(r"\s*[(\[][^)\]]*[)\]]\s*", " ", subject).strip() or subject
     if "'s " in subject:
         owner, rest = subject.split("'s ", 1)
         # Only a vague owner is dropped ("poor man's", "grandma's"); a brand keeps its name
@@ -155,6 +158,17 @@ def core_subject(subject: str) -> str:
         if set(owner.split()) & _VAGUE_OWNERS:
             subject = rest
     return subject.strip()
+
+
+def bracket_alias(subject: str) -> str:
+    """The other name a heading gives in brackets, as a search ("rum cake (bacardi rum cake)" -> "bacardi rum
+    cake"; "fruitcake (old english style)" -> "old english style fruitcake"); '' when there is none."""
+    match = re.search(r"[(\[]([^)\]]+)[)\]]", subject.lower())
+    if not match:
+        return ""
+    inside = " ".join(match.group(1).split())
+    main = core_subject(subject)
+    return inside if main and all(word in inside.split() for word in main.split()) else f"{inside} {main}".strip()
 
 
 _VAGUE_OWNERS = {"man", "men", "grandma", "granny", "grandmother", "nana", "mom", "mum", "mother", "mama", "ma",
@@ -432,6 +446,7 @@ def vague_heading(heading: str) -> bool:
 
 def topic_queries(scene: dict[str, Any], topic: str, era: str = "", recipe: str = "") -> list[str]:
     """Searches that always name the subject, narrowed by the scene's own nouns."""
+    topic = re.sub(r"\s*[(\[][^)\]]*[)\]]\s*", " ", topic).strip() or topic  # brackets are a second name, not search words
     source = " ".join(filter(None, [str(scene.get("visual_subject") or ""), str(scene.get("narration") or "")]))
     keys = scene_keywords(source, topic)
     if recipe and topic.strip():

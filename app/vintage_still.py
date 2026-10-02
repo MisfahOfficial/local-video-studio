@@ -7,7 +7,9 @@ archival footage instead of looking like glossy AI art.
 from __future__ import annotations
 
 import io
+import itertools
 import random
+import re
 import threading
 import time
 from pathlib import Path
@@ -19,6 +21,7 @@ from .providers.base import ProviderError
 from .providers.runware import RunwareImageProvider
 
 NEGATIVE = (
+    "text, lettering, words, logo, brand name, printed name on clothing, "
     "illustration, painting, drawing, cartoon, anime, cgi, 3d render, digital art, concept art, "
     "hyperrealistic, oversaturated, glossy, perfect symmetry, studio lighting, heavy bokeh, "
     "text, letters, logo, watermark, modern appliances, stainless steel, modern kitchen, contemporary clothing, "
@@ -34,9 +37,36 @@ def home_word(country: str) -> str:
     return HOMES.get(str(country or "").upper(), "American")
 
 
-def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, country: str = "US") -> str:
+# Shots without people, chosen in turn so a run of AI stills never repeats one look (the V2 fruitcake item
+# was 16 near-identical "women in aprons in a kitchen" images).
+COMPOSITIONS = (
+    "Close-up of the finished {subject} on a plate, filling the frame",
+    "Overhead view of the {subject} on a table with period dishes around it",
+    "Hands preparing the {subject} on a worn kitchen counter, no faces visible",
+    "The raw ingredients for the {subject} laid out on a wooden table",
+    "A slice or portion of the {subject} on a small plate beside a cup of coffee",
+    "The {subject} cooling on a windowsill or a wire rack, kitchen softly out of focus",
+)
+_SHOTS = itertools.count(random.randrange(len(COMPOSITIONS)))
+_PEOPLE_WORDS = re.compile(
+    r"\b(families|family|kids|children|grandm\w*|grandparents?|mothers?|moms?|mums?|she|he|they|guests|friends|"
+    r"neighbou?rs|people|everyone|party|dinner table|church)\b", re.IGNORECASE)
+
+
+def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, country: str = "US",
+                 shot: int | None = None) -> str:
     period = era or "mid-century"
     about = f" Main subject: {subject}." if subject else ""
+    text_rule = " No text, no letters, no logos, no brand names anywhere in the picture."
+    if people and not _PEOPLE_WORDS.search(scene_text):
+        # People only when the sentence is about them; otherwise the dish itself, in a varied shot.
+        index = shot if shot is not None else next(_SHOTS)  # in turn, so neighbouring stills differ
+        framing = COMPOSITIONS[index % len(COMPOSITIONS)].format(subject=subject or "dish")
+        return (
+            f"{scene_text.strip()[:200]}{about} {framing}. Candid {period} amateur snapshot photograph, shot on "
+            f"Kodachrome slide film, period-correct {home_word(country)} setting, natural window light, slightly soft "
+            f"focus, faded colours, fine film grain, no people.{text_rule}"
+        )
     if not people:
         # Ingredient cards: the item alone, filling the frame; nobody in the kitchen behind it.
         return (
@@ -49,7 +79,8 @@ def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, c
         f"slide film with a cheap camera. Period-correct {period} {home_word(country)} home: enamel stove, rounded "
         f"refrigerator, linoleum floor, {period} hairstyles, cotton dresses and aprons, glass mixing bowls. "
         "Natural window light, slightly soft focus, ordinary imperfect scene, real people and real food, "
-        "faded colours, fine film grain"
+        "faded colours, fine film grain. One or two people with different faces, not posed in a row."
+        + text_rule
     )
 
 
@@ -58,15 +89,18 @@ def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, c
 _RUNWARE_SLOT = threading.Semaphore(1)
 
 
+RUNWARE_WAITS = (5, 10, 15, 20, 30)  # ~80 s in all: 18 s was too short and left four V2 scenes empty
+
+
 def _runware_one_at_a_time(make: Any) -> Any:
-    for attempt in range(4):
+    for attempt in range(len(RUNWARE_WAITS) + 1):
         with _RUNWARE_SLOT:
             try:
                 return make()
             except ProviderError as error:
-                if "concurrentRequestLimit" not in str(error) or attempt == 3:
+                if "concurrentRequestLimit" not in str(error) or attempt == len(RUNWARE_WAITS):
                     raise
-        time.sleep(3 * (attempt + 1))  # another program may be using the account: wait, then try again
+        time.sleep(RUNWARE_WAITS[attempt])  # the account is still busy: wait, then try again
     raise ProviderError("Runware stayed busy")
 
 

@@ -34,7 +34,7 @@ from .photo_source import load_image, load_images, save_photo, search_photos
 from .vintage_still import generate_vintage_still
 from .footage_match import (
     MODERN_TITLE, NON_FOOTAGE_TITLE, looks_like_ai_slideshow, SYNTHETIC_THRESHOLD, ClipScorer, FootageVerifier, auto_topic, core_subject, detect_era, mentions_topic,
-    PLURAL_FOODS, heading_subject, hook_theme, is_process_scene, vague_heading, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
+    PLURAL_FOODS, bracket_alias, heading_subject, hook_theme, is_process_scene, vague_heading, scene_keywords, ingredient_list, off_cuisine, plural_items, scene_subjects, section_recipes, signature_words, storyboard_frames, topic_queries,
 )
 from .youtube_source import YouTubeSourceService, _words
 
@@ -200,8 +200,8 @@ _GOOD_MATCH = 4.0
 MAX_SOURCE_SECONDS = 45 * 60
 _READ_SLOTS = threading.BoundedSemaphore(2)
 # YouTube serves each video at its own (often slow, ~0.2 MB/s) speed, whatever the line speed: downloads of
-# different videos overlap instead of waiting for a reading slot. Four at once keeps the request rate modest.
-_DOWNLOAD_SLOTS = threading.BoundedSemaphore(4)
+# different videos overlap instead of waiting for a reading slot. Three at once keeps the request rate modest.
+_DOWNLOAD_SLOTS = threading.BoundedSemaphore(3)
 
 
 def _has_video(path: Path, ffmpeg_path: str = "ffmpeg") -> bool:
@@ -224,6 +224,7 @@ SHOT_PADDING = 2.0
 
 # Scenes sourced at the same time. More would mostly add YouTube "please sign in" blocks.
 SCENE_WORKERS = 6
+LONG_SOURCE_SECONDS = 20 * 60  # longer sources come after every shorter usable one
 
 
 def interleave_sections(scenes: list[dict[str, Any]], key: Any) -> list[dict[str, Any]]:
@@ -293,6 +294,7 @@ class _Run:
     by_position: dict[int, str] = field(default_factory=dict)
     section_reuse: list[int] = field(default_factory=list)  # scenes given another shot of the section's dish
     banned: dict[str, set[str]] = field(default_factory=dict)  # subject -> sources refused for it (AI checker / Ishaq)
+    prefer_read: bool = False  # a re-run of a few scenes: sources already read come first (no new downloads)
     stock: list[int] = field(default_factory=list)
     graphics: list[int] = field(default_factory=list)
 
@@ -493,6 +495,7 @@ class AutoYouTubeManager:
         if run.gallery_id in redo:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
+        run.prefer_read = len(scenes) < len(all_scenes)  # the AI checker's replacements took 2.5 min of new downloads
         try:
             from .scene_checker import banned_sources
 
@@ -525,19 +528,35 @@ class AutoYouTubeManager:
         clean_cache(self.paths.root / "source_cache")
         timings: dict[str, float] = {}
         started = time.time()
+        # Each item's scenes start as soon as its own sources are read, instead of waiting for the slowest
+        # item (the V2 test waited 8 minutes on two long videos before the first scene began).
+        pending = [scene for scene in scenes if str(scene["id"]) not in headings]  # headings become chapter cards
+        pending_ids = {str(scene["id"]) for scene in pending}
+        submitted: set[str] = set()
+        futures: list[Any] = []
+        scene_pool = ThreadPoolExecutor(max_workers=SCENE_WORKERS)
+
+        def start(members: list[dict[str, Any]]) -> None:
+            with run.lock:
+                batch = [scene for scene in members if str(scene["id"]) in pending_ids
+                         and str(scene["id"]) not in submitted and str(scene["id"]) not in run.hook_ids]
+                submitted.update(str(scene["id"]) for scene in batch)
+                futures.extend(scene_pool.submit(self._source_scene_safely, run, scene) for scene in batch)
+
         if verifier is not None:
             try:
-                self._plan_sections(run, scenes, all_scenes)
+                self._plan_sections(run, scenes, all_scenes, on_ready=start)
             except Exception as error:  # planning only improves continuity; per-scene search still works
                 run.errors.append({"scene": 0, "error": f"Section planning skipped: {str(error)[:200]}", "query": ""})
         try:
-            # Several scenes at once: most of the time is spent waiting on YouTube.
             timings["plan_sources_s"] = round(time.time() - started)
-            with ThreadPoolExecutor(max_workers=SCENE_WORKERS) as pool:
-                list(pool.map(lambda scene: self._source_scene_safely(run, scene), interleave_sections(
-                    [scene for scene in scenes if str(scene["id"]) not in headings],  # headings become chapter cards
-                    lambda scene: run.subject_by_id.get(str(scene["id"]), ""),
-                )))
+            # The rest (the hook, which needs every item's teasers, and anything not planned) in turn by item.
+            rest = interleave_sections([scene for scene in pending if str(scene["id"]) not in submitted],
+                                       lambda scene: run.subject_by_id.get(str(scene["id"]), ""))
+            futures.extend(scene_pool.submit(self._source_scene_safely, run, scene) for scene in rest)
+            for future in list(futures):
+                future.result()
+            scene_pool.shutdown()
             if headings:
                 try:
                     timings["scenes_s"] = round(time.time() - started - timings.get("plan_sources_s", 0))
@@ -591,6 +610,7 @@ class AutoYouTubeManager:
     # ------------------------------------------------------------------ section footage pools
     def _plan_sections(
         self, run: "_Run", scenes: list[dict[str, Any]], all_scenes: list[dict[str, Any]] | None = None,
+        on_ready: Any = None,
     ) -> None:
         """Edit like a person: pick the few best source videos for each section (the hook, each dish),
         then cut every sentence from them in story order, so the steps follow one cook's video.
@@ -610,8 +630,15 @@ class AutoYouTubeManager:
                 sections.setdefault(key, []).append(scene)
         hook = [scene for scene in sections.pop("hook", []) if str(scene["id"]) in wanted]
         run.plan_for = wanted
+        def plan(item: tuple[str, list[dict[str, Any]]]) -> None:
+            try:
+                self._plan_section(run, item[0], item[1])
+            finally:
+                if on_ready is not None:
+                    on_ready(item[1])  # this item's scenes can start while other items are still read
+
         with ThreadPoolExecutor(max_workers=3) as pool:
-            list(pool.map(lambda item: self._plan_section(run, item[0], item[1]), sections.items()))
+            list(pool.map(plan, sections.items()))
         order = {key: index for index, key in enumerate(sections)}
         run.section_pools.sort(key=lambda item: order.get(item[1] or item[0], 0))
         if hook:
@@ -677,6 +704,9 @@ class AutoYouTubeManager:
             other = core_subject(subject) if dish == recipe else recipe
             if other and other != dish:
                 queries += run.profile.queries(run.profile.section_queries[:1], item=other, era=era, theme=run.theme)
+            alias = bracket_alias(subject)  # "Rum Cake (Bacardi Rum Cake)": its other name is searched too
+            if alias and alias not in (dish, other):
+                queries += run.profile.queries(run.profile.section_queries[:1], item=alias, era=era, theme=run.theme)
         core = subject if is_hook else core_subject(subject)
         found: dict[str, dict[str, Any]] = {}
         for query in dict.fromkeys(queries):
@@ -696,6 +726,22 @@ class AutoYouTubeManager:
                     + 1.0 * (180 <= length <= 1500) + 0.3 * candidate_relevance(item, members[0]))
 
         ordered = sorted(usable, key=rank, reverse=True)
+        if not is_hook:
+            # Long videos are read whole at YouTube's slow per-video speed (a 45-minute source took ~5 minutes):
+            # they are used only when there are not enough shorter ones for this item.
+            def length(item: dict[str, Any]) -> float:
+                return float(item.get("duration_seconds") or item.get("duration") or 0)
+
+            short = [item for item in ordered if length(item) <= LONG_SOURCE_SECONDS]
+            ordered = short + [item for item in ordered if length(item) > LONG_SOURCE_SECONDS]
+            if run.prefer_read:
+                analyses = self.paths.root / "analysis_cache"
+
+                def read_before(item: dict[str, Any]) -> bool:
+                    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(item.get("video_id")))
+                    return (analyses / f"{safe}.npz").is_file()
+
+                ordered = [item for item in ordered if read_before(item)] + [item for item in ordered if not read_before(item)]
         sources: list[dict[str, Any]] = []
         # Read the best first (more of them for a long section); spares only when one is unusable.
         size = 2 if is_hook else pool_size(len(members))

@@ -135,6 +135,28 @@ HIGHLIGHT = (242, 194, 48)
 HIGHLIGHT_TEXT = (30, 24, 14)
 
 
+def is_script_font(paths: tuple[str, ...]) -> bool:
+    return any(name in str(path) for path in paths[:1] for name in ("Snell", "Brush Script", "Zapfino"))
+
+
+def _luminance(color: tuple[int, ...]) -> float:
+    channels = [value / 255 for value in color[:3]]
+    linear = [value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast(first: tuple[int, ...], second: tuple[int, ...]) -> float:
+    light, dark = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def readable_ink(box: tuple[int, ...], ink: tuple[int, ...], minimum: float = 4.5) -> tuple[int, int, int]:
+    """The style's word colour when it reads on its box; otherwise near-black or white, whichever reads better."""
+    if contrast(box, ink) >= minimum:
+        return tuple(ink[:3])  # type: ignore[return-value]
+    return (20, 16, 12) if contrast(box, (20, 16, 12)) >= contrast(box, (255, 255, 255)) else (255, 255, 255)
+
+
 def highlight_words(text: str, keywords: set[str]) -> list[tuple[str, bool]]:
     return [(word, re.sub(r"[^\w'-]", "", word).lower() in keywords) for word in text.split()]
 
@@ -145,8 +167,13 @@ def highlight_caption(
     """White sans caption revealed word by word; key words sit in coloured boxes (the channel's style)."""
     style = style or get_style(None)
     size = 58
-    sans, serif = font(style.caption_fonts, size, index=0), font(style.highlight_fonts, int(size * 0.98))
-    words = highlight_words(text, keywords)
+    script = is_script_font(style.highlight_fonts)
+    # A script face is unreadable in capitals ("HUMIDITY" in V2's pink box): its key words are written in
+    # normal case, a little larger and with a thin outline of their own colour to thicken the strokes.
+    sans, serif = font(style.caption_fonts, size, index=0), font(style.highlight_fonts, int(size * (1.12 if script else 0.98)))
+    ink = readable_ink(style.highlight, style.highlight_text)
+    words = [(word.capitalize() if script and key and word.isupper() else word, key)
+             for word, key in highlight_words(text, keywords)]
     probe = ImageDraw.Draw(Image.new("RGB", (8, 8)))
     space = probe.textlength(" ", font=sans)
     pad_x, pad_y = 14, 6
@@ -182,9 +209,10 @@ def highlight_caption(
             lift = int((1 - progress) * 18)
             if key:
                 width = draw.textlength(word, font=serif) + pad_x * 2
-                box = (x, y - pad_y + lift, x + width, y + size + pad_y + lift)
+                box = (x, y - pad_y + lift, x + width, y + size + pad_y + lift + (12 if script else 0))  # room for tails
                 draw.rectangle(box, fill=(*style.highlight, alpha))
-                draw.text((x + pad_x, y + lift - 2), word, font=serif, fill=(*style.highlight_text, alpha))
+                draw.text((x + pad_x, y + lift - 2), word, font=serif, fill=(*ink, alpha),
+                          stroke_width=1 if script else 0, stroke_fill=(*ink, alpha))
             else:
                 draw.text((x + 2, y + lift + 3), word, font=sans, fill=(0, 0, 0, int(alpha * 0.6)))
                 draw.text((x, y + lift), word, font=sans, fill=(255, 255, 255, alpha))

@@ -90,7 +90,18 @@ def _frames(path: Path, ffmpeg_path: str, video: bool) -> list[Any]:
     return frames
 
 
-def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any) -> dict[str, dict[str, Any]]:
+def era_rule(era: str) -> str:
+    """For channels about the past: a present-day look is wrong even when the dish is right (V2 test:
+    hands with a smartwatch in a 1970s divinity scene)."""
+    if not era:
+        return ""
+    return (f"This channel tells stories of the {era} past. fits = false also when the shot clearly shows present-day "
+            "things: a smartwatch or smartphone, a modern stainless or induction kitchen, modern clothes or hairstyles "
+            "in close-up, or a present-day presenter. Old footage, old photos and simple close-ups of food or hands "
+            "without modern objects are fine.\n")
+
+
+def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "") -> dict[str, dict[str, Any]]:
     from .llm import gemini_look
 
     buffer = io.BytesIO()
@@ -109,6 +120,7 @@ def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any) -> dict[str, dic
         "shop, a brownie sundae is not ice cream cone cakes, Applebee's is not Red Robin); or it is unrelated to "
         "the section (a sandwich film for biscuits, random people, a blank or title screen); or the sentence "
         "clearly names something else that should be seen instead (a map, a factory, a specific person).\n"
+        + era_rule(era) +
         "Lines that talk to the viewer (comment, subscribe, which one do you miss) fit any shot of the section's "
         "subject.\n"
         "score 0-10 for how well it works there. reason: at most 10 words.\n\n" + lines)
@@ -134,6 +146,16 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
     scenes = db.list_scenes(project_id)
     assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
     subjects = scene_subjects(scenes, "")
+    era = ""
+    try:  # channels about the past (vintage recipes, history) also refuse present-day looks
+        from .content_profile import profile_for
+        from .footage_match import detect_era
+
+        project = db.get_project(project_id) or {}
+        if profile_for(project).period:
+            era = detect_era(str(project.get("script") or "")) or "mid-century"
+    except Exception:
+        era = ""
     todo = []
     for scene, subject in zip(scenes, subjects):
         asset = assets.get(str(scene.get("selected_asset_id") or ""))
@@ -159,7 +181,7 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
         if not rows:
             return
         try:
-            verdicts = _ask(settings, rows, contact_sheet(frames))
+            verdicts = _ask(settings, rows, contact_sheet(frames), era)
         except Exception as error:  # no quota or no key: the video is kept as sourced, and the user is told
             with _lock:
                 result["error"] = f"AI checker stopped early: {str(error)[:160]}"
