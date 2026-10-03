@@ -124,7 +124,10 @@ def normalize_caption_style(value: Any) -> dict[str, Any]:
     text_case = str(style.get("case") or "normal")
     if text_case not in {"normal", "upper", "lower", "title"}:
         raise ApiError("Unknown caption case")
-    colors: dict[str, str] = {}
+    highlight = str(style.get("highlight_color") or "").upper()
+    if highlight and not re.fullmatch(r"#[0-9A-F]{6}", highlight):
+        raise ApiError("Invalid highlight color")
+    colors: dict[str, str] = {"highlight_color": highlight} if highlight else {}
     for key in ("text_color", "background_color", "stroke_color", "glow_color", "shadow_color"):
         color = str(style.get(key) or DEFAULT_CAPTION_STYLE[key]).upper()
         if not re.fullmatch(r"#[0-9A-F]{6}", color):

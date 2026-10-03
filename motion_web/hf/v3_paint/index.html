@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  /* V3 (Britain We Lived In) chapter card, after the LeFVmd1L4a4 reference: dark-brown grid with gold
+     specks, the item's picture in a rounded frame, a rough purple paint stroke with a yellow edge, and the
+     item's name in white rounded capitals. */
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:#1c120b}
+  #grid{position:absolute;inset:0;
+    background:
+      radial-gradient(ellipse at 50% 45%, rgba(70,44,22,.55) 0%, rgba(12,7,4,.85) 78%),
+      repeating-linear-gradient(0deg, rgba(214,160,92,.30) 0 2px, transparent 2px 96px),
+      repeating-linear-gradient(90deg, rgba(214,160,92,.30) 0 2px, transparent 2px 96px),
+      #22160d}
+  .speck{position:absolute;width:5px;height:5px;border-radius:50%;background:#f3c55a;box-shadow:0 0 8px 2px rgba(243,197,90,.6)}
+  #frame{position:absolute;left:530px;top:58px;width:860px;height:740px;border-radius:34px;overflow:hidden;
+         background:#3a2a1c;box-shadow:0 24px 60px rgba(0,0,0,.6)}
+  #photo{position:absolute;inset:0;background-size:cover;background-position:center}
+  #paint{position:absolute;left:500px;top:742px;width:940px;height:150px}
+  .text{position:absolute;transform:translate(-50%,-50%);white-space:nowrap;text-align:center;font-weight:900;
+        text-shadow:0 0 3px #000,0 4px 0 #000,3px 3px 0 #000,-3px 3px 0 #000,3px -2px 0 #000,-3px -2px 0 #000}
+</style></head>
+<body>
+<div id="stage" data-composition-id="v3_paint" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="grid" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="specks" class="clip" data-start="0" data-duration="600" data-track-index="1"></div>
+  <div id="frame" class="clip" data-start="0" data-duration="600" data-track-index="2"><div id="photo"></div></div>
+  <svg id="paint" class="clip" data-start="0" data-duration="600" data-track-index="3" viewBox="0 0 940 150" preserveAspectRatio="none">
+    <path id="edge" fill="#ffd21f" d="M118 44 L930 30 L922 58 L940 70 L912 96 L930 112 L904 132 L196 140 L210 120 L150 112 Z"/>
+    <path id="stroke" fill="#5a43f5" d="M26 30 Q40 18 70 22 L880 14 Q900 16 892 34 L906 46 L884 62 L902 78 L878 94 L896 110 L870 124 L60 136 Q30 138 36 118 L14 104 L40 90 L10 74 L38 60 L12 46 Z"/>
+  </svg>
+  <div id="words" class="clip" data-start="0" data-duration="600" data-track-index="4"></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4;
+  document.getElementById("stage").setAttribute("data-duration", String(seconds));
+  if (p.background) document.getElementById("photo").style.backgroundImage = `url(${p.background})`;
+  // Gold specks in fixed places (a seeded pattern, so every render of a card is the same).
+  const specks = document.getElementById("specks");
+  let seed = 7;
+  const rand = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  for (let i = 0; i < 46; i++) {
+    const s = document.createElement("div"); s.className = "speck";
+    const size = 2 + rand() * 5;
+    s.style.cssText += `left:${rand() * 1920}px;top:${rand() * 1080}px;width:${size}px;height:${size}px;opacity:${0.25 + rand() * 0.6}`;
+    specks.appendChild(s);
+  }
+  const k = Math.min(1, seconds / 2.5);  // short headings still show every move
+  const tl = gsap.timeline({paused: true});
+  tl.fromTo("#frame", {scale: 0.82, opacity: 0}, {scale: 1, opacity: 1, duration: 0.45 * k, ease: "back.out(1.6)"}, 0);
+  tl.fromTo("#photo", {scale: 1.0}, {scale: 1.06, duration: seconds, ease: "none"}, 0);
+  tl.fromTo("#stroke", {clipPath: "inset(0 100% 0 0)"}, {clipPath: "inset(0 0% 0 0)", duration: 0.35 * k, ease: "power2.out"}, 0.25 * k);
+  tl.fromTo("#edge", {clipPath: "inset(0 100% 0 0)"}, {clipPath: "inset(0 0% 0 0)", duration: 0.35 * k, ease: "power2.out"}, 0.35 * k);
+  if (p.show_text) {
+    (p.texts || []).forEach((t, i) => {
+      const el = document.createElement("div"); el.className = "text"; el.textContent = t.text;
+      el.style.cssText += `left:${t.x}px;top:${t.y}px;font-size:${t.size}px;font-family:${t.font};color:${t.color};letter-spacing:${t.spacing || 0}px`;
+      document.getElementById("words").appendChild(el);
+      tl.fromTo(el, {scale: 0.6, opacity: 0}, {scale: 1, opacity: 1, duration: 0.3 * k, ease: "back.out(2.2)"}, (0.45 + i * 0.1) * k);
+    });
+  }
+  document.querySelectorAll(".speck").forEach((s, i) => {
+    tl.to(s, {y: -18 - (i % 5) * 6, opacity: 0.15 + (i % 3) * 0.3, duration: seconds, ease: "none"}, 0);
+  });
+  window.__timelines = window.__timelines || {}; window.__timelines.v3_paint = tl;
+</script>
+</body></html>

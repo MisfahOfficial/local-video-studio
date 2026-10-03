@@ -111,6 +111,21 @@ def _caption_case(text: str, style: dict[str, Any]) -> str:
     return text
 
 
+def _highlight_words(text: str, caption: str, style: dict[str, Any]) -> str:
+    """Key words (numbers, ingredients, else the longest word) in the highlight colour, the rest as styled:
+    V3's reference shows white captions with one or two words in yellow."""
+    colour = str(style.get("highlight_color") or "")
+    if not colour:
+        return text
+    from ..motion.templates import caption_keywords
+
+    base = _ass_color(str(style.get("text_color") or "#FFFFFF"))
+    mark = _ass_color(colour)
+    for word in caption_keywords(caption, limit=2):
+        text = re.sub(rf"(?i)(?<![\w'])({re.escape(word)})(?![\w'])", rf"{{\\1c{mark}&}}\1{{\\1c{base}&}}", text, count=1)
+    return text
+
+
 def _ass_alignment(style: dict[str, Any]) -> int:
     row = {"bottom": 0, "middle": 3, "top": 6}.get(str(style.get("position") or "bottom"), 0)
     column = {"left": 1, "center": 2, "right": 3}.get(str(style.get("alignment") or "center"), 2)
@@ -196,6 +211,7 @@ def write_scene_ass(
         for segment_start, segment_end, caption in caption_segments(scene, value):
             text = _caption_case(caption, value)
             text = text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
+            text = _highlight_words(text, caption, value)
             start = _srt_time(segment_start).replace(",", ".")[:-1]
             end = _srt_time(segment_end).replace(",", ".")[:-1]
             if value.get("glow_enabled"):

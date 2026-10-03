@@ -68,8 +68,16 @@ DEFAULT_KITS: dict[str, dict[str, Any]] = {
                              "size": 112, "words_per_line": 4, "max_lines": 2}},
     "v2_classic": {"name": "V2 · Forgotten Flavors (classic look, backup)", "style": "v2", "country": "US",
                    "chapter_designs": ["typewriter_card", "classic"], "ingredient_designs": ["recipe_book", "scrapbook"]},
+    # V3 follows its reference LeFVmd1L4a4 (checked 3 Oct): the paint-stroke chapter card, white captions in a
+    # heavy condensed face with a black outline (key words yellow), film look kept.
     "v3": {"name": "V3 · Britain We Lived In", "style": "v3", "country": "GB",
-           "chapter_designs": ["film_slate", "typewriter_card"], "ingredient_designs": ["chalkboard", "cards"]},
+           "chapter_designs": ["v3_paint"], "ingredient_designs": ["cards"],
+           "references": ["https://www.youtube.com/watch?v=LeFVmd1L4a4"],
+           "caption_style": {"animation": "pop", "font": "Impact", "bold": False, "text_color": "#FFFFFF",
+                             "stroke_enabled": True, "stroke_color": "#000000", "stroke_width": 5,
+                             "shadow_enabled": True, "shadow_color": "#000000", "shadow_blur": 6, "shadow_x": 0,
+                             "shadow_y": 4, "background_enabled": False, "position": "middle", "case": "title",
+                             "size": 100, "words_per_line": 6, "max_lines": 2, "highlight_color": "#FFE234"}},
     "v4": {"name": "V4 · Canada We Lived In", "style": "v4", "country": "CA",
            "chapter_designs": ["typewriter_card", "film_slate"], "ingredient_designs": ["scrapbook", "chalkboard"]},
 }
