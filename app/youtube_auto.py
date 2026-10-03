@@ -453,7 +453,7 @@ class AutoYouTubeManager:
                 exclude = {
                     str(asset.get("provider_asset_id")) for asset in self.db.list_assets(project_id)
                     if exclude_current and str(asset.get("scene_id")) in {str(scene["id"]) for scene in scenes}
-                    and asset.get("provider") in {"youtube", "photo"}
+                    and asset.get("provider") in {"youtube", "photo", "stock"}
                 }
                 thread = threading.Thread(
                     target=self._run, args=(project_id, scenes, chosen_topic, exclude, check_inline), daemon=True,
@@ -991,21 +991,38 @@ class AutoYouTubeManager:
                 return
             run.checked_ids.update(ids)
             run.check_notes.update({int(key): str(value) for key, value in (result.get("notes") or {}).items()})
-        assets = {str(asset["id"]): asset for asset in self.db.list_assets(run.project_id)}
-        for scene_id in result.get("rejected") or []:
-            scene = self.db.get_scene(scene_id) or {}
-            refused = assets.get(str(scene.get("selected_asset_id") or "")) or {}
-            source = str(refused.get("provider_asset_id") or "")
+        rejected = list(result.get("rejected") or [])
+        for round_number in range(2):
+            assets = {str(asset["id"]): asset for asset in self.db.list_assets(run.project_id)}
+            for scene_id in rejected:
+                scene = self.db.get_scene(scene_id) or {}
+                refused = assets.get(str(scene.get("selected_asset_id") or "")) or {}
+                source = str(refused.get("provider_asset_id") or "")
+                with run.lock:
+                    if round_number == 0:
+                        run.check_rejected.append(scene_id)
+                    if source:
+                        run.scene_exclude.setdefault(scene_id, set()).add(source)
+                    position = int(scene.get("position") or 0)
+                    if run.by_position.get(position) == source:
+                        run.by_position.pop(position, None)
+                    if round_number == 0:
+                        run.completed -= 1  # sourced again below
+                self.db.update_scene(scene_id, {"selected_asset_id": None})
+                if round_number == 0:
+                    self._source_scene_safely(run, {**scene, "selected_asset_id": None})
+            if round_number == 1 or not rejected:
+                break
+            # The replacements are looked at too (a second strawberry-pie stock shot replaced the first one);
+            # one refused again leaves the scene empty for the fallbacks.
+            try:
+                again = check_scenes(self.db, self.paths.root, run.settings, run.project_id,
+                                     str(run.settings.ffmpeg_path or "ffmpeg"), only_ids=set(rejected))
+            except Exception:
+                break
+            rejected = list(again.get("rejected") or [])
             with run.lock:
-                run.check_rejected.append(scene_id)
-                if source:
-                    run.scene_exclude.setdefault(scene_id, set()).add(source)
-                run.completed -= 1  # sourced again below
-                position = int(scene.get("position") or 0)
-                if run.by_position.get(position) == source:
-                    run.by_position.pop(position, None)
-            self.db.update_scene(scene_id, {"selected_asset_id": None})
-            self._source_scene_safely(run, {**scene, "selected_asset_id": None})
+                run.check_notes.update({int(key): str(value) for key, value in (again.get("notes") or {}).items()})
 
     def _source_scene_safely(self, run: "_Run", scene: dict[str, Any]) -> None:
         """One scene's unexpected error (a network timeout, a broken picture) marks only that scene for
@@ -1048,6 +1065,8 @@ class AutoYouTubeManager:
                 run.notes[position] = f"Motion graphic failed: {str(error)[:200]}"
             graphic = False
         if graphic:
+            if str(scene.get("caption_text") or "").strip():
+                self.db.update_scene(str(scene["id"]), {"caption_text": ""})  # words on a card already say it
             with run.lock:
                 run.completed += 1
                 run.graphics.append(position)
@@ -1592,7 +1611,9 @@ class AutoYouTubeManager:
             if len(items) >= 10:
                 break
         with run.lock:
-            fresh = [item for key, item in items.items() if f"pexels-{key}" not in run.used_photos]
+            fresh = [item for key, item in items.items() if f"pexels-{key}" not in run.used_photos
+                     and f"pexels-{key}" not in run.exclude_videos
+                     and f"pexels-{key}" not in run.scene_exclude.get(str(scene["id"]), set())]
         posters = list(zip(fresh[:10], load_images([str(item.get("image") or "") for item in fresh[:10]])))
         posters = [(item, image) for item, image in posters if image is not None]
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))

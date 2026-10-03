@@ -20,7 +20,7 @@ from typing import Any
 MEMORY_FILE = "checker_memory.json"
 BAN_AFTER = 2  # rejections of one source for one subject before it is never used for that subject again
 PER_SHEET = 10
-REAL = {"youtube", "photo"}
+REAL = {"youtube", "photo", "stock"}  # stock too: a strawberry pie stock shot covered "eggnog pie" (3 Oct test)
 _lock = threading.Lock()
 
 SCHEMA = {"type": "OBJECT", "properties": {"verdicts": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
@@ -204,6 +204,10 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
             if not verdict:
                 continue
             refused = not verdict.get("fits") or int(verdict.get("score") or 0) < 4
+            try:  # remembered on the clip: only approved shots may be reused for a scene with no footage
+                db.update_asset_metadata(str(item["asset"]["id"]), {"checker": "refused" if refused else "ok"})
+            except Exception:
+                pass
             source = (item["subject"], str(item["asset"].get("provider_asset_id") or ""))
             with _lock:
                 result["checked"] += 1

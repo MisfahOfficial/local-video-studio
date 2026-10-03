@@ -136,6 +136,11 @@ class AutoBuildManager:
                 if scene_id in rejected and before.get(scene_id) and str(scene.get("selected_asset_id") or "") == before[scene_id]:
                     self.app.db.update_scene(scene_id, {"selected_asset_id": None})
                     emptied += 1
+            # The replacements are looked at once more; one refused again leaves the scene for the fallbacks.
+            again = check_scenes(self.app.db, self.app.paths.root, settings, project_id, ffmpeg, only_ids=set(rejected))
+            for scene_id in again.get("rejected") or []:
+                self.app.db.update_scene(scene_id, {"selected_asset_id": None})
+                emptied += 1
         result["notes"] = {**{str(key): value for key, value in (sourcing.get("check_notes") or {}).items()},
                            **{str(key): value for key, value in (result.get("notes") or {}).items()}}
         result["checked"] = int(result.get("checked") or 0) + len(done)
@@ -195,8 +200,11 @@ class AutoBuildManager:
                     continue
                 asset = assets.get(str(other.get("selected_asset_id") or "")) or {}
                 metadata = asset.get("metadata") or {}
+                # Only a shot the AI checker approved comes back (a refused or unchecked stock shot of another
+                # pie spread to three scenes in the 3 Oct test); unchecked YouTube clips only when no checker ran.
+                approved = metadata.get("checker") == "ok" or (asset.get("provider") == "youtube" and "checker" not in metadata)
                 if (asset.get("media_kind") != "video" or asset.get("provider") not in ("youtube", "stock")
-                        or metadata.get("variant") or not Path(str(asset.get("local_path"))).is_file()):
+                        or metadata.get("variant") or not approved or not Path(str(asset.get("local_path"))).is_file()):
                     continue
                 count = reuses.get(str(asset["id"]), 0)
                 if count >= len(VARIANTS):

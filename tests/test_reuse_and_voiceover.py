@@ -66,6 +66,17 @@ class ReusedShotTest(unittest.TestCase):
         self.assertEqual((fifth["video_id"], fifth["variant"]), ("red", "tv"))
         self.assertGreaterEqual(fourth["speed"], 0.5)
 
+    def test_a_shot_the_checker_refused_is_never_reused(self):
+        red = next(asset for asset in self.db.list_assets(self.project["id"]) if asset["provider_asset_id"] == "red")
+        self.db.update_asset_metadata(red["id"], {"checker": "refused"})
+        self._manager()._hold_empty(self.project["id"])
+        assets = {asset["id"]: asset for asset in self.db.list_assets(self.project["id"])}
+        reused = [assets[scene["selected_asset_id"]]["metadata"]["video_id"]
+                  for scene in self.db.list_scenes(self.project["id"])
+                  if scene["selected_asset_id"] and assets[scene["selected_asset_id"]]["metadata"].get("variant")]
+        self.assertNotIn("red", reused)
+        self.assertTrue(reused)
+
     def test_reused_shots_are_not_checked_again(self):
         from app.reuse_look import variant_of
 
