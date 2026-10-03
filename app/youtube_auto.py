@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import re
 import subprocess
@@ -306,6 +307,14 @@ class _Run:
     check_rejected: list[str] = field(default_factory=list)
     check_notes: dict[int, str] = field(default_factory=dict)
     check_error: str = ""
+    # Gemini picks each sentence's clip among the planned options (see gemini_pick).
+    pick_inline: bool = False
+    gemini_pick: dict[str, tuple[str, float]] = field(default_factory=dict)  # scene -> (video, start) Gemini chose
+    gemini_none: set[str] = field(default_factory=set)  # scenes where Gemini found no option acceptable
+    pick_calls: int = 0
+    pick_rows: int = 0
+    pick_log: list[dict[str, Any]] = field(default_factory=list)
+    pick_error: str = ""
     name_labels: bool = False  # headings get the item's own footage plus an orange name label (no chapter card)
     prefer_read: bool = False  # a re-run of a few scenes: sources already read come first (no new downloads)
     stock: list[int] = field(default_factory=list)
@@ -495,8 +504,13 @@ class AutoYouTubeManager:
             except Exception as error:  # a broken model must not stop sourcing
                 self._update(project_id, notice=f"Visual check unavailable: {str(error)[:160]}")
         used: dict[str, list[float]] = {}
+        # Only moments on the timeline now, outside the scenes being sourced: clips of an earlier run of this
+        # project (replaced scenes) blocked most of the planned moments when a video was made again.
+        redo_ids = {str(scene["id"]) for scene in scenes}
+        on_timeline = {str(scene.get("selected_asset_id") or "") for scene in self.db.list_scenes(project_id)
+                       if str(scene["id"]) not in redo_ids}
         for asset in self.db.list_assets(project_id):
-            if asset.get("provider") == "youtube":
+            if asset.get("provider") == "youtube" and str(asset["id"]) in on_timeline:
                 start_time = float((asset.get("metadata") or {}).get("source_start_seconds") or 0)
                 used.setdefault(str(asset.get("provider_asset_id") or ""), []).append(start_time)
         project = self.db.get_project(project_id) or {}
@@ -566,6 +580,7 @@ class AutoYouTubeManager:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
         run.check_inline = check_inline and verifier is not None
+        run.pick_inline = run.check_inline and bool(str(getattr(settings, "gemini_api_key", "") or "").strip())
         run.prefer_read = len(scenes) < len(all_scenes)  # the AI checker's replacements took 2.5 min of new downloads
         try:
             from .scene_checker import banned_sources
@@ -675,6 +690,8 @@ class AutoYouTubeManager:
                     checked_ids=sorted(run.checked_ids), check_rejected=list(run.check_rejected),
                     check_notes={str(key): value for key, value in sorted(run.check_notes.items())},
                     check_error=run.check_error,
+                    gemini_picked=len(run.gemini_pick), gemini_none=len(run.gemini_none), pick_calls=run.pick_calls, pick_rows=run.pick_rows,
+                    pick_error=run.pick_error,
                 )
             try:  # a small record per run, so slow steps can be found later
                 logs = self.paths.root / "logs"
@@ -688,6 +705,7 @@ class AutoYouTubeManager:
                     # What each scene got and why a scene failed, so a bad run can be diagnosed afterwards.
                     "generated": sorted(run.generated), "photos": sorted(run.photos), "graphics": sorted(run.graphics),
                     "section_reuse": sorted(run.section_reuse),
+                    "gemini_picks": run.pick_log[-400:],
                     "errors": run.errors[-400:], "notes": {str(key): value for key, value in run.notes.items()},
                     "sections": [{"subject": subject, "recipe": recipe, "sources": [str(item.get("title") or "")[:90] for item in sources]}
                                  for subject, recipe, sources in run.section_pools],
@@ -723,6 +741,8 @@ class AutoYouTubeManager:
         def plan(item: tuple[str, list[dict[str, Any]]]) -> None:
             try:
                 self._plan_section(run, item[0], item[1])
+                if run.pick_inline:
+                    self._pick_section(run, item[1])
             finally:
                 if on_ready is not None:
                     on_ready(item[1])  # this item's scenes can start while other items are still read
@@ -879,6 +899,16 @@ class AutoYouTubeManager:
                         # The next step comes later in the same cook's video; going backwards looks wrong.
                         score += 0.06 if start > previous[1] else -0.08
                 options.append((score, candidate, start, topic_score))
+                if run.pick_inline:
+                    # A second, different moment of the same source: Gemini then chooses among 4-6 options.
+                    other = run.verifier.best_moment(
+                        video_id, run.infos[video_id], subject, scene_text, duration,
+                        avoid=[*(taken.get(video_id) or []), start], recipe=recipe,
+                        prefer_vintage=bool(run.era) or (is_hook and run.profile.period),
+                        require_vintage=is_hook and run.profile.period, avoid_radius=8.0,
+                    )
+                    if other is not None:
+                        options.append((other[2] - 0.05, candidate, other[0], other[1]))
             options.sort(key=lambda item: item[0], reverse=True)
             if not options:
                 continue
@@ -963,6 +993,103 @@ class AutoYouTubeManager:
         with run.lock:
             run.searches[cache_key] = results
         return results
+
+    def _pick_section(self, run: "_Run", members: list[dict[str, Any]]) -> None:
+        """Gemini picks each sentence's clip among its planned options, four sentences per request, while other
+        items are still downloading. "None fits" sends the sentence to search and the fallbacks instead of a
+        wrong clip. Any trouble keeps the CLIP order (the checker still looks at those clips afterwards)."""
+        from concurrent.futures import ThreadPoolExecutor as Pool
+
+        from .gemini_pick import MAX_OPTIONS, PER_REQUEST, pick_moments
+
+        if run.pick_error or run.verifier is None:
+            return
+        rows: list[dict[str, Any]] = []
+        for scene in members:
+            scene_id = str(scene["id"])
+            options = (run.planned.get(scene_id) or [])[:MAX_OPTIONS]
+            if not options or scene_id in run.hook_ids:
+                continue
+            duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
+            frames = [run.verifier.moment_frames(str(item["video_id"]), float(start or 0), duration, count=2)
+                      or self._light_frames(run, str(item["video_id"]), float(start or 0), duration)
+                      for item, start, _topic in options]
+            usable = [index for index, row in enumerate(frames) if row]
+            if not usable:
+                continue
+            rows.append({"label": str(len(rows) + 1), "scene_id": scene_id, "subject": run.subject_by_id.get(scene_id, ""),
+                         "sentence": str(scene.get("narration") or ""), "options": [frames[index] for index in usable],
+                         "choices": [options[index] for index in usable]})
+        groups = [rows[start:start + PER_REQUEST] for start in range(0, len(rows), PER_REQUEST)]
+        with run.lock:
+            run.pick_rows += len(rows)
+        style_lines = ""
+        try:
+            from .editing_style import checker_rules
+
+            style_lines = checker_rules(run.style_doc) if run.style_doc else ""
+            # Text and logos are the OCR check's and the logo crop's job; here they only made Gemini refuse all.
+            style_lines = "; ".join(part for part in style_lines.split("; ")
+                                    if not re.search(r"caption|title|watermark|logo|subscribe|text", part, re.IGNORECASE))
+        except Exception:
+            style_lines = ""
+
+        def ask(group: list[dict[str, Any]]) -> None:
+            if run.pick_error:
+                return
+            local = [{**row, "label": str(index + 1)} for index, row in enumerate(group)]
+            sheets: list[Any] = []
+            try:
+                picks = pick_moments(run.settings, local, run.era, style_lines, keep_sheets=sheets)
+            except Exception as error:
+                with run.lock:
+                    if "429" in str(error) or "quota" in str(error).lower() or "No Gemini key" in str(error):
+                        run.pick_error = f"Gemini clip picking stopped: {str(error)[:160]}"
+                    else:
+                        run.notes[0] = f"Gemini clip picking failed once: {str(error)[:160]}"
+                return
+            with run.lock:
+                run.pick_calls += 1
+                for row in local:
+                    if row["label"] not in picks:
+                        continue
+                    index, _score = picks[row["label"]]
+                    scene_id = row["scene_id"]
+                    run.pick_log.append({"scene": scene_id, "sentence": row["sentence"][:120], "options": len(row["choices"]),
+                                         "pick": index, "score": _score, "reason": row.get("reason", "")})
+                    if index is None:
+                        run.planned[scene_id] = []
+                        run.gemini_none.add(scene_id)
+                        continue
+                    chosen = row["choices"][index]
+                    rest = [option for option in row["choices"] if option is not chosen]
+                    run.planned[scene_id] = [chosen, *rest]
+                    run.gemini_pick[scene_id] = (str(chosen[0]["video_id"]), float(chosen[1] or 0))
+
+        with Pool(max_workers=3) as pool:
+            list(pool.map(ask, groups))
+
+    def _light_frames(self, run: "_Run", video_id: str, start: float, duration: float) -> list[Any]:
+        """Two frames of a moment from the source's saved light copy: a source read in an earlier video is
+        loaded from its saved analysis, which keeps no pictures."""
+        from PIL import Image
+
+        copy = self.paths.root / "source_cache" / f"{video_id}-360.mp4"
+        if not copy.is_file():
+            return []
+        frames = []
+        for moment in (start + 0.3, start + max(0.3, duration - 0.3)):
+            result = subprocess.run(
+                [run.service.ffmpeg_path, "-v", "error", "-ss", f"{moment:.2f}", "-i", str(copy), "-frames:v", "1",
+                 "-vf", "scale=240:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+                capture_output=True, timeout=30,
+            )
+            if result.stdout:
+                try:
+                    frames.append(Image.open(io.BytesIO(result.stdout)).convert("RGB"))
+                except OSError:
+                    pass
+        return frames
 
     def _check_item(self, run: "_Run", batch: list[dict[str, Any]], futures: list[Any]) -> None:
         """When one item's scenes are cut, the AI checker looks at them while the other items are still being
@@ -1214,6 +1341,9 @@ class AutoYouTubeManager:
                     return
                 raise ProviderError("Every candidate was rejected: " + " | ".join(rejected[:3])
                                     if rejected else str(last_error or "No downloadable result was found"))
+            picked = run.gemini_pick.get(str(scene["id"]))
+            if picked and picked[0] == str(candidate["video_id"]) and abs(float(start_time or 0) - picked[1]) < 1.0:
+                metadata["chosen_by"] = "gemini"  # Gemini already looked at this moment next to its sentence
             metadata.update({
                 "auto_sourced": True,
                 "search_query": str(candidate.get("_query") or query),

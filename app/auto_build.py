@@ -202,7 +202,8 @@ class AutoBuildManager:
                 metadata = asset.get("metadata") or {}
                 # Only a shot the AI checker approved comes back (a refused or unchecked stock shot of another
                 # pie spread to three scenes in the 3 Oct test); unchecked YouTube clips only when no checker ran.
-                approved = metadata.get("checker") == "ok" or (asset.get("provider") == "youtube" and "checker" not in metadata)
+                approved = (metadata.get("checker") == "ok" or metadata.get("chosen_by") == "gemini"
+                            or (asset.get("provider") == "youtube" and "checker" not in metadata))
                 if (asset.get("media_kind") != "video" or asset.get("provider") not in ("youtube", "stock")
                         or metadata.get("variant") or not approved or not Path(str(asset.get("local_path"))).is_file()):
                     continue

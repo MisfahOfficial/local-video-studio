@@ -172,8 +172,9 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
         if (only_ids is not None and str(scene["id"]) not in only_ids) or str(scene["id"]) in (skip_ids or ()):
             continue
         asset = assets.get(str(scene.get("selected_asset_id") or ""))
-        if not asset or asset.get("provider") not in REAL or (asset.get("metadata") or {}).get("variant"):
-            continue
+        metadata = (asset.get("metadata") or {}) if asset else {}
+        if not asset or asset.get("provider") not in REAL or metadata.get("variant") or metadata.get("chosen_by") == "gemini":
+            continue  # reused shots and clips Gemini already picked for this sentence need no second look
         metadata = asset.get("metadata") or {}
         todo.append({"scene": scene, "asset": asset, "subject": str(metadata.get("topic") or subject or ""),
                      "sentence": str(scene.get("narration") or "")})
