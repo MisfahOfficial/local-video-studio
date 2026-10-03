@@ -115,7 +115,7 @@ _COUNT = (r"\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|t
 # "No. 3: IHOP", "Part Two - Hooters". Left in, it made the C1 subject "number twelve red robin" and every
 # YouTube title without "number twelve" was refused (4 real clips in a 277-scene video).
 _NUMBERING = re.compile(
-    r"^\s*(?:#?\d+\s*[.):\-\u2013\u2014]|#\d+|(?:number|no\.?|part|chapter|step|rank)\s*#?(?:" + _COUNT + r")\b\s*[.:\-\u2013\u2014]?"
+    r"^\s*(?:#?\d+\s*[.):\-\u2013\u2014]|#\d+|(?:number|no\.?|part|chapter|step|rank|item)\s*#?(?:" + _COUNT + r")\b\s*[.:\-\u2013\u2014]?"
     r"|(?:" + _COUNT + r")\s*[.):\u2013\u2014])\s*",
     re.IGNORECASE,
 )

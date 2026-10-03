@@ -14,7 +14,8 @@ class KitTest(unittest.TestCase):
         v2 = kit_for(root, "v2")
         self.assertEqual(v2["chapter_style"], "name_label")
         self.assertFalse(v2["film_look"])
-        self.assertFalse(v2["ingredient_cards"])
+        self.assertTrue(v2.get("ingredient_cards", True))  # ingredient cards are back (Ishaq, 3 Oct)
+        self.assertEqual((v2["pacing"]["shot_seconds_min"], v2["pacing"]["shot_seconds_max"]), (3.0, 7.0))
         self.assertEqual(v2["caption_style"]["text_color"], "#D8E418")
         self.assertTrue(v2["references"])
         classic = kit_for(root, "v2_classic")
@@ -59,10 +60,11 @@ class LabelTest(unittest.TestCase):
 
 
 class PacingTest(unittest.TestCase):
-    def test_channel_pacing_shortens_scenes(self):
+    def test_long_sentence_is_cut_in_equal_parts_of_three_to_seven_seconds(self):
         from app.whisper_planner import WhisperScenePlanner
 
-        words = "Real fruitcake was dark and dense and packed with candied cherries nuts and raisins every year".split()
+        words = ("Real fruitcake was dark and dense and packed with candied cherries nuts and raisins every year "
+                 "and soaked in brandy for weeks").split()
 
         class Ears:
             def transcribe(self, _path):
@@ -70,11 +72,28 @@ class PacingTest(unittest.TestCase):
                                    for index, word in enumerate(words)]}]
 
         script = " ".join(words) + "."
-        slow = WhisperScenePlanner(Ears()).plan(script=script, voiceover_path=Path("vo.mp3"), duration_seconds=8.0, theme_id="us_nostalgia")
-        fast = WhisperScenePlanner(Ears(), max_scene_seconds=4.0).plan(script=script, voiceover_path=Path("vo.mp3"),
-                                                                       duration_seconds=8.0, theme_id="us_nostalgia")
-        self.assertGreater(len(fast), len(slow))
-        self.assertTrue(all(draft.end_seconds - draft.start_seconds <= 4.6 for draft in fast[:-1]))
+        end = len(words) * 0.5
+        drafts = WhisperScenePlanner(Ears()).plan(script=script, voiceover_path=Path("vo.mp3"), duration_seconds=end,
+                                                  theme_id="us_nostalgia")
+        lengths = [draft.end_seconds - draft.start_seconds for draft in drafts]
+        self.assertEqual(len(drafts), 2)  # 10.5 s -> two parts, not three short ones
+        self.assertTrue(all(3.0 <= length <= 7.0 for length in lengths), lengths)
+        self.assertLess(abs(lengths[0] - lengths[1]), 1.5)
+        shorter = WhisperScenePlanner(Ears(), max_scene_seconds=4.0).plan(
+            script=script, voiceover_path=Path("vo.mp3"), duration_seconds=end, theme_id="us_nostalgia")
+        self.assertGreaterEqual(len(shorter), 3)  # a channel may still ask for shorter shots
+        self.assertTrue(all(draft.end_seconds - draft.start_seconds <= 4.6 for draft in shorter))
+
+    def test_short_sentences_are_never_flash_shots(self):
+        from app.whisper_planner import _group_by_pacing
+
+        sentences = ["FRUITCAKE", "It was dense.", "Packed with fruit.", "Soaked in brandy for weeks before Christmas."]
+        spans = [(0.0, 1.2), (1.5, 2.6), (2.9, 4.1), (4.4, 7.9)]
+        groups = _group_by_pacing(sentences, spans, 7.0, 3.0)
+        self.assertEqual(groups[0], [0])  # the heading keeps its own shot
+        cuts = [0.0, 1.35, 2.75, 4.25, 7.9]
+        for group in groups[1:]:
+            self.assertGreaterEqual(cuts[group[-1] + 1] - cuts[group[0]], 3.0)
 
 
 if __name__ == "__main__":

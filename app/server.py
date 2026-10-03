@@ -264,6 +264,54 @@ class StudioApplication:
 
         self.auto_build = AutoBuildManager(self)
         self.planner = RuleBasedScenePlanner()
+        self.voiceover_jobs: dict[str, dict[str, Any]] = {}
+
+    def use_voiceover(self, project_id: str, destination: Path) -> dict[str, Any]:
+        """A new voice-over file for the project (uploaded or made by ai33): measure it and start listening."""
+        duration = 0.0
+        try:
+            duration = probe_duration(destination, self.settings.load().ffprobe_path)
+        except Exception:
+            pass
+        project = self.db.update_project(project_id, voiceover_path=str(destination), duration_seconds=duration)
+        # Start listening now: by the time the script and examples are in, the words are ready
+        # (a 45-minute voice-over took ~7 min of "Create video").
+        from .whisper_planner import CachedTranscriber
+
+        threading.Thread(target=CachedTranscriber(destination.parent / "transcript.json").transcribe_quietly,
+                         args=(destination,), daemon=True, name=f"listen-{project_id[:8]}").start()
+        return project
+
+    def start_voiceover(self, project_id: str, script: str = "") -> dict[str, Any]:
+        """Make the voice-over from the script with ai33 in the background; poll voiceover_status()."""
+        project = self.db.get_project(project_id) or {}
+        text = (script or str(project.get("script") or "")).strip()
+        job = self.voiceover_jobs.get(project_id) or {}
+        if job.get("running"):
+            return dict(job)
+        self.voiceover_jobs[project_id] = {"running": True, "stage": "Starting the voice-over", "error": ""}
+
+        def work() -> None:
+            from .voiceover_tts import make_voiceover
+
+            settings = self.settings.load()
+            try:
+                if text and text != str(project.get("script") or ""):
+                    self.db.update_project(project_id, script=text)
+                made = make_voiceover(settings.ai33_api_key, text, self.paths.project_dir(project_id) / "voiceover.mp3",
+                                      settings.ai33_voice_id,
+                                      progress=lambda stage: self.voiceover_jobs[project_id].update(stage=stage))
+                for old in self.paths.project_dir(project_id).glob("voiceover.*"):
+                    if old != made and old.suffix != ".part":
+                        old.unlink(missing_ok=True)
+                updated = self.use_voiceover(project_id, made)
+                self.voiceover_jobs[project_id] = {"running": False, "stage": "Done", "error": "",
+                                                   "duration_seconds": updated.get("duration_seconds")}
+            except Exception as error:
+                self.voiceover_jobs[project_id] = {"running": False, "stage": "Stopped", "error": str(error)[:400]}
+
+        threading.Thread(target=work, daemon=True, name=f"voiceover-{project_id[:8]}").start()
+        return dict(self.voiceover_jobs[project_id])
 
     def project_payload(self, project_id: str) -> dict[str, Any]:
         project = self.db.get_project(project_id)
@@ -544,7 +592,9 @@ class StudioApplication:
                     "channel_style")).get("pacing") or {}
                 try:
                     drafts = WhisperScenePlanner(CachedTranscriber(voiceover_path.parent / "transcript.json"),
-                                                 max_scene_seconds=float(pacing.get("shot_seconds_max") or 0) or None).plan(
+                                                 max_scene_seconds=float(pacing.get("shot_seconds_max") or 0) or None,
+                                                 min_scene_seconds=(float(pacing["shot_seconds_min"])
+                                                                    if pacing.get("shot_seconds_min") is not None else None)).plan(
                         script=script,
                         voiceover_path=voiceover_path,
                         duration_seconds=duration,
@@ -732,6 +782,10 @@ def build_handler(application: StudioApplication):
             if match:
                 self._json(application.auto_build.status(match.group(1)))
                 return
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/voiceover/make-status", path)
+            if match:
+                self._json(application.voiceover_jobs.get(match.group(1)) or {"running": False, "stage": "", "error": ""})
+                return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/youtube-auto-status", path)
             if match:
                 if not application.db.get_project(match.group(1)):
@@ -826,20 +880,18 @@ def build_handler(application: StudioApplication):
                         remaining -= len(chunk)
                 if remaining:
                     raise ApiError("Voice-over upload ended before all bytes arrived")
-                duration = 0.0
-                try:
-                    settings = application.settings.load()
-                    duration = probe_duration(destination, settings.ffprobe_path)
-                except Exception:
-                    pass
-                project = application.db.update_project(project_id, voiceover_path=str(destination), duration_seconds=duration)
-                # Start listening now: by the time the script and examples are in, the words are ready
-                # (a 45-minute voice-over took ~7 min of "Create video").
-                from .whisper_planner import CachedTranscriber
+                project = application.use_voiceover(project_id, destination)
+                self._json({"project": project, "filename": filename, "duration_seconds": project.get("duration_seconds")})
+                return
 
-                threading.Thread(target=CachedTranscriber(destination.parent / "transcript.json").transcribe_quietly,
-                                 args=(destination,), daemon=True, name=f"listen-{project_id[:8]}").start()
-                self._json({"project": project, "filename": filename, "duration_seconds": duration})
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/voiceover/make", path)
+            if match:
+                if not application.db.get_project(match.group(1)):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                if not application.settings.load().ai33_api_key.strip():
+                    raise ApiError("Add the ai33 API key in Settings first.")
+                self._json(application.start_voiceover(match.group(1), str(self._read_json().get("script") or "")),
+                           HTTPStatus.ACCEPTED)
                 return
 
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/plan", path)

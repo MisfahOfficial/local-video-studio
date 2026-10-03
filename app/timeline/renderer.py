@@ -17,6 +17,7 @@ from ..database import Database
 from ..paths import AppPaths
 from ..transcription import probe_duration
 from ..logo_guard import crop_filter
+from ..reuse_look import variant_of
 from .actions import MotionRegistry, build_default_motion_registry
 
 
@@ -325,6 +326,7 @@ class FFmpegRenderer:
                     crop=None if graphic else active_crop(asset),
                     # Chapter cards and generated stills are already period-styled.
                     film_look=film_look and asset.get("provider") not in {"chapter", "generated"},
+                    variant=variant_of(asset),
                 )
             except RuntimeError:
                 # One unreadable file (a download that broke half-way) must not stop a whole export:
@@ -490,14 +492,26 @@ class FFmpegRenderer:
     def _render_clip(self, source: Path, destination: Path, media_kind: str, duration: float,
                      scene: dict[str, Any], width: int, height: int, fps: int, encoder: str,
                      source_in_seconds: float = 0, crop: dict[str, Any] | None = None,
-                     film_look: bool = False) -> None:
+                     film_look: bool = False, variant: dict[str, Any] | None = None) -> None:
         motion = self.motion_registry.build(_motion_name(scene), width, height, fps, duration)
+        variant = variant or {}
         if crop:
             motion = f"{crop_filter(crop)},{motion}"  # zoom past a burned-in logo first
         if media_kind == "video":
             motion = video_safe_motion(motion, fps)
         fade = _fade_duration(scene)
         filters = [motion]
+        # A shot used a second time comes back mirrored or inside an old TV, and a short one plays slower
+        # instead of looping (see reuse_look).
+        if media_kind == "video" and float(variant.get("speed") or 1.0) < 0.999:
+            filters.insert(0, f"setpts=PTS/{float(variant['speed']):.3f}")
+        if variant.get("variant") == "flip":
+            filters.insert(0, "hflip")
+        tv = variant.get("variant") == "tv"
+        if tv:
+            from ..reuse_look import tv_filters
+
+            filters.append(tv_filters(width, height))
         if film_look:
             filters.append(FILM_LOOK)
         if fade > 0 and duration > fade * 2:
@@ -509,7 +523,15 @@ class FFmpegRenderer:
             command += ["-i", str(source), "-t", str(duration)]
         else:
             command = [self.ffmpeg_path, "-y", "-loop", "1", "-i", str(source), "-t", str(duration)]
-        command += ["-vf", ",".join(filters), "-r", str(fps), "-pix_fmt", "yuv420p", "-c:v", encoder]
+        if tv:
+            from ..reuse_look import tv_bezel
+
+            bezel = tv_bezel(width, height, destination.parent)
+            command += ["-loop", "1", "-i", str(bezel), "-filter_complex",
+                        f"[0:v]{','.join(filters)}[picture];[picture][1:v]overlay=0:0:shortest=1[out]", "-map", "[out]"]
+        else:
+            command += ["-vf", ",".join(filters)]
+        command += ["-r", str(fps), "-pix_fmt", "yuv420p", "-c:v", encoder]
         if encoder == "libx264":
             command += ["-preset", "veryfast", "-crf", "20"]
         command += ["-an", str(destination)]

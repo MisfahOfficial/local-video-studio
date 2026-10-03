@@ -298,6 +298,14 @@ class _Run:
     style_doc: dict[str, Any] = field(default_factory=dict)
     story_stock: bool = False  # story lines (laws, companies, sales) try stock footage first, like the V2 reference
     ai_budget: int = 10 ** 6  # AI stills allowed in this video by the style's max AI share
+    # The AI checker looks at each item's clips as soon as they are cut, while other items are still sourced,
+    # and a refused clip is replaced at once (Ishaq, 3 Oct: the separate check pass took about an hour).
+    check_inline: bool = False
+    scene_exclude: dict[str, set[str]] = field(default_factory=dict)  # scene -> sources the checker refused there
+    checked_ids: set[str] = field(default_factory=set)
+    check_rejected: list[str] = field(default_factory=list)
+    check_notes: dict[int, str] = field(default_factory=dict)
+    check_error: str = ""
     name_labels: bool = False  # headings get the item's own footage plus an orange name label (no chapter card)
     prefer_read: bool = False  # a re-run of a few scenes: sources already read come first (no new downloads)
     stock: list[int] = field(default_factory=list)
@@ -314,6 +322,23 @@ def _seen_title(item: dict[str, Any], seen_titles: list[set[str]]) -> bool:
     return bool(title) and any(
         len(title & seen) >= max(2, 0.6 * min(len(title), len(seen))) for seen in seen_titles
     )
+
+
+DARK_LUMA = 38  # average brightness (0-255): the V2 test's near-black 7:49 shot was 35, the next darkest clip 41
+
+
+def too_dark(path: Path, ffmpeg_path: str = "ffmpeg") -> bool:
+    """True when the clip is nearly black on average (a night shot, a fade, a dark plate on a dark table)."""
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-v", "info", "-i", str(path), "-vf", "fps=2,scale=96:-2,signalstats,"
+             "metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    values = [float(value) for value in re.findall(r"YAVG=([\d.]+)", result.stderr)]
+    return bool(values) and sum(values) / len(values) < DARK_LUMA
 
 
 def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, signature: set[str]) -> bool:
@@ -398,7 +423,7 @@ class AutoYouTubeManager:
 
     def start(
         self, project_id: str, scene_ids: list[str] | None = None, force: bool = False, topic: str | None = None,
-        exclude_current: bool = False,
+        exclude_current: bool = False, check_inline: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             active = self._threads.get(project_id)
@@ -431,7 +456,7 @@ class AutoYouTubeManager:
                     and asset.get("provider") in {"youtube", "photo"}
                 }
                 thread = threading.Thread(
-                    target=self._run, args=(project_id, scenes, chosen_topic, exclude), daemon=True,
+                    target=self._run, args=(project_id, scenes, chosen_topic, exclude, check_inline), daemon=True,
                     name=f"youtube-auto-{project_id[:8]}",
                 )
                 self._threads[project_id] = thread
@@ -451,6 +476,7 @@ class AutoYouTubeManager:
 
     def _run(
         self, project_id: str, scenes: list[dict[str, Any]], topic: str = "", exclude_videos: set[str] | None = None,
+        check_inline: bool = False,
     ) -> None:
         settings = self.settings_store.load()
         # Own Drive footage and public-domain archive films first; YouTube only for what they lack.
@@ -517,9 +543,15 @@ class AutoYouTubeManager:
             run.style_rules = footage_rules(run.style_doc) if run.style_doc else {}
         except Exception:
             run.style_doc, run.style_rules = {}, {}
-        cards_on = profile.recipe_cards and kit.get("ingredient_cards", True)  # V2's reference has no ingredient cards
+        cards_on = profile.recipe_cards and kit.get("ingredient_cards", True)
+        carded: set[str] = set()
         for item in all_scenes if cards_on else []:
             if ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"])):
+                # One ingredients card per item: the item's other ingredient lines stay footage of the cooking.
+                section = run.subject_by_id.get(str(item["id"]), "")
+                if section in carded or str(item["id"]) in run.hook_ids:
+                    continue
+                carded.add(section)
                 run.card_ids.add(str(item["id"]))
         run.gallery_id = next((str(item["id"]) for item in all_scenes if cards_on
                                and not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
@@ -533,6 +565,7 @@ class AutoYouTubeManager:
         if run.gallery_id in redo:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
+        run.check_inline = check_inline and verifier is not None
         run.prefer_read = len(scenes) < len(all_scenes)  # the AI checker's replacements took 2.5 min of new downloads
         try:
             from .scene_checker import banned_sources
@@ -576,14 +609,19 @@ class AutoYouTubeManager:
         pending_ids = {str(scene["id"]) for scene in pending}
         submitted: set[str] = set()
         futures: list[Any] = []
+        checks: list[Any] = []
         scene_pool = ThreadPoolExecutor(max_workers=SCENE_WORKERS)
+        check_pool = ThreadPoolExecutor(max_workers=2) if run.check_inline else None
 
         def start(members: list[dict[str, Any]]) -> None:
             with run.lock:
                 batch = [scene for scene in members if str(scene["id"]) in pending_ids
                          and str(scene["id"]) not in submitted and str(scene["id"]) not in run.hook_ids]
                 submitted.update(str(scene["id"]) for scene in batch)
-                futures.extend(scene_pool.submit(self._source_scene_safely, run, scene) for scene in batch)
+                mine = [scene_pool.submit(self._source_scene_safely, run, scene) for scene in batch]
+                futures.extend(mine)
+                if check_pool is not None and batch:
+                    checks.append(check_pool.submit(self._check_item, run, batch, mine))
 
         if verifier is not None:
             try:
@@ -598,7 +636,11 @@ class AutoYouTubeManager:
             futures.extend(scene_pool.submit(self._source_scene_safely, run, scene) for scene in rest)
             for future in list(futures):
                 future.result()
+            for future in list(checks):
+                future.result()
             scene_pool.shutdown()
+            if check_pool is not None:
+                check_pool.shutdown()
             if headings:
                 try:
                     timings["scenes_s"] = round(time.time() - started - timings.get("plan_sources_s", 0))
@@ -630,6 +672,9 @@ class AutoYouTubeManager:
                     notes={str(key): value for key, value in sorted(run.notes.items())},
                     youtube_blocked=bool(getattr(run.service, "youtube_blocked", False)),
                     timings={**timings, "total_s": round(time.time() - started)},
+                    checked_ids=sorted(run.checked_ids), check_rejected=list(run.check_rejected),
+                    check_notes={str(key): value for key, value in sorted(run.check_notes.items())},
+                    check_error=run.check_error,
                 )
             try:  # a small record per run, so slow steps can be found later
                 logs = self.paths.root / "logs"
@@ -919,6 +964,49 @@ class AutoYouTubeManager:
             run.searches[cache_key] = results
         return results
 
+    def _check_item(self, run: "_Run", batch: list[dict[str, Any]], futures: list[Any]) -> None:
+        """When one item's scenes are cut, the AI checker looks at them while the other items are still being
+        sourced; a refused clip is replaced at once by another source (never the refused one), or by the
+        usual fallbacks. A refused clip never comes back (V2 test: a woman opening a drawer at 8:21)."""
+        from .scene_checker import check_scenes
+
+        for future in futures:
+            try:
+                future.result()
+            except Exception:
+                pass
+        ids = {str(scene["id"]) for scene in batch}
+        if run.check_error:
+            return  # no quota or no key: the check after sourcing reports it once
+        try:
+            result = check_scenes(self.db, self.paths.root, run.settings, run.project_id,
+                                  str(run.settings.ffmpeg_path or "ffmpeg"), only_ids=ids)
+        except Exception as error:
+            with run.lock:
+                run.check_error = f"AI checker stopped early: {str(error)[:160]}"
+            return
+        with run.lock:
+            if result.get("error"):
+                run.check_error = str(result["error"])
+                return
+            run.checked_ids.update(ids)
+            run.check_notes.update({int(key): str(value) for key, value in (result.get("notes") or {}).items()})
+        assets = {str(asset["id"]): asset for asset in self.db.list_assets(run.project_id)}
+        for scene_id in result.get("rejected") or []:
+            scene = self.db.get_scene(scene_id) or {}
+            refused = assets.get(str(scene.get("selected_asset_id") or "")) or {}
+            source = str(refused.get("provider_asset_id") or "")
+            with run.lock:
+                run.check_rejected.append(scene_id)
+                if source:
+                    run.scene_exclude.setdefault(scene_id, set()).add(source)
+                run.completed -= 1  # sourced again below
+                position = int(scene.get("position") or 0)
+                if run.by_position.get(position) == source:
+                    run.by_position.pop(position, None)
+            self.db.update_scene(scene_id, {"selected_asset_id": None})
+            self._source_scene_safely(run, {**scene, "selected_asset_id": None})
+
     def _source_scene_safely(self, run: "_Run", scene: dict[str, Any]) -> None:
         """One scene's unexpected error (a network timeout, a broken picture) marks only that scene for
         review; it must never stop the other scenes, which silently left most of a video empty."""
@@ -1050,6 +1138,8 @@ class AutoYouTubeManager:
             last_error: Exception | None = None
             rejected: list[str] = []
             # Archival films cut often, so the hook tries more sources for one clean shot.
+            refused_here = run.scene_exclude.get(str(scene["id"]), set())
+            choices = [choice for choice in choices if str(choice[0]["video_id"]) not in refused_here]
             for candidate, start_time, topic_score in choices[:5 if is_hook else 3]:
                 video_id = str(candidate["video_id"])
                 with run.lock:
@@ -1080,6 +1170,8 @@ class AutoYouTubeManager:
                         raise ProviderError("Portrait picture inside black bars")
                     if has_burned_in_text(destination, run.service.ffmpeg_path):
                         raise ProviderError("Another creator's captions are burned into this shot")
+                    if too_dark(destination, run.service.ffmpeg_path):
+                        raise ProviderError("The shot is too dark to see the food")
                     if run.verifier is not None and self._shows_creator(run, destination, archival_ok=is_hook):
                         raise ProviderError("A present-day person or show host is on camera")
                     break
@@ -1213,6 +1305,8 @@ class AutoYouTubeManager:
         dish = (recipe if vague_heading(subject) else core_subject(subject)) or recipe or core_subject(subject)
         for candidate in pool:
             video_id = str(candidate["video_id"])
+            if video_id in run.scene_exclude.get(str(scene["id"]), set()):
+                continue  # the AI checker refused this source for this very sentence
             if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
                 continue  # the neighbour already shows this video: a different source looks less repetitive
             for _attempt in range(3):
@@ -1239,6 +1333,8 @@ class AutoYouTubeManager:
                         raise ProviderError("Portrait picture inside black bars")
                     if has_burned_in_text(destination, run.service.ffmpeg_path):
                         raise ProviderError("Burned-in captions")
+                    if too_dark(destination, run.service.ffmpeg_path):
+                        raise ProviderError("Too dark")
                     if self._shows_creator(run, destination):
                         raise ProviderError("A present-day person is on camera")
                 except Exception:

@@ -119,7 +119,9 @@ def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "", s
         "fits = false only when: it shows a DIFFERENT dish, brand, restaurant or place (coffee cake is not a coffee "
         "shop, a brownie sundae is not ice cream cone cakes, Applebee's is not Red Robin); or it is unrelated to "
         "the section (a sandwich film for biscuits, random people, a blank or title screen); or the sentence "
-        "clearly names something else that should be seen instead (a map, a factory, a specific person).\n"
+        "clearly names something else that should be seen instead (a map, a factory, a specific person); or the "
+        "frames show a person doing something unrelated to the food (opening a drawer or cupboard, walking, "
+        "talking, tidying) instead of the food or its making; or the picture is too dark to see the food.\n"
         + era_rule(era) + style_lines +
         "Lines that talk to the viewer (comment, subscribe, which one do you miss) fit any shot of the section's "
         "subject.\n"
@@ -138,8 +140,10 @@ def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "", s
 
 
 def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_path: str = "ffmpeg",
-                 progress: Any = None) -> dict[str, Any]:
-    """Look at every real clip/photo. Returns {"checked", "rejected": [scene ids], "notes", "error"}."""
+                 progress: Any = None, only_ids: set[str] | None = None,
+                 skip_ids: set[str] | None = None) -> dict[str, Any]:
+    """Look at every real clip/photo (or only `only_ids`, minus `skip_ids`: one item while sourcing goes on).
+    Returns {"checked", "rejected": [scene ids], "notes", "error"}."""
     from .ai_judge import contact_sheet
     from .footage_match import scene_subjects
 
@@ -165,8 +169,10 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
         style_lines = ""
     todo = []
     for scene, subject in zip(scenes, subjects):
+        if (only_ids is not None and str(scene["id"]) not in only_ids) or str(scene["id"]) in (skip_ids or ()):
+            continue
         asset = assets.get(str(scene.get("selected_asset_id") or ""))
-        if not asset or asset.get("provider") not in REAL:
+        if not asset or asset.get("provider") not in REAL or (asset.get("metadata") or {}).get("variant"):
             continue
         metadata = asset.get("metadata") or {}
         todo.append({"scene": scene, "asset": asset, "subject": str(metadata.get("topic") or subject or ""),

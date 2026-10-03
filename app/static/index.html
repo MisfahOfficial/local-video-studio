@@ -68,6 +68,7 @@
             <label>Target images (optional)<input id="imageCountInput" type="number" min="1" max="3000" placeholder="Auto pacing"></label>
             <label>Duration in minutes<input id="durationInput" type="number" min="0" step="0.1" value="149"></label>
             <label>Voice-over<input id="voiceoverInput" type="file" accept="audio/*,video/*"></label>
+            <button class="button" id="makeVoiceoverButton" type="button" title="Read the script aloud with the ai33 voice (key in Settings)">Make voice-over (ai33)</button>
           </div>
           <div class="upload-line"><span id="voiceoverStatus">No voice-over uploaded</span><progress id="uploadProgress" max="100" value="0" hidden></progress></div>
           <fieldset class="reference-videos" id="referenceVideos">
@@ -174,6 +175,8 @@
                   <video id="previewVideo" muted playsinline preload="metadata" hidden></video>
                   <div class="preview-empty" id="previewEmpty">Generate or import media to preview this scene</div>
                   <div class="preview-caption" id="previewCaption" hidden></div>
+                  <div class="preview-name-label" id="previewLabel" hidden></div>
+                  <div class="preview-tv-bezel" aria-hidden="true"></div>
                   <div class="preview-subscribe" id="previewSubscribe" hidden><span class="subscribe-pill">SUBSCRIBE</span><span class="subscribe-bell">🔔</span></div>
                   <span class="preview-scene-badge" id="previewSceneBadge">No scene</span>
                 </div>
@@ -320,6 +323,8 @@
         <label>Gemini planning key<input id="geminiKey" type="password" autocomplete="off" placeholder="Optional smart planning"></label>
         <label>YouTube Data API key<input id="youtubeKey" type="password" autocomplete="off" placeholder="Required for Creative Commons search"></label>
         <label>Pexels API key (free stock video)<input id="pexelsKey" type="password" autocomplete="off" placeholder="Optional: pexels.com/api"></label>
+        <label>ai33 API key (voice-over from the script)<input id="ai33Key" type="password" autocomplete="off" placeholder="Optional: ai33.pro"></label>
+        <label>ai33 voice ID<input id="ai33Voice" type="text" autocomplete="off" placeholder="elevenlabs_qAZH0aMXY8tw1QufPN0D"></label>
         <label>Anthropic API key (Claude picks the right clip, ~10–15¢ per 2-min video)<input id="anthropicKey" type="password" autocomplete="off" placeholder="Optional: console.anthropic.com"></label>
         <label>Pollinations token (free AI images without a logo when Runware has no balance)<input id="pollinationsToken" type="password" autocomplete="off" placeholder="Optional: free account at auth.pollinations.ai"></label>
         <label>Never use footage from (comma separated)<input id="blockedChannels" placeholder="Your own channels, AI slideshow channels"></label>

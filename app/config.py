@@ -14,6 +14,9 @@ class StudioSettings:
     gemini_api_key: str = ""
     youtube_api_key: str = ""
     pexels_api_key: str = ""
+    # Voice-over from the script (ai33.pro / OpenSpeaker); the voice is Ishaq's ElevenLabs "Flint".
+    ai33_api_key: str = ""
+    ai33_voice_id: str = "elevenlabs_qAZH0aMXY8tw1QufPN0D"
     # Claude looks at the best few candidates per scene and picks the one that truly fits.
     anthropic_api_key: str = ""
     judge_model: str = "claude-sonnet-5"
@@ -38,7 +41,7 @@ class StudioSettings:
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
         for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key", "pexels_api_key",
-                    "anthropic_api_key", "pollinations_token"):
+                    "anthropic_api_key", "pollinations_token", "ai33_api_key"):
             data[f"{key}_set"] = bool(data.pop(key))
         return data
 
@@ -64,6 +67,7 @@ class SettingsStore:
         settings.youtube_api_key = os.getenv("YOUTUBE_API_KEY", settings.youtube_api_key)
         settings.pexels_api_key = os.getenv("PEXELS_API_KEY", settings.pexels_api_key)
         settings.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+        settings.ai33_api_key = os.getenv("AI33_API_KEY", settings.ai33_api_key)
         return settings
 
     def update(self, changes: dict[str, Any]) -> StudioSettings:

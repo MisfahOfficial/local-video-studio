@@ -53,7 +53,7 @@ class AutoBuildManager:
             plan = self.app.plan_project(project_id, body)
             self._update(project_id, stage="Finding footage", step=2, scenes=len(plan.get("scenes") or []),
                          warnings=plan.get("warnings") or [])
-            self.app.youtube_auto.start(project_id, force=True)
+            self.app.youtube_auto.start(project_id, force=True, check_inline=True)
             time.sleep(1)
             while self.app.youtube_auto.status(project_id).get("running"):
                 self._update(project_id, sourcing=self.app.youtube_auto.status(project_id))
@@ -70,7 +70,7 @@ class AutoBuildManager:
             held = self._hold_empty(project_id)  # an empty scene keeps the previous shot running (no black frames)
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
             if report is not None and held:
-                report["checks"].append({"rule": "Scenes holding the previous shot (no footage found)",
+                report["checks"].append({"rule": "Scenes reusing a shot of their item, mirrored or in an old TV (no footage found)",
                                          "value": f"{len(held)} (scenes {held[:12]})", "ok": True})
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked,
                          style_report=report)
@@ -105,20 +105,25 @@ class AutoBuildManager:
             pass
 
     def _check(self, project_id: str) -> dict[str, Any]:
-        """The AI checker looks at every real clip next to its sentence; the ones that do not fit are
-        sourced again once (their source excluded) before anything becomes an AI image."""
+        """Most clips were already checked item by item while sourcing; the AI checker now looks at the rest
+        (the hook, scenes sourced outside an item). A refused clip is sourced again once (its source excluded),
+        and if nothing else is found the scene is emptied for the fallbacks: a refused clip never stays."""
         from .scene_checker import check_scenes
 
         settings = self.app.settings.load()
         ffmpeg = str(settings.ffmpeg_path or "ffmpeg")
-        self._update(project_id, stage="AI checker: looking at every clip", step=3)
+        sourcing = self.app.youtube_auto.status(project_id)
+        done = set(sourcing.get("checked_ids") or [])
+        inline = list(sourcing.get("check_rejected") or [])
+        self._update(project_id, stage="AI checker: looking at the remaining clips", step=3)
 
-        def progress(done: int, total: int) -> None:
-            self._update(project_id, stage=f"AI checker: {done}/{total} clips looked at")
+        def progress(checked: int, total: int) -> None:
+            self._update(project_id, stage=f"AI checker: {checked}/{total} remaining clips looked at")
 
-        result = check_scenes(self.app.db, self.app.paths.root, settings, project_id, ffmpeg, progress)
+        result = check_scenes(self.app.db, self.app.paths.root, settings, project_id, ffmpeg, progress, skip_ids=done)
+        result["error"] = result.get("error") or str(sourcing.get("check_error") or "")
         rejected = result.get("rejected") or []
-        kept = 0
+        emptied = 0
         if rejected:
             self._update(project_id, stage=f"AI checker: finding new footage for {len(rejected)} wrong clips")
             before = {str(scene["id"]): str(scene.get("selected_asset_id") or "") for scene in self.app.db.list_scenes(project_id)}
@@ -126,18 +131,16 @@ class AutoBuildManager:
             time.sleep(1)
             while self.app.youtube_auto.status(project_id).get("running"):
                 time.sleep(2)
-            # Never worse than before: a scene that found no other REAL footage keeps its first clip
-            # (an AI image or an empty scene would be a bigger miss than a near-fit clip).
-            assets = {str(asset["id"]): asset for asset in self.app.db.list_assets(project_id)}
             for scene in self.app.db.list_scenes(project_id):
                 scene_id = str(scene["id"])
-                if scene_id not in rejected or not before.get(scene_id):
-                    continue
-                now = assets.get(str(scene.get("selected_asset_id") or ""), {})
-                if now.get("provider") not in ("youtube", "photo", "stock") and before[scene_id] in assets:
-                    self.app.db.select_asset(scene_id, before[scene_id])
-                    kept += 1
-        result["kept_first_clip"] = kept
+                if scene_id in rejected and before.get(scene_id) and str(scene.get("selected_asset_id") or "") == before[scene_id]:
+                    self.app.db.update_scene(scene_id, {"selected_asset_id": None})
+                    emptied += 1
+        result["notes"] = {**{str(key): value for key, value in (sourcing.get("check_notes") or {}).items()},
+                           **{str(key): value for key, value in (result.get("notes") or {}).items()}}
+        result["checked"] = int(result.get("checked") or 0) + len(done)
+        result["rejected_while_sourcing"] = inline
+        result["emptied_for_fallbacks"] = emptied
         self._update(project_id, stage="Filling missing scenes")
         try:
             logs = self.app.paths.root / "logs"
@@ -145,30 +148,70 @@ class AutoBuildManager:
             (logs / f"checker-{project_id}.json").write_text(json.dumps(result, indent=1))
         except OSError:
             pass
-        return {"checked": result.get("checked", 0), "rejected": len(rejected), "kept_first_clip": kept,
+        return {"checked": result["checked"], "rejected": len(rejected) + len(inline), "emptied": emptied,
                 "error": result.get("error", "")}
 
     def _hold_empty(self, project_id: str) -> list[int]:
-        """Like an editor: a scene that found no footage (and may not get an AI image) lets the previous shot run
-        on, continuing where it stopped, instead of a black frame. Marked for review; returns the positions."""
+        """A scene with no footage of its own (and no room for an AI image) reuses an earlier shot of the SAME
+        item, changed so it does not read as a repeat: mirrored the first time, inside an old TV the second
+        time (Ishaq, 3 Oct). A shot never loops: one shorter than the scene plays slower (down to half speed)
+        instead. Before this the previous 2-4 s clip ran on past its end and the same seconds repeated.
+        Marked for review; returns the positions."""
+        from .reuse_look import VARIANTS
+        from .transcription import probe_duration
+
         db = self.app.db
+        settings = self.app.settings.load()
+        ffmpeg = str(settings.ffmpeg_path or "ffmpeg")
+        ffprobe = str(Path(ffmpeg).with_name("ffprobe")) if "/" in ffmpeg else "ffprobe"
         scenes = db.list_scenes(project_id)
+        subjects = scene_subjects(scenes, "")
         assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
         clips = {str(clip["scene_id"]): clip for clip in db.list_timeline_clips(project_id)}
+        lengths: dict[str, float] = {}
+        reuses: dict[str, int] = {}  # donor asset -> times it already came back
+        for asset in assets.values():
+            donor = str((asset.get("metadata") or {}).get("reused_asset") or "")
+            if donor:
+                reuses[donor] = reuses.get(donor, 0) + 1
+
+        def length(asset: dict[str, Any]) -> float:
+            key = str(asset["id"])
+            if key not in lengths:
+                try:
+                    lengths[key] = probe_duration(Path(str(asset["local_path"])), ffprobe)
+                except Exception:
+                    lengths[key] = 0.0
+            return lengths[key]
+
         held: list[int] = []
         for index, scene in enumerate(scenes):
             if scene.get("selected_asset_id"):
                 continue
-            donor = None
-            for other in [*reversed(scenes[:index]), *scenes[index + 1:]]:  # the previous shot, else the next one
+            duration = float(scene["end_seconds"]) - float(scene["start_seconds"])
+            options = []
+            for other_index, other in enumerate(scenes):
+                if other_index == index or subjects[other_index] != subjects[index]:
+                    continue
                 asset = assets.get(str(other.get("selected_asset_id") or "")) or {}
-                if asset.get("media_kind") == "video" and asset.get("provider") in ("youtube", "stock") \
-                        and Path(str(asset.get("local_path"))).is_file():
-                    donor = (other, asset)
-                    break
-            if donor is None:
+                metadata = asset.get("metadata") or {}
+                if (asset.get("media_kind") != "video" or asset.get("provider") not in ("youtube", "stock")
+                        or metadata.get("variant") or not Path(str(asset.get("local_path"))).is_file()):
+                    continue
+                count = reuses.get(str(asset["id"]), 0)
+                if count >= len(VARIANTS):
+                    continue
+                start = float((clips.get(str(other["id"])) or {}).get("source_in_seconds") or 0)
+                room = length(asset) - start
+                if room < duration * 0.5:
+                    continue
+                neighbour = abs(other_index - index) == 1
+                options.append(((neighbour, count, room < duration, -abs(other_index - index)), other, asset, start, room, neighbour))
+            if not options:
                 continue
-            other, asset = donor
+            _rank, other, asset, start, room, neighbour = min(options, key=lambda item: item[0])
+            count = reuses.get(str(asset["id"]), 0)
+            variant = "tv" if neighbour else VARIANTS[count]
             copy = db.add_asset(
                 project_id=project_id, scene_id=str(scene["id"]),
                 candidate_index=db.next_asset_candidate_index(str(scene["id"])),
@@ -176,14 +219,14 @@ class AutoBuildManager:
                 local_path=str(asset["local_path"]), remote_url=asset.get("remote_url"),
                 provider_asset_id=asset.get("provider_asset_id"), cost=0.0,
                 metadata={**(asset.get("metadata") or {}), "held_from_scene": int(other.get("position") or 0),
-                          "needs_review": True},
+                          "reused_asset": str(asset["id"]), "variant": variant,
+                          "speed": round(min(1.0, room / max(duration, 0.1)), 3), "needs_review": True},
             )
+            reuses[str(asset["id"])] = count + 1
             db.select_asset(str(scene["id"]), str(copy["id"]))
-            mine, theirs = clips.get(str(scene["id"])), clips.get(str(other["id"]))
-            if mine and theirs and int(other.get("position") or 0) < int(scene.get("position") or 0):
-                # Continue the shot from where the previous scene's piece ends.
-                follow = float(theirs.get("source_in_seconds") or 0) + float(theirs["end_seconds"]) - float(theirs["start_seconds"])
-                db.set_timeline_clip_duration(str(mine["id"]), float(mine["end_seconds"]) - float(mine["start_seconds"]), follow)
+            mine = clips.get(str(scene["id"]))
+            if mine:
+                db.set_timeline_clip_duration(str(mine["id"]), float(mine["end_seconds"]) - float(mine["start_seconds"]), start)
             assets[str(copy["id"])] = copy
             scene["selected_asset_id"] = copy["id"]
             held.append(int(scene.get("position") or 0))

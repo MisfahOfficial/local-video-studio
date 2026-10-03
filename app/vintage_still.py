@@ -25,7 +25,8 @@ NEGATIVE = (
     "illustration, painting, drawing, cartoon, anime, cgi, 3d render, digital art, concept art, "
     "hyperrealistic, oversaturated, glossy, perfect symmetry, studio lighting, heavy bokeh, "
     "text, letters, logo, watermark, modern appliances, stainless steel, modern kitchen, contemporary clothing, "
-    "modern eyeglasses, smartphone, plastic skin, extra fingers, deformed hands"
+    "modern eyeglasses, smartphone, plastic skin, extra fingers, deformed hands, "
+    "people, person, woman, women, man, men, face, faces, family, crowd, posing, apron, wide shot of a kitchen, full room"
 )
 
 
@@ -50,37 +51,33 @@ COMPOSITIONS = (
 _SHOTS = itertools.count(random.randrange(len(COMPOSITIONS)))
 _PEOPLE_WORDS = re.compile(
     r"\b(families|family|kids|children|grandm\w*|grandparents?|mothers?|moms?|mums?|she|he|they|guests|friends|"
-    r"neighbou?rs|people|everyone|party|dinner table|church)\b", re.IGNORECASE)
+    r"neighbou?rs|people|everyone|party|dinner table|church|wom[ae]n|m[ae]n|wives|wife|husbands?|housewi\w*|"
+    r"cooks?|bakers?|your|her|his|their)\b", re.IGNORECASE)
 
 
 def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, country: str = "US",
                  shot: int | None = None) -> str:
+    """Every channel (Ishaq, 3 Oct): AI stills show the FOOD, never people. "Your grandmother would mix..."
+    made two or three women posing in a whole kitchen; now the people words are taken out of the sentence
+    and the picture is a close, varied shot of the dish (hands without faces at most)."""
     period = era or "mid-century"
     about = f" Main subject: {subject}." if subject else ""
     text_rule = " No text, no letters, no logos, no brand names anywhere in the picture."
-    if people and not _PEOPLE_WORDS.search(scene_text):
-        # People only when the sentence is about them; otherwise the dish itself, in a varied shot.
-        index = shot if shot is not None else next(_SHOTS)  # in turn, so neighbouring stills differ
-        framing = COMPOSITIONS[index % len(COMPOSITIONS)].format(subject=subject or "dish")
-        return (
-            f"{scene_text.strip()[:200]}{about} {framing}. Candid {period} amateur snapshot photograph, shot on "
-            f"Kodachrome slide film, period-correct {home_word(country)} setting, natural window light, slightly soft "
-            f"focus, faded colours, fine film grain, no people.{text_rule}"
-        )
+    sentence = re.sub(r"\s{2,}", " ", _PEOPLE_WORDS.sub("", scene_text)).strip()[:200]
     if not people:
-        # Ingredient cards: the item alone, filling the frame; nobody in the kitchen behind it.
+        # Ingredient cards: the item alone, filling the frame.
         return (
-            f"{scene_text.strip()[:220]}{about} Close-up {period} snapshot photograph of the food only, "
+            f"{sentence}{about} Close-up {period} snapshot photograph of the food only, "
             "filling the frame, on a plain wooden counter, empty background, no people. Shot on Kodachrome "
             "slide film, natural window light, slightly soft focus, faded colours, fine film grain"
         )
+    index = shot if shot is not None else next(_SHOTS)  # in turn, so neighbouring stills differ
+    framing = COMPOSITIONS[index % len(COMPOSITIONS)].format(subject=subject or "dish")
     return (
-        f"{scene_text.strip()[:220]}{about} Candid {period} amateur snapshot photograph, shot on Kodachrome "
-        f"slide film with a cheap camera. Period-correct {period} {home_word(country)} home: enamel stove, rounded "
-        f"refrigerator, linoleum floor, {period} hairstyles, cotton dresses and aprons, glass mixing bowls. "
-        "Natural window light, slightly soft focus, ordinary imperfect scene, real people and real food, "
-        "faded colours, fine film grain. One or two people with different faces, not posed in a row."
-        + text_rule
+        f"{sentence}{about} {framing}. Candid {period} amateur snapshot photograph, shot on "
+        f"Kodachrome slide film, period-correct {home_word(country)} setting, natural window light, slightly soft "
+        f"focus, faded colours, fine film grain, no people, no faces, no bodies, not a wide shot of a room: "
+        f"the food fills most of the frame.{text_rule}"
     )
 
 

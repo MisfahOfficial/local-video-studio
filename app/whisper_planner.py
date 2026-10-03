@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import math
 import re
 import threading
 from pathlib import Path
@@ -18,7 +19,10 @@ from .transcription import FasterWhisperTranscriber
 
 # No visual stays on screen longer than this; long sentences get several clips.
 MAX_SCENE_SECONDS = 7.0
-MIN_SHOT_SECONDS = 1.2  # a piece of a split sentence shorter than this is merged into its neighbour
+MIN_SHOT_SECONDS = 1.2  # the hook's quick cuts: a piece shorter than this is merged into its neighbour
+# After the hook no visual is shorter than this (Ishaq, 3 Oct: 1-2 s clips felt rushed and out of sync).
+MIN_BODY_SECONDS = 3.0
+PAUSE_ALLOWANCE = 0.8
 
 
 class Transcriber(Protocol):
@@ -52,9 +56,11 @@ def _match(script_tokens: list[str], words: list[tuple[str, float, float]]) -> d
 
 def split_long_sentences(
     sentences: list[str], spans: list[tuple[float, float]], segments: list[dict[str, Any]], max_seconds: float,
+    min_seconds: float = MIN_SHOT_SECONDS,
 ) -> list[tuple[str, float, float]]:
-    """Units of at most `max_seconds`: long sentences are cut at a comma or the
-    longest spoken pause, so every visual stays short and cuts land between words."""
+    """Units of at most `max_seconds`: a longer sentence is cut into equal parts (10 s -> 5 + 5, 15 s -> three
+    of 5) at the word gap nearest each split point, a comma or pause close by preferred, so every part is
+    between `min_seconds` and `max_seconds` and every cut lands between spoken words (Ishaq, 3 Oct)."""
     words = _timed_words(segments)
     script_tokens = [token for sentence in sentences for token in _tokens(sentence)]
     matched = _match(script_tokens, words)
@@ -68,43 +74,50 @@ def split_long_sentences(
             hits = [matched[index] for index in range(cursor, cursor + count) if index in matched]
             cursor += count
             times.append((hits[0][0], hits[-1][1]) if hits else (None, None))
-        if sentence_end - sentence_start <= max_seconds or len(pieces) < 4:
+        length = sentence_end - sentence_start
+        # On screen a shot also holds half of the pauses around it (about 0.3-0.8 s in all), so the spoken
+        # part must stay a little under the limit (the V2 voice-over had 57 shots of 7-9.5 s otherwise).
+        limit = max_seconds - PAUSE_ALLOWANCE
+        if length <= limit or len(pieces) < 4:
             units.append((sentence, sentence_start, sentence_end))
             continue
         # Words Whisper missed get times spread evenly across the sentence.
         filled: list[tuple[float, float]] = []
-        step = (sentence_end - sentence_start) / len(pieces)
+        step = length / len(pieces)
         for index, (start, end) in enumerate(times):
             guess = sentence_start + index * step
             filled.append((start if start is not None else guess, end if end is not None else guess + step))
+        parts = math.ceil(length / limit)
+        if min_seconds > 0:
+            parts = max(2, min(parts, int(length // min_seconds)))
+        gap_at = {index: (filled[index - 1][1] + filled[index][0]) / 2 for index in range(1, len(pieces))}
+        cuts: list[int] = []
+        for number in range(1, parts):
+            target = sentence_start + length * number / parts
+            low = (cuts[-1] if cuts else 0) + 1
+            options = [index for index in range(low, len(pieces)) if index not in cuts]
+            if not options:
+                break
+
+            def cost(index: int) -> float:
+                miss = abs(gap_at[index] - target)
+                pause = filled[index][0] - filled[index - 1][1]
+                comma = pieces[index - 1].endswith((",", ";", ":", "\u2014", "-"))
+                return miss - (0.6 if comma else 0.0) - min(pause, 0.5)
+
+            cuts.append(min(options, key=cost))
+        bounds = [0, *cuts, len(pieces)]
         chunks: list[tuple[str, float, float]] = []
-        first = 0
-        while first < len(pieces):
-            chunk_start = sentence_start if first == 0 else filled[first][0]
-            last = first
-            while last + 1 < len(pieces) and filled[last + 1][1] - chunk_start <= max_seconds:
-                last += 1
-            if last == len(pieces) - 1:
-                cut = len(pieces)
-            else:
-                # Prefer a comma/dash, then the longest pause, in the chunk's back half.
-                options = range(max(first + 2, first + (last - first) // 2), last + 1)
-                cut = max(
-                    options or [last + 1],
-                    key=lambda index: (
-                        pieces[index - 1].endswith((",", ";", ":", "\u2014", "-")),
-                        filled[index][0] - filled[index - 1][1],
-                    ),
-                )
-            chunk_end = sentence_end if cut == len(pieces) else (filled[cut - 1][1] + filled[cut][0]) / 2
+        for first, cut in zip(bounds, bounds[1:]):
+            chunk_start = sentence_start if first == 0 else gap_at[first]
+            chunk_end = sentence_end if cut == len(pieces) else gap_at[cut]
             chunks.append((" ".join(pieces[first:cut]), chunk_start, chunk_end))
-            first = cut
         # A piece of a sentence must never look like an item heading ("In 1976 the FDA" was taken for a new
         # item and would get its own name label): it joins the next piece (or the previous, at the end).
         index = 0
         while len(chunks) > 1 and index < len(chunks):
-            # Also no flash shots: a piece under MIN_SHOT_SECONDS ("But the", 0.7 s) joins its neighbour.
-            if heading_subject(chunks[index][0]) or chunks[index][2] - chunks[index][1] < MIN_SHOT_SECONDS:
+            # Also no flash shots: a piece shorter than the minimum ("But the", 0.7 s) joins its neighbour.
+            if heading_subject(chunks[index][0]) or chunks[index][2] - chunks[index][1] < min(min_seconds, MIN_SHOT_SECONDS * 2):
                 if index + 1 < len(chunks):
                     text, start, _end = chunks[index]
                     chunks[index:index + 2] = [(f"{text} {chunks[index + 1][0]}", start, chunks[index + 1][2])]
@@ -176,23 +189,82 @@ def _fill_unmatched(spans: list[tuple[float, float] | None], sentences: list[str
 
 
 def _group_by_pacing(sentences: list[str], spans: list[tuple[float, float]],
-                     max_seconds: float = MAX_SCENE_SECONDS) -> list[list[int]]:
+                     max_seconds: float = MAX_SCENE_SECONDS, min_seconds: float = 0.0) -> list[list[int]]:
+    """Sentences become shots of at most `max_seconds` on screen (cuts sit in the middle of the pauses).
+    After the hook (everything before the first item heading) a shot shorter than `min_seconds` takes a
+    sentence from its neighbour of the same item when both then stay within the limits, else joins it
+    (one extra second allowed rather than a flash shot)."""
+    headings = [bool(heading_subject(sentence)) for sentence in sentences]
+    hook_end = headings.index(True) if any(headings) else 0
+    # On-screen time of each sentence: from the middle of the pause before it to the middle of the one after.
+    cuts = [spans[0][0]] + [(left[1] + right[0]) / 2 for left, right in zip(spans, spans[1:])] + [spans[-1][1]] if spans else []
+
+    def length(group: list[int]) -> float:
+        return cuts[group[-1] + 1] - cuts[group[0]]
+
     groups: list[list[int]] = []
     current: list[int] = []
     for index, (start, end) in enumerate(spans):
-        # A list heading is always its own scene: it becomes the chapter card.
-        if _is_pop_insert(sentences[index], end - start) or heading_subject(sentences[index]):
+        hook = index < hook_end
+        # A list heading is always its own scene: it becomes the chapter card (or carries the name label).
+        if headings[index] or (hook or not min_seconds) and _is_pop_insert(sentences[index], end - start):
             if current:
                 groups.append(current)
                 current = []
             groups.append([index])
             continue
-        if current and end - spans[current[0]][0] > min(max_seconds, scene_duration_limit(spans[current[0]][0])):
+        if min_seconds:
+            over = bool(current) and length([*current, index]) > max_seconds
+        else:
+            over = bool(current) and end - spans[current[0]][0] > min(max_seconds, scene_duration_limit(spans[current[0]][0]))
+        if current and (over or (current[0] < hook_end) != hook):
             groups.append(current)
             current = []
         current.append(index)
     if current:
         groups.append(current)
+    if not min_seconds:
+        return groups
+
+    def mergeable(group: list[int]) -> bool:
+        return not headings[group[0]] and group[0] >= hook_end
+
+    def fits(group: list[int]) -> bool:
+        return min_seconds <= length(group) <= max_seconds
+
+    changed = True
+    while changed:
+        changed = False
+        for position, group in enumerate(groups):
+            if not mergeable(group) or length(group) >= min_seconds:
+                continue
+            neighbours = [other for other in (position - 1, position + 1)
+                          if 0 <= other < len(groups) and mergeable(groups[other])]
+            # First choice: borrow the nearest sentence of a longer neighbour (5.8 s + 2.1 s -> 3 s + 4.9 s).
+            for other in neighbours:
+                donor = groups[other]
+                if len(donor) < 2:
+                    continue
+                if other < position:
+                    giver, taker = donor[:-1], [donor[-1], *group]
+                else:
+                    giver, taker = donor[1:], [*group, donor[0]]
+                if fits(giver) and fits(taker):
+                    groups[other], groups[position] = giver, taker
+                    changed = True
+                    break
+            if changed:
+                break
+            # A sliver under a second (a sentence Whisper could not place) always joins a neighbour.
+            options = [other for other in neighbours
+                       if length(group) < 1.0 or length(sorted(groups[other] + group)) <= max_seconds + 1.0]
+            if not options:
+                continue
+            other = min(options, key=lambda item: length(groups[item]))
+            first, second = sorted((position, other))
+            groups[first:second + 1] = [groups[first] + groups[second]]
+            changed = True
+            break
     return groups
 
 
@@ -221,10 +293,12 @@ class WhisperScenePlanner:
     """Free, offline VO sync: Whisper word timings plus the local scene director."""
 
     def __init__(self, transcriber: Transcriber | None = None, model_size: str = "small",
-                 max_scene_seconds: float | None = None):
+                 max_scene_seconds: float | None = None, min_scene_seconds: float | None = None):
         self.transcriber = transcriber or FasterWhisperTranscriber(model_size=model_size)
-        # A channel's own pacing (V2: about 2-4 s shots, like its most viral video); 7 s otherwise.
+        # Every channel: shots of 3-7 s after the hook (a channel may ask for shorter ones in its pacing).
         self.max_seconds = max(1.5, min(MAX_SCENE_SECONDS, max_scene_seconds or MAX_SCENE_SECONDS))
+        minimum = MIN_BODY_SECONDS if min_scene_seconds is None else float(min_scene_seconds)
+        self.min_seconds = max(0.0, min(minimum, self.max_seconds / 2))
 
     def plan(
         self,
@@ -240,10 +314,10 @@ class WhisperScenePlanner:
             raise ValueError("The script is empty")
         segments = self.transcriber.transcribe(voiceover_path)
         sentence_spans = align_sentences(sentences, segments, duration_seconds)
-        units = split_long_sentences(sentences, sentence_spans, segments, self.max_seconds)
+        units = split_long_sentences(sentences, sentence_spans, segments, self.max_seconds, self.min_seconds or MIN_SHOT_SECONDS)
         sentences = [text for text, _start, _end in units]
         spans = [(start, end) for _text, start, end in units]
-        groups = _group_by_target(spans, target_scene_count) if target_scene_count else _group_by_pacing(sentences, spans, self.max_seconds)
+        groups = _group_by_target(spans, target_scene_count) if target_scene_count else _group_by_pacing(sentences, spans, self.max_seconds, self.min_seconds)
 
         # Cut between scenes in the middle of the pause, so every visual change
         # lands between spoken sentences and the timeline stays gapless.

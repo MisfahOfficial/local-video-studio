@@ -41,12 +41,13 @@ DEFAULT_KITS: dict[str, dict[str, Any]] = {
            "chapter_designs": ["vintage_tv", "newspaper"], "ingredient_designs": ["carousel", "scrapbook"]},
     # V2 follows Ishaq's most viral V2 video (uVYtlsvecP4, checked frame by frame on 2 Oct): no chapter cards
     # (an orange name label over the item's first shot), lime-yellow bold captions on key facts only, no film
-    # look, no photo frames, no ingredient cards, shots of about 2-4 s. Captions use the reference's Montserrat
+    # look, no photo frames. Shots are 3-7 s like every channel (Ishaq, 3 Oct: the reference's 2-4 s cuts felt
+    # rushed and drifted from the voice), and ingredient lists get a card again. Captions use the reference's Montserrat
     # ExtraBold (static file in the data fonts folder; the variable one is not read by the subtitle engine).
     # The previous look is kept as "v2_classic".
     "v2": {"name": "V2 · Forgotten Flavors of USA", "style": "v2", "country": "US",
            "chapter_style": "name_label", "chapter_designs": [], "ingredient_designs": ["recipe_book", "scrapbook"],
-           "ingredient_cards": False, "film_look": False, "photo_graphics": False, "pacing": {"shot_seconds_max": 4.0},
+           "film_look": False, "photo_graphics": False, "pacing": {"shot_seconds_max": 7.0, "shot_seconds_min": 3.0},
            "story_stock": True,  # laws, companies, sales: present-day stock shots, like the reference
            "extras": ["map", "price", "years", "comment", "fact"],  # + big counting numbers ("260°F", "2,000 locations")
            # Graphics (maps, price, years, question cards) in the reference palette: near-black, lime-yellow,

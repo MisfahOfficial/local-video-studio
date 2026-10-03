@@ -58,8 +58,8 @@
   "pacing": {
     "_help": "How long one visual stays on screen (seconds).",
     "tool_support": "now",
-    "shot_seconds_min": 1.5,
-    "shot_seconds_max": 4.0,
+    "shot_seconds_min": 3.0,
+    "shot_seconds_max": 7.0,
     "hook_shot_seconds_max": 2.8,
     "chapter_card_seconds": 1.5,
     "ingredients_card_seconds_max": 4.0,
@@ -71,7 +71,8 @@
     "speed_up_on": [
       "lists of things",
       "the hook"
-    ]
+    ],
+    "_rule": "Every channel (Ishaq, 3 Oct): a sentence up to 7 s is one clip; a longer one is cut into equal parts of 3-7 s, each from a different video; nothing under 3 s after the hook."
   },
   "structure": {
     "_help": "What each part of the video must do.",
@@ -102,7 +103,7 @@
     },
     "each_item": {
       "first_shot": "finished dish close-up",
-      "ingredients_card": "only when ingredients are central to the story; prefer fast close-ups and short labels over a decorative recipe card",
+      "ingredients_card": "one ingredients card per item, on the first line that lists the ingredients",
       "story_lines": "shots of the same dish (being made or served)",
       "history_lines": "period photos or period footage of the dish if they exist, else the dish",
       "last_shot": "finished dish or people enjoying it"
@@ -240,7 +241,7 @@
     "_help": "Stops the video from feeling repetitive.",
     "tool_support": "now (sources) / fix (graphics)",
     "same_source_in_neighbouring_scenes": false,
-    "same_moment_of_a_source_twice": false,
+    "same_moment_of_a_source_twice": "only mirrored or inside an old TV, for a scene that found no footage of its own; never a loop",
     "same_graphic_design_not_within_scenes": 5,
     "max_maps_in_a_row": 1,
     "max_photos_in_a_row": 2
@@ -379,7 +380,7 @@
       "single ingredient",
       "kitchen detail without people"
     ],
-    "people": "prefer no people; at most one in four images. Do not invent a recurring character unless identity consistency is supported and validated",
+    "people": "never: no people, faces or full-kitchen wide shots; the food fills the frame (hands without faces at most)",
     "never": [
       "text or logos",
       "brand names on clothes",

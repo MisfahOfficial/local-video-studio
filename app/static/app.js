@@ -272,6 +272,34 @@ async function uploadVoiceover(file) {
   } finally { setTimeout(() => { progress.hidden = true; progress.value = 0; }, 700); }
 }
 
+// The voice-over read from the script by ai33 (Settings holds the key and the voice).
+async function makeVoiceover() {
+  if (!state.current) { toast("Create the project first", true); return; }
+  const script = $("#scriptInput").value.trim();
+  if (!script) { toast("Paste the script first", true); return; }
+  try {
+    await api(`/api/projects/${state.current.id}/voiceover/make`, { method: "POST", body: JSON.stringify({ script }) });
+    $("#voiceoverStatus").textContent = "Making the voice-over…";
+    const projectId = state.current.id;
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      const job = await api(`/api/projects/${projectId}/voiceover/make-status`);
+      $("#voiceoverStatus").textContent = job.stage || "Making the voice-over…";
+      if (job.running) continue;
+      if (job.error) throw new Error(job.error);
+      const payload = await api(`/api/projects/${projectId}`);
+      state.current = payload.project || payload;
+      $("#durationInput").value = job.duration_seconds ? (job.duration_seconds / 60).toFixed(2) : $("#durationInput").value;
+      $("#voiceoverStatus").textContent = `Voice-over ready · ${clock(job.duration_seconds || 0)}`;
+      toast("Voice-over made with ai33");
+      return;
+    }
+  } catch (error) {
+    $("#voiceoverStatus").textContent = "Voice-over could not be made";
+    toast(error.message, true);
+  }
+}
+
 // Example videos: the first is required, up to five in all.
 function renderReferences(links) {
   const list = $("#referenceList");
@@ -1105,8 +1133,11 @@ function updatePreviewAt(time, selectScene = true) {
   if (visualsVisible && asset?.media_kind === "video") {
     video.hidden = false;
     if (video.getAttribute("src") !== asset.media_url) { video.src = asset.media_url; video.load(); }
-    const rawLocalTime = Math.max(0, Number(activeClip?.source_in_seconds || 0) + state.previewTime - Number(activeClip?.start_seconds || 0));
-    const localTime = Number.isFinite(video.duration) && video.duration > 0 ? rawLocalTime % video.duration : rawLocalTime;
+    // A reused shot (no footage of its own) may play slower instead of looping; see app/reuse_look.py.
+    const speed = Math.min(1, Math.max(0.5, Number(asset.metadata?.speed || 1)));
+    if (Math.abs(video.playbackRate - speed) > 0.01) video.playbackRate = speed;
+    const rawLocalTime = Math.max(0, Number(activeClip?.source_in_seconds || 0) + (state.previewTime - Number(activeClip?.start_seconds || 0)) * speed);
+    const localTime = Number.isFinite(video.duration) && video.duration > 0 ? Math.min(rawLocalTime, video.duration - 0.05) : rawLocalTime;
     if (video.readyState >= 1 && Math.abs(video.currentTime - localTime) > 0.35) video.currentTime = localTime;
     if (state.isPreviewPlaying && video.paused) video.play().catch(() => {});
   } else if (visualsVisible && asset) {
@@ -1157,6 +1188,16 @@ function applyEffectsPreview(scene, asset) {
   const stage = $("#previewStage");
   stage.classList.toggle("film-look", effects.film_look !== false);
   stage.classList.toggle("photo-card", effects.photo_graphics !== false && asset?.media_kind === "image");
+  const variant = asset?.media_kind === "video" ? String(asset?.metadata?.variant || "") : "";
+  stage.classList.toggle("reuse-flip", variant === "flip");
+  stage.classList.toggle("reuse-tv", variant === "tv");
+  // The orange name label of a heading (V2), as the export draws it.
+  const labelAction = (scene?.timeline_actions || []).find(action => action?.type === "label");
+  const label = $("#previewLabel");
+  if (label) {
+    label.textContent = labelAction?.params?.text || "";
+    label.hidden = !label.textContent;
+  }
   const says = /\bsubscrib/i.test(scene?.narration || "");
   $("#previewSubscribe").hidden = !(says && effects.subscribe_button !== false);
 }
@@ -2069,7 +2110,8 @@ function fillSettings() {
   $("#budgetInput").value = state.settings.max_project_cost || 3;
   $("#youtubeLicenseMode").value = youtubeFairUse() ? "fair_use" : "creative_commons";
   $("#blockedChannels").value = state.settings.blocked_channels || "";
-  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"} · Pexels ${state.settings.pexels_api_key_set ? "connected" : "not connected"} · Claude ${state.settings.anthropic_api_key_set ? "connected" : "not connected"} · Pollinations ${state.settings.pollinations_token_set ? "connected" : "not connected"}`;
+  $("#keyStatus").textContent = `Runware ${state.settings.runware_api_key_set ? "connected" : "not connected"} · Together ${state.settings.together_api_key_set ? "connected" : "not connected"} · Gemini ${state.settings.gemini_api_key_set ? "connected" : "not connected"} · YouTube ${state.settings.youtube_api_key_set ? "connected" : "not connected"} · Pexels ${state.settings.pexels_api_key_set ? "connected" : "not connected"} · Claude ${state.settings.anthropic_api_key_set ? "connected" : "not connected"} · Pollinations ${state.settings.pollinations_token_set ? "connected" : "not connected"} · ai33 voice ${state.settings.ai33_api_key_set ? "connected" : "not connected"}`;
+  if ($("#ai33Voice")) $("#ai33Voice").value = state.settings.ai33_voice_id || "";
 }
 
 async function saveSettings(event) {
@@ -2088,12 +2130,14 @@ async function saveSettings(event) {
   if ($("#geminiKey").value) body.gemini_api_key = $("#geminiKey").value;
   if ($("#youtubeKey").value) body.youtube_api_key = $("#youtubeKey").value;
   if ($("#pexelsKey").value) body.pexels_api_key = $("#pexelsKey").value;
+  if ($("#ai33Key").value) body.ai33_api_key = $("#ai33Key").value.trim();
+  if ($("#ai33Voice").value.trim()) body.ai33_voice_id = $("#ai33Voice").value.trim();
   if ($("#anthropicKey").value) body.anthropic_api_key = $("#anthropicKey").value;
   if ($("#pollinationsToken").value) body.pollinations_token = $("#pollinationsToken").value;
   try {
     state.settings = await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
     $("#settingsDialog").close();
-    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey,#pexelsKey,#anthropicKey,#pollinationsToken").forEach(input => input.value = "");
+    $$("#runwareKey,#togetherKey,#geminiKey,#youtubeKey,#pexelsKey,#anthropicKey,#pollinationsToken,#ai33Key").forEach(input => input.value = "");
     fillSettings(); toast("Settings saved locally");
   } catch (error) { toast(error.message, true); }
 }
@@ -2115,6 +2159,7 @@ $$(".tab[data-tab]").forEach(tab => tab.addEventListener("click", () => activate
 $("#workflowExportButton").addEventListener("click", openExportDialog);
 $("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
+$("#makeVoiceoverButton").addEventListener("click", makeVoiceover);
 $("#createPlanButton").addEventListener("click", createVideo);
 // A new channel: its whole look (colours, fonts, captions, graphic designs) is read from its example videos and locked.
 $("#newChannelButton").addEventListener("click", async () => {

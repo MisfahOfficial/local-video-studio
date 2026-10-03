@@ -23,7 +23,9 @@ def _png(width: int = 1344, height: int = 768) -> bytes:
 class VintageStillTests(unittest.TestCase):
     def test_prompt_names_scene_subject_and_era(self) -> None:
         prompt = still_prompt("Grandmas mixed rolled oats with sugar.", "poor man's cookies", "1950s")
-        self.assertIn("Grandmas mixed rolled oats", prompt)
+        self.assertIn("mixed rolled oats", prompt)
+        self.assertNotIn("Grandmas", prompt)  # never people in an AI still (Ishaq, 3 Oct)
+        self.assertIn("no people", prompt)
         self.assertIn("poor man's cookies", prompt)
         self.assertIn("1950s", prompt)
 
@@ -57,9 +59,9 @@ class CountryHomeTest(unittest.TestCase):
     def test_britain_channel_stills_show_a_british_home(self):
         from app.vintage_still import still_prompt
 
-        self.assertIn("British home", still_prompt("Mum baked on Sundays", "jam tarts", "1970s", country="GB"))
-        self.assertIn("Canadian home", still_prompt("Mum baked on Sundays", "butter tarts", "1970s", country="CA"))
-        self.assertIn("American home", still_prompt("Mum baked on Sundays", "pie", "1950s"))
+        self.assertIn("British setting", still_prompt("Mum baked on Sundays", "jam tarts", "1970s", country="GB"))
+        self.assertIn("Canadian setting", still_prompt("Mum baked on Sundays", "butter tarts", "1970s", country="CA"))
+        self.assertIn("American setting", still_prompt("Mum baked on Sundays", "pie", "1950s"))
 
 
 class PoolSizeTest(unittest.TestCase):
