@@ -829,6 +829,17 @@ class AutoYouTubeManager:
             for item in self._search(run, query, archive=False):
                 found.setdefault(str(item.get("video_id")), {**item, "_query": query})
             usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
+        if not is_hook and len(usable) < 2:
+            # Nothing on YouTube carries the full name ("Arbroath Smokie Pies" left 21 scenes empty): try the
+            # name without its last or first word ("arbroath smokie") and let the transcript check judge them.
+            words = core.split()
+            for shorter in ([" ".join(words[:-1]), " ".join(words[1:])] if len(words) >= 3 else []):
+                if len(usable) >= 4:
+                    break
+                for item in self._search(run, shorter, archive=False):
+                    found.setdefault(str(item.get("video_id")), {**item, "_query": shorter})
+                usable += [item for item in found.values() if item not in usable
+                           and usable_source(run, item, is_hook, shorter, set())]
 
         def rank(item: dict[str, Any]) -> float:
             title = str(item.get("title") or "")
@@ -1522,7 +1533,14 @@ class AutoYouTubeManager:
                     break
                 start = moment[0]
                 with run.lock:
+                    # Two scenes looked at the same time and got the same moment (143 and 144 of a V3 test):
+                    # the moment is claimed here, and a taken one is looked for again.
+                    if any(abs(float(start) - used) < 6.0 for used in run.used.get(video_id, [])):
+                        continue
+                    if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
+                        break
                     run.used.setdefault(video_id, []).append(float(start))
+                    run.by_position[position] = video_id
                 destination = (self.paths.project_dir(run.project_id) / "assets" / "youtube"
                                / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4")
                 try:
@@ -1543,6 +1561,9 @@ class AutoYouTubeManager:
                         raise ProviderError("A present-day person is on camera")
                 except Exception:
                     destination.unlink(missing_ok=True)
+                    with run.lock:
+                        if run.by_position.get(position) == video_id:
+                            run.by_position.pop(position, None)
                     continue
                 metadata.update({"auto_sourced": True, "search_query": dish, "topic": subject, "section_reuse": True,
                                  "relevance_score": round(candidate_relevance(candidate, scene), 3),

@@ -67,8 +67,15 @@ class AutoBuildManager:
                 return
             checked = self._check(project_id)
             filled, failed = self._fill_missing(project_id)
-            held = self._hold_empty(project_id)  # an empty scene keeps the previous shot running (no black frames)
+            held = self._hold_empty(project_id)  # an empty scene reuses a shot of its item, mirrored or in an old TV
+            # Last resort: an item YouTube has no footage of at all would stay black; a food-only AI still
+            # (no people) is better than a black screen, and the report says how many there are.
+            forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
+            filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
+            if report is not None and forced:
+                report["checks"].append({"rule": "AI images beyond the limit (no footage exists for these scenes)",
+                                         "value": f"{len(forced)} (scenes {forced[:12]})", "ok": False})
             if report is not None and held:
                 report["checks"].append({"rule": "Scenes reusing a shot of their item, mirrored or in an old TV (no footage found)",
                                          "value": f"{len(held)} (scenes {held[:12]})", "ok": True})
@@ -241,7 +248,7 @@ class AutoBuildManager:
             held.append(int(scene.get("position") or 0))
         return held
 
-    def _fill_missing(self, project_id: str) -> tuple[list[int], list[dict[str, Any]]]:
+    def _fill_missing(self, project_id: str, beyond_limit: bool = False) -> tuple[list[int], list[dict[str, Any]]]:
         """A realistic period still for every scene that still has nothing (and is not a heading)."""
         db, settings = self.app.db, self.app.settings.load()
         project = db.get_project(project_id) or {}
@@ -271,6 +278,7 @@ class AutoBuildManager:
             style_doc = load_style(self.app.paths.root, (project.get("effects") or {}).get("channel_style"))
             if style_doc:
                 extra = ai_image_rules(style_doc)
+            if style_doc and not beyond_limit:
                 assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
                 filmable = [scene for scene in scenes if not heading_subject(str(scene.get("narration") or "")) or labels]
                 made = sum(1 for scene in scenes
