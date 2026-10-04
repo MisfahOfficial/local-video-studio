@@ -811,19 +811,24 @@ class AutoYouTubeManager:
             # A named dish is searched by its name ("Magic Cookie Bars", not "condensed graham bars");
             # a vague heading ("Poor Man's Cookies") by its ingredients. The other adds one more search.
             dish = (recipe if vague_heading(subject) else core_subject(subject)) or recipe or core_subject(subject)
-            queries = run.profile.queries(run.profile.section_queries, item=dish, era=era, theme=run.theme)
-            other = core_subject(subject) if dish == recipe else recipe
-            if other and other != dish:
-                queries += run.profile.queries(run.profile.section_queries[:1], item=other, era=era, theme=run.theme)
-            alias = bracket_alias(subject)  # "Rum Cake (Bacardi Rum Cake)": its other name is searched too
-            if alias and alias not in (dish, other):
-                queries += run.profile.queries(run.profile.section_queries[:1], item=alias, era=era, theme=run.theme)
+            # The item is searched by its name and nothing more (Ishaq, 4 Oct): "heinz golden vegetable soup".
+            # Its short name and its bracket alias are searched only when that finds too little.
+            name = " ".join(re.sub(r"[()\[\]]", " ", subject).split())
+            queries = [name] if name else [dish]
+            spare = [query for query in dict.fromkeys([core_subject(subject), bracket_alias(subject) or ""])
+                     if query and query not in queries]
         core = subject if is_hook else core_subject(subject)
         found: dict[str, dict[str, Any]] = {}
         for query in dict.fromkeys(queries):
             for item in self._search(run, query, archive=is_hook):
                 found.setdefault(str(item.get("video_id")), {**item, "_query": query})
         usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
+        for query in ([] if is_hook else spare):
+            if len(usable) >= 4:
+                break
+            for item in self._search(run, query, archive=False):
+                found.setdefault(str(item.get("video_id")), {**item, "_query": query})
+            usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
 
         def rank(item: dict[str, Any]) -> float:
             title = str(item.get("title") or "")
@@ -854,6 +859,8 @@ class AutoYouTubeManager:
                     return (analyses / f"{safe}.npz").is_file()
 
                 ordered = [item for item in ordered if read_before(item)] + [item for item in ordered if not read_before(item)]
+        if not is_hook and run.pick_inline:
+            ordered = self._transcript_order(run, subject, ordered)
         sources: list[dict[str, Any]] = []
         # Read the best first (more of them for a long section); spares only when one is unusable.
         size = 2 if is_hook else pool_size(len(members))
@@ -994,6 +1001,53 @@ class AutoYouTubeManager:
         with run.lock:
             run.searches[cache_key] = results
         return results
+
+    def _transcript_order(self, run: "_Run", item: str, ordered: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Gemini reads the top search results' titles and transcripts (text only, no video download) and
+        puts the videos really about the item first; ones about something else go last. Any trouble keeps the
+        order as it was."""
+        from concurrent.futures import ThreadPoolExecutor as Pool
+
+        from .transcript_pick import rank_videos, transcript_text
+
+        top = [entry for entry in ordered if str(entry.get("source") or "youtube") == "youtube"][:6]
+        if len(top) < 2 or run.pick_error:
+            return ordered
+
+        def describe(entry: dict[str, Any]) -> dict[str, Any] | None:
+            video_id = str(entry.get("video_id") or "")
+            try:
+                info = run.infos.get(video_id) or run.service.inspect(video_id)
+            except Exception:
+                return None
+            with run.lock:
+                run.infos[video_id] = info
+            return {"id": video_id, "title": str(entry.get("title") or info.get("title") or ""),
+                    "channel": str(info.get("channel") or entry.get("channel") or ""),
+                    "minutes": float(info.get("duration") or 0) / 60,
+                    "transcript": transcript_text(YouTubeSourceService._caption_events(info))}
+
+        with Pool(max_workers=3) as pool:
+            videos = [video for video in pool.map(describe, top) if video]
+        if len(videos) < 2:
+            return ordered
+        try:
+            ranked = rank_videos(run.settings, item, videos, run.era)
+        except Exception as error:
+            with run.lock:
+                if "429" in str(error) or "quota" in str(error).lower():
+                    run.pick_error = f"Gemini stopped: {str(error)[:160]}"
+            return ordered
+        good = [video_id for video_id, about, _score in ranked if about]
+        bad = {video_id for video_id, about, _score in ranked if not about}
+        if not good:
+            return ordered  # nothing judged about the item: keep the search order rather than nothing
+        with run.lock:
+            run.pick_log.append({"item": item, "kept": good, "dropped": sorted(bad)})
+        by_id = {str(entry.get("video_id")): entry for entry in ordered}
+        first = [by_id[video_id] for video_id in good if video_id in by_id]
+        rest = [entry for entry in ordered if str(entry.get("video_id")) not in set(good) | bad]
+        return first + rest + [by_id[video_id] for video_id in bad if video_id in by_id]
 
     def _pick_section(self, run: "_Run", members: list[dict[str, Any]]) -> None:
         """Gemini picks each sentence's clip among its planned options, four sentences per request, while other
