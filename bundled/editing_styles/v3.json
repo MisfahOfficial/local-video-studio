@@ -1,34 +1,47 @@
 {
-  "_help": "Completed V3 channel style derived from the primary Britain We Lived In reference. Keep the keys stable when importing it into the tool.",
+  "_help": "V3 style from three reference videos (checked by Claude on 4 Oct 2026: frames, shot cuts and colour measurements). Rules marked 'all 3' were seen in every reference; 'some' in one or two.",
   "schema_version": 1,
   "style_id": "britain_we_lived_in_bold_nostalgic_documentary",
   "status": "ready_for_import",
   "channel": "v3",
   "name": "Britain We Lived In",
-  "version": 1,
+  "version": 2,
   "scope": "all_channel_videos",
-  "content_type": "nostalgic_british_food_school_home_high_street_brand_and_everyday_life_history",
+  "content_type": "nostalgic_british_food_sweets_brands_school_dinners_history",
   "country": "GB",
   "era": "script_defined",
   "default_era_range": "1950s-1980s",
   "audience": "Primarily British viewers aged 45+ and the British diaspora who remember post-war school dinners, family food, high streets, household routines and vanished brands; secondarily younger viewers interested in everyday British social history.",
   "mood": "warm, nostalgic, vivid, sentimental, curious",
   "example_videos": [
-    "https://www.youtube.com/watch?v=LeFVmd1L4a4"
+    "https://www.youtube.com/watch?v=LeFVmd1L4a4",
+    "https://www.youtube.com/watch?v=TOWPOo6weuE",
+    "https://www.youtube.com/watch?v=kD_T_e6e1Uk"
   ],
   "reference_assets": [
     {
       "url": "https://www.youtube.com/watch?v=LeFVmd1L4a4",
-      "role": "primary_channel_style_reference",
-      "use_for": [
-        "hook rhythm and archival opening",
-        "British nostalgia tone and visual sourcing",
-        "bold yellow-and-white key-phrase captions with black outline",
-        "red brush-stroke emphasis used selectively in the hook",
-        "full-screen chapter cards with a framed subject image, dark brown grid, gold particles and purple/yellow paint stroke",
-        "hard-cut pacing, food close-ups and contextual archival photographs",
-        "chapter structure and restrained nostalgic music"
-      ],
+      "role": "channel_style_reference",
+      "do_not_copy": [
+        "specific copyrighted footage",
+        "exact narration",
+        "exact shot sequence",
+        "third-party watermarks or burned-in captions"
+      ]
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=TOWPOo6weuE",
+      "role": "channel_style_reference",
+      "do_not_copy": [
+        "specific copyrighted footage",
+        "exact narration",
+        "exact shot sequence",
+        "third-party watermarks or burned-in captions"
+      ]
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=kD_T_e6e1Uk",
+      "role": "channel_style_reference",
       "do_not_copy": [
         "specific copyrighted footage",
         "exact narration",
@@ -61,8 +74,8 @@
     "tool_support": "now",
     "shot_seconds_min": 3.0,
     "shot_seconds_max": 7.0,
-    "hook_shot_seconds_max": 3.0,
-    "chapter_card_seconds": "2.0-2.8",
+    "hook_shot_seconds_max": 4.0,
+    "chapter_card_seconds": "5-8 when the voice-over allows; never shorter than the spoken heading",
     "ingredients_card_seconds_max": 4.0,
     "slow_down_on": [
       "memories",
@@ -81,7 +94,7 @@
     "hook": {
       "show_every_item_once_as_teaser": false,
       "show_representative_items_as_teaser": true,
-      "first_shot": "An immediately recognisable authentic British period shot tied to the premise: for food videos use a school dinner serving line, dinner ladies, pupils at tables or a close-up of the most nostalgic dish; start on action, not a logo or title slate.",
+      "first_shot": "A recognisable British archive or vintage-advert shot tied to the premise (sweet-shop jars, school dinner hall, a classic wrapper), with a big caption; start on action, never a logo.",
       "teaser_item_limit": 8,
       "allowed_media": [
         "item_clip",
@@ -95,18 +108,19 @@
         "long_text_card",
         "slow_decorative_intro"
       ],
-      "_if_no_hook": "General rule: if the script has no hook, the video starts directly at Item 1."
+      "_if_no_hook": "General rule: if the script has no hook, the video starts directly at Item 1.",
+      "collage_card": "Once in the hook: lilac torn-paper card with 2-4 photos (archive children/shops or product packets), a bold white/red title of 3-6 words and a small blue handwritten tagline."
     },
     "chapter_card": {
       "when": "only where the script has an item heading",
       "title_source": "heading without numbering (remove 'Item #16:', 'Number 12 -')",
       "keep_text_in_brackets": true,
       "show_item_number": false,
-      "style": "Full-screen V3 reference chapter card: near-black/dark-brown grid background with restrained gold particles; one large rounded-corner subject image centred in the upper two-thirds; a rough purple paint stroke with a smaller yellow edge across the lower image; bold condensed white uppercase title with a heavy black outline. Animate with a quick image scale-in and title pop; never show a plain text-only slate."
+      "style": "v3_paint (all 3 references): dark-brown grid, gold specks, rounded picture of the item, purple paint stroke with a yellow edge, white uppercase name. Picture: the product packet or the finished dish."
     },
     "each_item": {
       "first_shot": "The chapter card's strong finished-item image, followed by a clean close-up or serving shot of the exact item; for non-food topics use the exact product, place or object named in the heading.",
-      "ingredients_card": "When the script lists ingredients, show one V3 bold ingredient card: dark-brown grid background, large central bowl or finished-dish image, 3-6 ingredient cutouts or small framed photos, short white labels with yellow quantities, purple/red brush accents, and no scrapbook, chalkboard or cursive treatment.",
+      "ingredients_card": "Not used: none of the three references shows an ingredients card; ingredient lines get close-ups of the making instead.",
       "story_lines": "shots of the same dish (being made or served)",
       "history_lines": "period photos or period footage of the dish if they exist, else the dish",
       "last_shot": "finished dish or people enjoying it"
@@ -114,7 +128,7 @@
     "subscribe_reminder": {
       "tool_support": "now",
       "when": "once after the hook and once in the outro only",
-      "style": "small channel button; never cover the food"
+      "style": "white pill with like, SUBSCRIBE and bell, bottom centre; never on the food"
     },
     "outro": {
       "allowed_media": [
@@ -298,45 +312,35 @@
     ]
   },
   "motion_graphics": {
-    "_help": "Graphics allowed on this channel and how often. Designs must exist in the library; missing ones are reported, never faked.",
+    "_help": "Graphics seen in the references, and only those.",
     "tool_support": "now",
     "allowed": [
       "chapter_card",
-      "ingredients_card",
-      "map",
-      "price",
-      "years",
-      "bold_fact",
-      "comment_card",
-      "name_label",
-      "product_cutout",
-      "comparison_card",
-      "archival_photo_frame"
+      "hook_collage",
+      "name_caption"
     ],
     "chapter_designs": [
-      "v3_bold_paint_chapter",
-      "film_slate",
-      "typewriter_card"
+      "v3_paint"
     ],
-    "ingredient_designs": [
-      "v3_bold_ingredient_grid",
-      "cards"
+    "hook_designs": [
+      "v3_collage"
     ],
-    "max_per_item": 4,
-    "wanted_but_missing": [
-      "v3_bold_paint_chapter: dark-brown grid, gold particles, rounded subject image, purple/yellow brush stroke and outlined white title",
-      "v3_bold_ingredient_grid: ingredient cutouts with yellow quantities and white names",
-      "v3_brush_fact: large yellow/white number or phrase over a red or purple rough paint stroke",
-      "v3_memory_quote: viewer-memory quote or question with an archival photo",
-      "v3_then_and_now: clean two-panel historical comparison",
-      "v3_product_cutout: isolated package or object on the dark grid background"
-    ]
+    "ingredient_designs": [],
+    "max_per_item": 1,
+    "not_used": [
+      "map",
+      "price_card",
+      "years_timeline",
+      "ingredients_card",
+      "comment_card"
+    ],
+    "wanted_but_missing": []
   },
   "look": {
     "_help": "Colour and texture of the whole video.",
     "tool_support": "now",
-    "film_look": true,
-    "grain": "Subtle fine grain, approximately 6-10% on modern footage and up to 15% on restored archive material; never obscure food detail or text.",
+    "film_look": false,
+    "grain": "None added: archive adverts keep their own grain; modern product photos stay clean (all 3 mix both).",
     "colour": "Warm, slightly faded 1960s-1980s British colour with gentle amber highlights and restrained saturation; archival black-and-white stays neutral, while food remains appetising and clear.",
     "palette": {
       "main": "#5A43F5",
@@ -371,13 +375,13 @@
     "tool_support": "now (captions) / fix (fitting, contrast)",
     "captions": {
       "show": true,
-      "position": "middle for major hook/fact phrases; bottom for secondary phrases, always inside safe margins",
-      "animation": "fast pop with a slight overshoot; selected keywords may receive a left-to-right brush highlight",
+      "position": "bottom (all 3); the hook's big phrases may sit in the middle",
+      "animation": "quick pop",
       "max_words_per_line": 7,
-      "font": "Impact for major phrases and chapter titles; Montserrat ExtraBold fallback for longer captions",
-      "colour": "White text with a heavy black outline; one important word or phrase in bright yellow #FFE234; red #D52B2B or purple #5A43F5 rough brush backing only for selected emphasis",
-      "case": "Title Case for key phrases; UPPERCASE only for chapter titles, one-word emphasis and major numbers",
-      "mode": "Key facts, sensory phrases and memorable lines only; denser in the hook, selective in the body",
+      "font": "heavy condensed sans for the hook (Impact-like); bold sans for the body",
+      "colour": "white with a black outline; one or two key words in yellow #FFE234",
+      "case": "Title Case",
+      "mode": "key facts and memorable lines: dense in the hook, about every 10-20 s in the body",
       "safe_margin_percent": 6,
       "minimum_size_1080p": 48
     },
@@ -386,8 +390,8 @@
       "style": "Turn the most important 1-4 words bright yellow while the remaining phrase stays white; use a thick black outline and optional rough red/purple paint stroke, never a solid subtitle box.",
       "must_be_readable": true
     },
-    "key_phrase_pop_ups": "Every 4-7 seconds during the first 30-second hook, then approximately every 12-20 seconds or at a genuine emotional/factual beat; never caption every sentence.",
-    "cursive_rule": "Never for captions, chapter titles or ingredient labels; a tiny cursive signature may appear only inside an authentic scanned recipe card.",
+    "key_phrase_pop_ups": "Every 3-6 s in the hook, then about every 10-20 s.",
+    "cursive_rule": "Only as the small blue tagline on the hook collage card; never for captions or chapter names.",
     "source_label": "Not used on ordinary footage; a small unobtrusive archive credit may be shown only when the licence requires it.",
     "language": "en-GB"
   },
@@ -475,5 +479,24 @@
       "premiere project",
       "capcut project"
     ]
+  },
+  "reference_findings": {
+    "_help": "What the three references actually show (measured, not guessed).",
+    "shot_length_seconds": {
+      "median": "5-8 (all 3)",
+      "shortest_quarter": "2.5-5",
+      "hook": "2.5-8"
+    },
+    "chapter_cards": {
+      "count_per_video": "20-27 (all 3)",
+      "every_seconds": "60-70",
+      "length_seconds": "5-8, sometimes 3-10",
+      "look": "dark-brown grid, gold specks, rounded picture of the item, purple paint stroke with yellow edge, white uppercase name, no number (all 3)"
+    },
+    "hook": "archive or product shots with big captions, and a collage card on lilac torn paper with 2-4 photos, a bold title and a small blue handwritten tagline (2 of 3)",
+    "captions": "bottom of the frame, Title Case, white with one or two key words in yellow, black outline; bigger and more frequent in the hook (all 3)",
+    "footage": "vintage 1970s-80s TV adverts, product packets and wrappers, close-ups of the sweet or dish, archive photos of British children and shops (all 3)",
+    "not_seen": "maps, price cards, timelines, ingredient cards, film-strip frames (none in 3 videos); prices are said in a caption ('It Cost Around 6P')",
+    "subscribe": "white like / SUBSCRIBE / bell pill near the bottom centre, a few times per video (2 of 3)"
   }
 }

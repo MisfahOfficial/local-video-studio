@@ -55,6 +55,9 @@ class ChannelStyle:
     print_border: Color  # polaroid / gallery print paper
     sepia: float  # how aged photos look inside graphics (0-1)
     subscribe: Color
+    # The hook's many-pictures graphic: "prints" (tilted photos dropping in) or "collage" (V3's lilac torn-paper
+    # collage with a bold title and a handwritten tagline, seen in its references).
+    gallery: str = "prints"
 
 
 STYLES: dict[str, ChannelStyle] = {
@@ -87,6 +90,7 @@ STYLES: dict[str, ChannelStyle] = {
         chapter_tint=(112, 134, 104), chapter_accent=(196, 214, 170), chapter_title_fonts=SERIF_BOLD,
         chapter_label_fonts=FUTURA, chapter_label="CHAPTER", print_border=(246, 244, 238), sepia=0.6,
         subscribe=(204, 0, 0),
+        gallery="collage",
     ),
     # V4 Canada We Lived In: cabin kitchen - warm wood, maple red, typewriter labels.
     "v4": ChannelStyle(

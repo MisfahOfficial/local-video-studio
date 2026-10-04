@@ -567,7 +567,8 @@ class AutoYouTubeManager:
                     continue
                 carded.add(section)
                 run.card_ids.add(str(item["id"]))
-        run.gallery_id = next((str(item["id"]) for item in all_scenes if cards_on
+        gallery_on = profile.recipe_cards and (kit.get("ingredient_cards", True) or kit.get("hook_collage"))
+        run.gallery_id = next((str(item["id"]) for item in all_scenes if gallery_on
                                and not ingredient_list(str(item["narration"])) and plural_items(str(item["narration"]))), "")
         # A gallery already on the timeline (outside this run) counts as the video's one gallery.
         redo = {str(item["id"]) for item in scenes}
@@ -1636,7 +1637,8 @@ class AutoYouTubeManager:
             return False
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
         destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
-        encode(gallery_stack([Image.open(path) for path in paths], run.style), duration, destination,
+        encode(gallery_stack([Image.open(path) for path in paths], run.style, title=str(scene.get("narration") or "")),
+               duration, destination,
                ffmpeg_path=run.service.ffmpeg_path)
         asset = self.db.add_asset(
             project_id=run.project_id, scene_id=str(scene["id"]),
@@ -1690,7 +1692,7 @@ class AutoYouTubeManager:
                                 run.era, allow_generated, judge=run.judge)
             if len(paths) < 3:
                 return False
-            frame = gallery_stack([Image.open(path) for path in paths], run.style)
+            frame = gallery_stack([Image.open(path) for path in paths], run.style, title=str(scene.get("narration") or ""))
             metadata = {"graphic": "gallery", "items": [{"label": path.stem, "image": str(path)} for path in paths]}
             with run.lock:
                 run.gallery_done = True

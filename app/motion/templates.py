@@ -402,9 +402,67 @@ def ingredient_cards(items: list[tuple[str, Image.Image]], style: ChannelStyle |
 
 
 # ---------------------------------------------------------------- gallery (many items)
-def gallery_stack(photos: list[Image.Image], style: ChannelStyle | None = None) -> Frame:
+IMPACT = ("/System/Library/Fonts/Supplemental/Impact.ttf",)
+SCRIPT = ("/System/Library/Fonts/Supplemental/SnellRoundhand.ttc", "/System/Library/Fonts/Supplemental/Brush Script.ttf")
+
+
+def collage_card(photos: list[Image.Image], title: str = "", style: ChannelStyle | None = None) -> Frame:
+    """V3's hook collage (2 of its 3 references): lilac torn paper, 2-4 photos with white borders popping in,
+    a bold white title with a dark-red outline and a small blue handwritten tagline."""
+    rng = random.Random(len(photos) * 7 + len(title))
+    paper = Image.new("RGB", SIZE, (198, 186, 226))
+    noise = Image.effect_noise(SIZE, 18).convert("RGB")
+    paper = Image.blend(paper, noise, 0.08)
+    draw = ImageDraw.Draw(paper)
+    for _ in range(5):  # torn white paper strips
+        y = rng.randint(80, H - 80)
+        points = [(x, y + rng.randint(-14, 14)) for x in range(-40, W + 80, 60)]
+        draw.line(points, fill=(236, 230, 246), width=rng.randint(10, 26))
+    words = re.sub(r"[^\w'\s-]", "", title).split()
+    head = " ".join(words[:5]).upper()
+    tail = " ".join(words[5:9])
+    big = font(IMPACT + SANS_FONTS, 92)
+    small = font(SCRIPT + SERIF_ITALIC_FONTS, 76)
+    count = min(4, len(photos))
+    slots = {1: [(0.5, 0.58)], 2: [(0.3, 0.6), (0.7, 0.6)], 3: [(0.27, 0.52), (0.73, 0.52), (0.5, 0.8)],
+             4: [(0.27, 0.5), (0.73, 0.5), (0.27, 0.83), (0.73, 0.83)]}[max(1, count)]
+    prints = []
+    for index, photo in enumerate(photos[:count]):
+        inner_w = int(W * (0.34 if count <= 2 else 0.27))
+        inner_h = int(inner_w * 0.62)
+        card = Image.new("RGBA", (inner_w + 16, inner_h + 16), (255, 255, 255, 255))
+        card.paste(ImageOps.fit(photo.convert("RGB"), (inner_w, inner_h)), (8, 8))
+        prints.append((card.rotate(rng.uniform(-3, 3), resample=Image.BICUBIC, expand=True), slots[index], 0.25 + index * 0.25))
+
+    def frame(t: float, duration: float) -> Image.Image:
+        canvas = paper.copy().convert("RGBA")
+        for image, (sx, sy), delay in prints:
+            local = t - delay
+            if local <= 0:
+                continue
+            scale = 0.6 + 0.4 * ease_out_back(min(1.0, local / 0.35), 1.4)
+            sized = image.resize((max(2, int(image.width * scale)), max(2, int(image.height * scale))))
+            canvas.alpha_composite(sized, (int(sx * W - sized.width / 2), int(sy * H - sized.height / 2)))
+        writer = ImageDraw.Draw(canvas)
+        if head and t > 0.05:
+            drop = ease_out_cubic(min(1.0, t / 0.3))
+            y = int(-60 + 140 * drop)
+            box = writer.textbbox((0, 0), head, font=big, stroke_width=6)
+            writer.text(((W - (box[2] - box[0])) // 2, y), head, font=big, fill=(255, 255, 255),
+                        stroke_width=6, stroke_fill=(120, 18, 24))
+        if tail and t > 0.4:
+            box = writer.textbbox((0, 0), tail, font=small)
+            writer.text(((W - (box[2] - box[0])) // 2, 196), tail, font=small, fill=(32, 60, 210), stroke_width=1, stroke_fill=(32, 60, 210))
+        return canvas.convert("RGB")
+
+    return frame
+
+
+def gallery_stack(photos: list[Image.Image], style: ChannelStyle | None = None, title: str = "") -> Frame:
     """Several different photos drop onto the channel's backdrop as tilted prints (plural mentions)."""
     style = style or get_style(None)
+    if style.gallery == "collage":
+        return collage_card(photos, title, style)
     rng = random.Random(len(photos))
     if style.background == "vignette":
         base = sepia(ImageOps.fit(photos[0].convert("RGB"), SIZE))

@@ -151,3 +151,19 @@ class VoiceoverTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V3StyleTest(unittest.TestCase):
+    def test_v3_follows_its_three_references(self):
+        from app.channel_kits import kit_for
+        from app.channel_styles import get_style
+        from app.motion.templates import gallery_stack
+        from PIL import Image
+
+        kit = kit_for(Path(tempfile.mkdtemp()), "v3")
+        self.assertEqual(kit["chapter_designs"], ["v3_paint"])
+        self.assertFalse(kit["ingredient_cards"])  # none of the three references has one
+        self.assertEqual(kit["extras"], [])  # no maps, prices or timelines either
+        self.assertTrue(kit["hook_collage"])
+        frame = gallery_stack([Image.new("RGB", (64, 36), (200, 50, 50))] * 3, get_style("v3"), title="These were not just sweets")
+        self.assertEqual(frame(1.0, 3.0).size, (1920, 1080))
