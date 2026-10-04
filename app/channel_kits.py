@@ -71,9 +71,11 @@ DEFAULT_KITS: dict[str, dict[str, Any]] = {
     # V3 follows its reference LeFVmd1L4a4 (checked 3 Oct): the paint-stroke chapter card, white captions in a
     # heavy condensed face with a black outline (key words yellow), film look kept.
     "v3": {"name": "V3 · Britain We Lived In", "style": "v3", "country": "GB",
-           # Three references (4 Oct): no ingredient cards, maps, prices or timelines; one lilac collage in the hook.
-           "chapter_designs": ["v3_paint"], "ingredient_designs": ["cards"], "ingredient_cards": False,
-           "hook_collage": True, "extras": [], "film_look": False, "photo_graphics": False,
+           # Three references (4 Oct): a lilac collage in the hook. Ingredient cards, maps, prices, timelines and big
+           # numbers stay on at Ishaq's request (4 Oct), though the references do not show them.
+           "chapter_designs": ["v3_paint"], "ingredient_designs": ["cards"],
+           "hook_collage": True, "extras": ["map", "price", "years", "comment", "fact"],
+           "film_look": False, "photo_graphics": False,
            "references": ["https://www.youtube.com/watch?v=LeFVmd1L4a4"],
            "caption_style": {"animation": "pop", "font": "Impact", "bold": False, "text_color": "#FFFFFF",
                              "stroke_enabled": True, "stroke_color": "#000000", "stroke_width": 5,

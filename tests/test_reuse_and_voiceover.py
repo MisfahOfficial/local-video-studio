@@ -162,8 +162,8 @@ class V3StyleTest(unittest.TestCase):
 
         kit = kit_for(Path(tempfile.mkdtemp()), "v3")
         self.assertEqual(kit["chapter_designs"], ["v3_paint"])
-        self.assertFalse(kit["ingredient_cards"])  # none of the three references has one
-        self.assertEqual(kit["extras"], [])  # no maps, prices or timelines either
+        self.assertTrue(kit.get("ingredient_cards", True))  # kept on at Ishaq's request
+        self.assertIn("price", kit["extras"])
         self.assertTrue(kit["hook_collage"])
         frame = gallery_stack([Image.new("RGB", (64, 36), (200, 50, 50))] * 3, get_style("v3"), title="These were not just sweets")
         self.assertEqual(frame(1.0, 3.0).size, (1920, 1080))

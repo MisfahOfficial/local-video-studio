@@ -120,7 +120,7 @@
     },
     "each_item": {
       "first_shot": "The chapter card's strong finished-item image, followed by a clean close-up or serving shot of the exact item; for non-food topics use the exact product, place or object named in the heading.",
-      "ingredients_card": "Not used: none of the three references shows an ingredients card; ingredient lines get close-ups of the making instead.",
+      "ingredients_card": "one ingredients card per item when the script lists ingredients",
       "story_lines": "shots of the same dish (being made or served)",
       "history_lines": "period photos or period footage of the dish if they exist, else the dish",
       "last_shot": "finished dish or people enjoying it"
@@ -317,7 +317,12 @@
     "allowed": [
       "chapter_card",
       "hook_collage",
-      "name_caption"
+      "ingredients_card",
+      "map",
+      "price",
+      "years",
+      "bold_fact",
+      "comment_card"
     ],
     "chapter_designs": [
       "v3_paint"
@@ -325,16 +330,13 @@
     "hook_designs": [
       "v3_collage"
     ],
-    "ingredient_designs": [],
-    "max_per_item": 1,
-    "not_used": [
-      "map",
-      "price_card",
-      "years_timeline",
-      "ingredients_card",
-      "comment_card"
+    "ingredient_designs": [
+      "cards"
     ],
-    "wanted_but_missing": []
+    "max_per_item": 4,
+    "not_used": [],
+    "wanted_but_missing": [],
+    "_note": "Ingredient cards, maps, prices, timelines and big numbers are kept on by Ishaq's choice (4 Oct) although the three references do not show them."
   },
   "look": {
     "_help": "Colour and texture of the whole video.",
