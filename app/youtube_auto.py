@@ -368,7 +368,10 @@ def usable_source(run: "_Run", item: dict[str, Any], is_hook: bool, core: str, s
         # title ("Buffalo Chicken Dynamite Rice" only lists it among others in the description).
         dish_words = [word for word in core.split() if word not in _STOPWORDS]
         # Numbers in a name ("7 Brew") are matched as numbers; the word matcher only reads letters.
-        named = (all(word in re.findall(r"\d+", title) if word.isdigit() else mentions_topic(title, word) for word in dish_words)
+        hits = [word in re.findall(r"\d+", title) if word.isdigit() else mentions_topic(title, word) for word in dish_words]
+        # Every word of a two-word name; one word may be missing from a longer one ("Heinz Golden Vegetable"
+        # for "Heinz Golden Vegetable Soup" - Ishaq, 5 Oct: tens of such videos were refused).
+        named = ((all(hits) if len(dish_words) == 2 else sum(hits) >= len(dish_words) - 1)
                  if len(dish_words) >= 2 else mentions_topic(text, core))
     channel = str(item.get("channel") or item.get("uploader") or "")
     if is_hook and run.era and MODERN_TITLE.search(title):
@@ -832,7 +835,7 @@ class AutoYouTubeManager:
             for item in self._search(run, query, archive=False):
                 found.setdefault(str(item.get("video_id")), {**item, "_query": query})
             usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
-        if not is_hook and len(usable) < 2:
+        if not is_hook and len(usable) < 4:
             # Nothing on YouTube carries the full name ("Arbroath Smokie Pies" left 21 scenes empty): try the
             # name without its last or first word ("arbroath smokie") and let the transcript check judge them.
             words = core.split()
@@ -1355,6 +1358,7 @@ class AutoYouTubeManager:
             # Archival films cut often, so the hook tries more sources for one clean shot.
             refused_here = run.scene_exclude.get(str(scene["id"]), set())
             choices = [choice for choice in choices if str(choice[0]["video_id"]) not in refused_here]
+            burned = False
             for candidate, start_time, topic_score in choices[:5 if is_hook else 3]:
                 video_id = str(candidate["video_id"])
                 with run.lock:
@@ -1383,8 +1387,9 @@ class AutoYouTubeManager:
                     bars = content_box(destination, run.service.ffmpeg_path)
                     if bars and bars[4] < 1.25:
                         raise ProviderError("Portrait picture inside black bars")
-                    if has_burned_in_text(destination, run.service.ffmpeg_path):
-                        raise ProviderError("Another creator's captions are burned into this shot")
+                    # Another channel's captions no longer make a clip wrong (Ishaq, 5 Oct: the editor removes them
+                    # when finishing); the clip is only marked for review.
+                    burned = has_burned_in_text(destination, run.service.ffmpeg_path)
                     if too_dark(destination, run.service.ffmpeg_path):
                         raise ProviderError("The shot is too dark to see the food")
                     if run.verifier is not None and self._shows_creator(run, destination, archival_ok=is_hook):
@@ -1410,6 +1415,8 @@ class AutoYouTubeManager:
                     return
                 raise ProviderError("Every candidate was rejected: " + " | ".join(rejected[:3])
                                     if rejected else str(last_error or "No downloadable result was found"))
+            if burned:
+                metadata["burned_captions"] = True
             picked = run.gemini_pick.get(str(scene["id"]))
             if picked and picked[0] == str(candidate["video_id"]) and abs(float(start_time or 0) - picked[1]) < 1.0:
                 metadata["chosen_by"] = "gemini"  # Gemini already looked at this moment next to its sentence
@@ -1432,7 +1439,7 @@ class AutoYouTubeManager:
                 logo["safe_crop"] = fit_crop(bars, logo.get("safe_crop"))
                 logo["black_bars"] = [round(value, 4) for value in bars[:4]]
             metadata.update(logo)
-            metadata["needs_review"] = metadata["needs_review"] or not logo["logo_hidden"]
+            metadata["needs_review"] = metadata["needs_review"] or not logo["logo_hidden"] or bool(metadata.get("burned_captions"))
             asset = self.db.add_asset(
                 project_id=run.project_id, scene_id=str(scene["id"]),
                 candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
@@ -1528,6 +1535,7 @@ class AutoYouTubeManager:
             if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
                 continue  # the neighbour already shows this video: a different source looks less repetitive
             for _attempt in range(3):
+                burned = False
                 with run.lock:
                     avoid = list(run.used.get(video_id, []))
                 moment = run.verifier.best_moment(video_id, run.infos[video_id], subject, dish, duration, avoid=avoid,
@@ -1556,8 +1564,7 @@ class AutoYouTubeManager:
                     bars = content_box(destination, run.service.ffmpeg_path)
                     if bars and bars[4] < 1.25:
                         raise ProviderError("Portrait picture inside black bars")
-                    if has_burned_in_text(destination, run.service.ffmpeg_path):
-                        raise ProviderError("Burned-in captions")
+                    burned = has_burned_in_text(destination, run.service.ffmpeg_path)  # kept, marked for review
                     if too_dark(destination, run.service.ffmpeg_path):
                         raise ProviderError("Too dark")
                     if self._shows_creator(run, destination):
@@ -1568,6 +1575,8 @@ class AutoYouTubeManager:
                         if run.by_position.get(position) == video_id:
                             run.by_position.pop(position, None)
                     continue
+                if burned:
+                    metadata["burned_captions"] = True
                 metadata.update({"auto_sourced": True, "search_query": dish, "topic": subject, "section_reuse": True,
                                  "relevance_score": round(candidate_relevance(candidate, scene), 3),
                                  "visual_match": round(moment[1], 3), "needs_review": False})
@@ -1579,7 +1588,7 @@ class AutoYouTubeManager:
                     logo["safe_crop"] = fit_crop(bars, logo.get("safe_crop"))
                     logo["black_bars"] = [round(value, 4) for value in bars[:4]]
                 metadata.update(logo)
-                metadata["needs_review"] = not logo["logo_hidden"]
+                metadata["needs_review"] = not logo["logo_hidden"] or bool(metadata.get("burned_captions"))
                 asset = self.db.add_asset(
                     project_id=run.project_id, scene_id=str(scene["id"]),
                     candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
@@ -1844,8 +1853,6 @@ class AutoYouTubeManager:
                 if start is None:
                     raise ProviderError("No single-shot stretch")
                 trim(destination, start, duration, run.service.ffmpeg_path)
-                if has_burned_in_text(destination, run.service.ffmpeg_path):
-                    raise ProviderError("Burned-in captions")
             except Exception:
                 destination.unlink(missing_ok=True)
                 continue

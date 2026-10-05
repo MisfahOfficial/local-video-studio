@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import string
 import subprocess
 import tempfile
@@ -118,7 +119,7 @@ def _ask(settings: Any, rows: list[dict[str, Any]], sheet: Any, era: str = "", s
         "different step of making the SAME item (rolling pastry while the sentence mentions the jam) still fits.\n"
         "fits = false only when: it shows a DIFFERENT dish, brand, restaurant or place (coffee cake is not a coffee "
         "shop, a brownie sundae is not ice cream cone cakes, Applebee's is not Red Robin); or it is unrelated to "
-        "the section (a sandwich film for biscuits, random people, a blank or title screen); or the sentence "
+        "the section (a sandwich film for biscuits, random people, a blank screen); or the sentence "
         "clearly names something else that should be seen instead (a map, a factory, a specific person); or the "
         "frames show a person doing something unrelated to the food (opening a drawer or cupboard, walking, "
         "talking, tidying) instead of the food or its making; or the picture is too dark to see the food.\n"
@@ -165,6 +166,9 @@ def check_scenes(db: Any, root: Path, settings: Any, project_id: str, ffmpeg_pat
         from .editing_style import checker_rules, load_style
 
         style_lines = checker_rules(load_style(root, ((db.get_project(project_id) or {}).get("effects") or {}).get("channel_style")))
+        # Another channel's captions or logos never make a clip wrong (Ishaq, 5 Oct: the editor removes them).
+        style_lines = "; ".join(part for part in style_lines.split("; ")
+                                if not re.search(r"caption|title|watermark|logo|subscribe|text", part, re.IGNORECASE))
     except Exception:
         style_lines = ""
     todo = []
