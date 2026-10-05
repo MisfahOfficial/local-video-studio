@@ -28,6 +28,37 @@ STOCK_SOURCES = "rawpixel,stocksnap,flickr"
 COOLDOWN_SECONDS = 600
 _resting: dict[str, float] = {}
 
+# Google image search (Programmable Search Engine, JSON API): set from Settings, tried first when present.
+# It finds the photos the free archives never have - old brand packets, adverts, shop fronts - which otherwise
+# became AI stills (Ishaq, 5 Oct: "AI generated ke bajaye Google se images"). Used like the YouTube clips
+# (fair-use mode), not as licensed photos.
+GOOGLE = "https://www.googleapis.com/customsearch/v1"
+_google: dict[str, str] = {"key": "", "cx": ""}
+
+
+def configure_google(api_key: str, engine_id: str) -> None:
+    _google["key"], _google["cx"] = str(api_key or "").strip(), str(engine_id or "").strip()
+
+
+def _google_images(query: str, count: int) -> list[dict[str, Any]]:
+    if not (_google["key"] and _google["cx"]):
+        return []
+    params = {"key": _google["key"], "cx": _google["cx"], "q": query, "searchType": "image",
+              "num": min(10, max(1, count)), "imgSize": "large", "safe": "active"}
+    found = request_json(f"{GOOGLE}?{urllib.parse.urlencode(params)}", timeout=30)
+    assert isinstance(found, dict)
+    results = []
+    for item in found.get("items") or []:
+        image = item.get("image") or {}
+        if not item.get("link") or int(image.get("width") or 0) < 500:
+            continue
+        results.append({"id": f"g-{item['link']}", "url": item["link"], "thumbnail": image.get("thumbnailLink") or item["link"],
+                        "title": str(item.get("title") or ""), "creator": str(item.get("displayLink") or ""),
+                        "license": "fair-use", "source": "Google Images",
+                        "foreign_landing_url": image.get("contextLink") or item["link"],
+                        "width": image.get("width"), "height": image.get("height")})
+    return results
+
 
 def _openverse(query: str, count: int, sources: str = "") -> list[dict[str, Any]]:
     params = {"q": query, "page_size": count, "category": "photograph", "mature": "false",
@@ -82,7 +113,8 @@ def image_sources(period: bool = True) -> list[tuple[str, Any]]:
     general = ("openverse", lambda q, n: _openverse(q, n))
     stock = ("openverse-stock", lambda q, n: _openverse(q, n, STOCK_SOURCES))
     archive = ("internet-archive", _archive_images)
-    return [general, history, archive, stock] if period else [general, stock, history, archive]
+    google = [("google", _google_images)] if _google["key"] and _google["cx"] else []
+    return google + ([general, history, archive, stock] if period else [general, stock, history, archive])
 
 
 def search_photos(query: str, count: int = 12, period: bool = True) -> list[dict[str, Any]]:
@@ -143,6 +175,8 @@ def frame_photo(photo: Any) -> Any:
 def attribution(item: dict[str, Any]) -> str:
     title = item.get("title") or "Untitled"
     creator = item.get("creator") or "unknown"
+    if item.get("license") == "fair-use":
+        return f'"{title}" from {creator} via Google Images (fair use)'
     licence = f"CC {str(item.get('license') or '').upper()} {item.get('license_version') or ''}".strip()
     if str(item.get("license")) in {"cc0", "pdm"}:
         licence = "public domain" if item.get("license") == "pdm" else "CC0"

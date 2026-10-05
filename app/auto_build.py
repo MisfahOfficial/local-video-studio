@@ -17,6 +17,9 @@ from .footage_match import detect_era, heading_subject, scene_subjects
 from .vintage_still import generate_vintage_still
 
 
+LAST_RESORT_STILLS = 10  # AI stills beyond the style's limit, at most, for scenes nothing real could fill
+
+
 class AutoBuildManager:
     def __init__(self, application: Any):
         self.app = application
@@ -66,10 +69,12 @@ class AutoBuildManager:
                              "finished scenes are kept.", filled=[], fill_failed=[])
                 return
             checked = self._check(project_id)
+            # Empty scenes, in Ishaq's order: a shot of the same item (mirrored / old TV), AI stills within the
+            # style's limit, a real shot of another item of this video, and only then a few AI stills (a soup
+            # video with six items YouTube has no footage of made 270 AI stills before this).
+            held = self._hold_empty(project_id)
             filled, failed = self._fill_missing(project_id)
-            held = self._hold_empty(project_id)  # an empty scene reuses a shot of its item, mirrored or in an old TV
-            # Last resort: an item YouTube has no footage of at all would stay black; a food-only AI still
-            # (no people) is better than a black screen, and the report says how many there are.
+            held += self._hold_empty(project_id, any_item=True)
             forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
             filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
@@ -163,7 +168,7 @@ class AutoBuildManager:
         return {"checked": result["checked"], "rejected": len(rejected) + len(inline), "emptied": emptied,
                 "error": result.get("error", "")}
 
-    def _hold_empty(self, project_id: str) -> list[int]:
+    def _hold_empty(self, project_id: str, any_item: bool = False) -> list[int]:
         """A scene with no footage of its own (and no room for an AI image) reuses an earlier shot of the SAME
         item, changed so it does not read as a repeat: mirrored the first time, inside an old TV the second
         time (Ishaq, 3 Oct). A shot never loops: one shorter than the scene plays slower (down to half speed)
@@ -203,7 +208,9 @@ class AutoBuildManager:
             duration = float(scene["end_seconds"]) - float(scene["start_seconds"])
             options = []
             for other_index, other in enumerate(scenes):
-                if other_index == index or subjects[other_index] != subjects[index]:
+                # any_item: a shot of another item of the same video (a different soup for a soup with no
+                # footage at all) is still real footage, and better than an AI still.
+                if other_index == index or (subjects[other_index] != subjects[index] and not any_item):
                     continue
                 asset = assets.get(str(other.get("selected_asset_id") or "")) or {}
                 metadata = asset.get("metadata") or {}
@@ -278,6 +285,10 @@ class AutoBuildManager:
             style_doc = load_style(self.app.paths.root, (project.get("effects") or {}).get("channel_style"))
             if style_doc:
                 extra = ai_image_rules(style_doc)
+            if beyond_limit:
+                for scene, _subject in todo[LAST_RESORT_STILLS:]:
+                    failed.append({"scene": int(scene.get("position") or 0), "error": "Needs footage: no real shot exists"})
+                todo = todo[:LAST_RESORT_STILLS]
             if style_doc and not beyond_limit:
                 assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
                 filmable = [scene for scene in scenes if not heading_subject(str(scene.get("narration") or "")) or labels]

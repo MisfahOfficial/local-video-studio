@@ -488,6 +488,9 @@ class AutoYouTubeManager:
         check_inline: bool = False,
     ) -> None:
         settings = self.settings_store.load()
+        from .photo_source import configure_google
+
+        configure_google(getattr(settings, "google_search_api_key", ""), getattr(settings, "google_search_engine_id", ""))
         # Own Drive footage and public-domain archive films first; YouTube only for what they lack.
         service = MultiSourceService(settings.youtube_api_key, settings.ffmpeg_path, settings.youtube_license_mode,
                                      drive_files=load_drive_index(self.paths.root / "drive_index.json"))

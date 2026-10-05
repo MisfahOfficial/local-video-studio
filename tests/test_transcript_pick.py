@@ -28,3 +28,24 @@ class TranscriptPickTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoogleImagesTest(unittest.TestCase):
+    def test_google_results_come_first_when_configured(self):
+        from app import photo_source
+
+        answer = {"items": [{"link": "https://x/soup.jpg", "title": "Batchelors Cup-a-Soup 1978",
+                             "displayLink": "ebay.co.uk", "image": {"width": 900, "height": 700,
+                                                                    "thumbnailLink": "https://t/s.jpg", "contextLink": "https://ebay"}},
+                            {"link": "https://x/tiny.jpg", "image": {"width": 120}}]}
+        photo_source.configure_google("key", "cx")
+        try:
+            with mock.patch.object(photo_source, "request_json", return_value=answer), \
+                 mock.patch.object(photo_source, "_openverse", return_value=[]), \
+                 mock.patch.object(photo_source, "_archive_images", return_value=[]):
+                found = photo_source.search_photos("batchelors cup-a-soup", count=5)
+            self.assertEqual([item["url"] for item in found], ["https://x/soup.jpg"])  # the tiny one is skipped
+            self.assertIn("Google Images", photo_source.attribution(found[0]))
+        finally:
+            photo_source.configure_google("", "")
+        self.assertEqual(photo_source.image_sources()[0][0], "openverse")  # without a key nothing changes
