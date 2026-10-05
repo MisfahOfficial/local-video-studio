@@ -1,0 +1,445 @@
+{
+  "_help": "C1 (Inside the Era) style from three reference videos, checked by Claude on 5 Oct 2026 (frames, shot cuts). 'all 3' = seen in every reference.",
+  "schema_version": 1,
+  "style_id": "inside_the_era_american_chains_documentary",
+  "status": "ready_for_import",
+  "channel": "c-c1-inside-the-era",
+  "name": "Inside the Era",
+  "version": 1,
+  "scope": "all_channel_videos",
+  "content_type": "american_restaurant_store_and_brand_chains_rise_and_fall",
+  "country": "US",
+  "era": "script_defined",
+  "default_era_range": "1970s-today",
+  "audience": "Americans 35+ who remember these chains, plus viewers curious why big brands disappear",
+  "mood": "curious, investigative, slightly dramatic, fast and clean",
+  "example_videos": [
+    "https://www.youtube.com/watch?v=yTcNCyDyzUk",
+    "https://www.youtube.com/watch?v=05QivHuTCn8",
+    "https://www.youtube.com/watch?v=WXJ9eBwy-_E"
+  ],
+  "reference_assets": [
+    {
+      "url": "https://www.youtube.com/watch?v=yTcNCyDyzUk",
+      "role": "channel_style_reference",
+      "do_not_copy": [
+        "specific copyrighted footage",
+        "exact narration",
+        "exact shot sequence",
+        "third-party watermarks or burned-in captions"
+      ]
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=05QivHuTCn8",
+      "role": "channel_style_reference",
+      "do_not_copy": [
+        "specific copyrighted footage",
+        "exact narration",
+        "exact shot sequence",
+        "third-party watermarks or burned-in captions"
+      ]
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=WXJ9eBwy-_E",
+      "role": "channel_style_reference",
+      "do_not_copy": [
+        "specific copyrighted footage",
+        "exact narration",
+        "exact shot sequence",
+        "third-party watermarks or burned-in captions"
+      ]
+    }
+  ],
+  "topic_inheritance": {
+    "locked_across_channel": [
+      "pacing",
+      "typography",
+      "label style",
+      "source hierarchy",
+      "transition language",
+      "quality gates"
+    ],
+    "changes_per_video": [
+      "era",
+      "products or dishes",
+      "locations",
+      "facts",
+      "archival sources",
+      "music cue"
+    ],
+    "rule": "Keep the channel's editing language consistent while selecting visuals, facts and archival material specifically for each script."
+  },
+  "pacing": {
+    "_help": "How long one visual stays on screen (seconds).",
+    "tool_support": "now",
+    "shot_seconds_min": 3.0,
+    "shot_seconds_max": 7.0,
+    "hook_shot_seconds_max": 4.0,
+    "chapter_card_seconds": "as long as the spoken heading",
+    "ingredients_card_seconds_max": 4.0,
+    "slow_down_on": [
+      "memories",
+      "emotional lines",
+      "the last line of an item"
+    ],
+    "speed_up_on": [
+      "lists of things",
+      "the hook"
+    ],
+    "_rule": "General rule (all channels): a sentence up to 7 s = one clip; longer = split into parts of 3-7 s, each from a DIFFERENT video; no clip under 3 s after the hook; cuts only at sentence/phrase boundaries so clips stay in sync with the voice."
+  },
+  "structure": {
+    "_help": "What each part of the video must do.",
+    "tool_support": "fix",
+    "hook": {
+      "show_every_item_once_as_teaser": false,
+      "show_representative_items_as_teaser": true,
+      "first_shot": "A cinematic present-day shot of the topic (a buffet line, a store aisle, a famous storefront), with no title card.",
+      "teaser_item_limit": 8,
+      "allowed_media": [
+        "item_clip",
+        "real_photo",
+        "archival_ad",
+        "product_cutout",
+        "short_fact_text"
+      ],
+      "never": [
+        "ai_image",
+        "long_text_card",
+        "slow_decorative_intro"
+      ],
+      "_if_no_hook": "General rule: if the script has no hook, the video starts directly at Item 1."
+    },
+    "chapter_card": {
+      "when": "where the script has an item heading",
+      "title_source": "heading; keep 'Number 12 -' when the script says it",
+      "style": "no card: the item name in big yellow uppercase letters with a black outline over the item's storefront or logo shot (all 3 references)",
+      "show_item_number": true
+    },
+    "each_item": {
+      "first_shot": "the chain's own storefront, sign or logo",
+      "ingredients_card": "not used",
+      "story_lines": "present-day stock of the situation (empty restaurant, closed sign, staff, diners, shopping)",
+      "history_lines": "old adverts, archive photos of the chain, its storefronts",
+      "last_shot": "the storefront, closed or still open"
+    },
+    "subscribe_reminder": {
+      "tool_support": "now",
+      "when": "once after the hook and once in the outro only",
+      "style": "white pill with like, SUBSCRIBE and bell, bottom centre; never on the food"
+    },
+    "outro": {
+      "allowed_media": [
+        "item_clip",
+        "real_photo"
+      ],
+      "show": "End on the strongest finished-item or authentic period memory shot, add one brief viewer-memory question in the V3 comment-card style, then a small subscribe reminder and a short warm fade to black; do not use a long logo animation."
+    }
+  },
+  "scene_rules": {
+    "_help": "What to show for each KIND of sentence. The tool picks the first rule that matches.",
+    "tool_support": "fix (simple words) / llm (meaning)",
+    "rules": [
+      {
+        "when_sentence_has": "the chain's name or its stores",
+        "show": "its own storefront, logo or advert"
+      },
+      {
+        "when_sentence_has": "closing, bankruptcy, decline",
+        "show": "closed stores, empty car parks, CLOSED signs, empty aisles"
+      },
+      {
+        "when_sentence_has": "food, menus, buffets",
+        "show": "close-ups of that food or a buffet line"
+      },
+      {
+        "when_sentence_has": "money, prices, sales numbers",
+        "show": "cash registers, receipts, shoppers paying, or a big number caption"
+      },
+      {
+        "when_sentence_has": "customers, families, crowds",
+        "show": "present-day diners or shoppers"
+      }
+    ]
+  },
+  "footage": {
+    "_help": "Where visuals come from, in the order the tool tries them.",
+    "tool_support": "now",
+    "order": [
+      "item_clip",
+      "item_other_clip",
+      "stock_video",
+      "real_photo",
+      "motion_graphic",
+      "ai_image"
+    ],
+    "sources_per_item": 2,
+    "max_source_minutes": 20,
+    "prefer_titles_with": [
+      "commercial",
+      "tour",
+      "walkthrough",
+      "history",
+      "inside",
+      "closing",
+      "last day",
+      "vintage commercial"
+    ],
+    "avoid_titles_with": [
+      "asmr",
+      "reaction",
+      "shorts",
+      "compilation",
+      "vertical",
+      "AI generated",
+      "podcast",
+      "mukbang",
+      "prank"
+    ],
+    "max_ai_image_share": 0.05,
+    "minimum_real_video_share_per_item": 0.65,
+    "minimum_usable_video_sources_per_item": 2,
+    "on_insufficient_real_footage": "mark item as needs_footage and block automatic final export; do not silently fill the item with AI images",
+    "source_priority": [
+      "licensed_stock",
+      "public_archive",
+      "owned_library",
+      "approved_youtube",
+      "real_photo",
+      "motion_graphic",
+      "ai_image"
+    ],
+    "_note": "Present-day stock is normal for this channel (all 3 references); it is not an old-times channel."
+  },
+  "visual_mix": {
+    "_help": "Target mix for a normal completed item. The validator may allow small changes when authentic material is scarce.",
+    "tool_support": "fix / llm",
+    "real_video_target": [
+      0.65,
+      0.8
+    ],
+    "archival_photo_target": [
+      0.15,
+      0.25
+    ],
+    "motion_graphic_target": [
+      0.05,
+      0.1
+    ],
+    "ai_image_max": 0.05,
+    "same_layout_consecutive_max": 2
+  },
+  "repetition": {
+    "_help": "Stops the video from feeling repetitive.",
+    "tool_support": "now (sources) / fix (graphics)",
+    "same_source_in_neighbouring_scenes": false,
+    "same_moment_of_a_source_twice": false,
+    "same_graphic_design_not_within_scenes": 5,
+    "max_maps_in_a_row": 1,
+    "max_photos_in_a_row": 2,
+    "_rule": "General rule (all channels): the same moment of a source never twice in the whole video; never loop a clip."
+  },
+  "photos": {
+    "_help": "Real still photos (archives, free libraries).",
+    "tool_support": "now",
+    "motion": "slow push-in or pan; never static",
+    "frame": "full-screen; product photos may use a clean cutout on a deep red, magenta, cream, or dark neutral background; no scrapbook or polaroid frame",
+    "max_share": 0.2
+  },
+  "never_show": {
+    "_help": "Anything here is refused by the clip checker.",
+    "tool_support": "fix",
+    "people": [
+      "a YouTuber talking to camera",
+      "another channel's host"
+    ],
+    "on_screen": [
+      "another creator's captions or titles",
+      "watermarks",
+      "subscribe buttons from other channels"
+    ],
+    "places": [
+      "a different chain's storefront or logo when the line names one chain",
+      "a non-American store when the line is about an American chain"
+    ],
+    "other": [
+      "a different brand than the item",
+      "generated brand logos",
+      "unnecessary generic map"
+    ]
+  },
+  "motion_graphics": {
+    "_help": "What the references show.",
+    "tool_support": "now",
+    "allowed": [
+      "item_name_caption",
+      "bold_fact",
+      "map",
+      "price",
+      "years",
+      "comment_card"
+    ],
+    "chapter_designs": [
+      "name_caption"
+    ],
+    "ingredient_designs": [],
+    "max_per_item": 2,
+    "_note": "No graphics were seen in the references; maps, prices, years and big numbers stay allowed as the tool already makes them.",
+    "wanted_but_missing": [
+      "name_caption: big yellow outlined item name over the storefront shot (the tool's chapter cards are different)"
+    ]
+  },
+  "look": {
+    "_help": "Colour and texture of the whole video.",
+    "tool_support": "now",
+    "film_look": false,
+    "grain": "none",
+    "colour": "clean modern colour; old adverts keep their own look",
+    "palette": {
+      "caption_yellow": "#F5E033",
+      "outline": "#000000",
+      "text": "#FFFFFF"
+    },
+    "vignette": "none",
+    "letterbox_bars": false
+  },
+  "transitions": {
+    "_help": "How one shot changes to the next.",
+    "tool_support": "now",
+    "default": "hard cut",
+    "into_chapter_card": "hard cut or very short dissolve; never insert an empty frame",
+    "allowed": [
+      "hard cut",
+      "very short dissolve"
+    ],
+    "never": [
+      "spins",
+      "zoom blur",
+      "glitch",
+      "flashy social-media transitions",
+      "white flash",
+      "black gap",
+      "empty transition frame"
+    ]
+  },
+  "text": {
+    "_help": "On-screen words (captions, cards, labels).",
+    "tool_support": "now (captions) / fix (fitting, contrast)",
+    "captions": {
+      "show": true,
+      "position": "bottom; the item name larger in the lower middle",
+      "animation": "quick pop",
+      "max_words_per_line": 6,
+      "font": "heavy rounded sans (Montserrat ExtraBold-like)",
+      "colour": "yellow with a black outline",
+      "case": "Title Case for phrases, UPPERCASE for item names",
+      "mode": "few: key facts only, about every 15-30 s",
+      "safe_margin_percent": 6,
+      "minimum_size_1080p": 48
+    },
+    "long_text": "shrink then wrap to two lines, never cut",
+    "highlight_word": {
+      "style": "yellow text, black outline",
+      "must_be_readable": true
+    },
+    "key_phrase_pop_ups": "about every 15-30 s",
+    "cursive_rule": "never",
+    "source_label": "Not used on ordinary footage; a small unobtrusive archive credit may be shown only when the licence requires it.",
+    "language": "en-US"
+  },
+  "ai_images": {
+    "_help": "Only when nothing real exists. Prompts follow these rules.",
+    "tool_support": "fix",
+    "look": "realistic present-day or period photo of the exact chain or food, no logos generated",
+    "vary_between": [
+      "dish close-up",
+      "hands at work (no faces)",
+      "table spread",
+      "single ingredient",
+      "kitchen detail without people"
+    ],
+    "people": "no people",
+    "never": [
+      "people or faces",
+      "full kitchen wide shot",
+      "text or logos",
+      "modern objects"
+    ]
+  },
+  "checker": {
+    "_help": "Extra rules the AI checker applies to every clip, besides 'never_show'.",
+    "tool_support": "now (dish) / fix (era)",
+    "reject_if": [
+      "shows a different chain, brand or store than the item",
+      "text burned into the picture by another channel",
+      "a person talking to camera",
+      "a very dark / nearly black shot"
+    ],
+    "accept_if": [
+      "the item's own storefront, logo, product or advert",
+      "present-day stock that matches a story line (closing, shopping, eating)"
+    ],
+    "warn_if": [
+      "the same source dominates more than 20 seconds",
+      "the same composition appears three times in ten scenes",
+      "a historical claim is illustrated only by generated imagery"
+    ]
+  },
+  "quality_gates": {
+    "_help": "Final automatic checks before the video may be exported.",
+    "tool_support": "fix",
+    "block_export_if": [
+      "an item has no real video and no approved exception",
+      "real video share for an item is below 0.65",
+      "a selected clip shows the wrong dish",
+      "a historical scene contains an obvious modern device",
+      "generated imagery contains a brand logo",
+      "a caption is clipped, outside safe margins, or below minimum size",
+      "a transition contains a blank frame",
+      "the same few seconds of a clip loop/repeat"
+    ],
+    "approved_exception_requires": "a saved reason plus manual approval for genuinely unavailable archival subjects"
+  },
+  "parallel_processing": {
+    "_help": "Bounded concurrency for speed without increasing provider blocks.",
+    "tool_support": "fix",
+    "plan_sections_in_parallel": 4,
+    "stock_searches_in_parallel": 6,
+    "clip_checks_in_parallel": 4,
+    "ai_images_in_parallel": 2,
+    "youtube_downloads_in_parallel": 1,
+    "download_each_source_once_then_cut_locally": true,
+    "reuse_cached_searches_and_downloads": true,
+    "deduplicate_source_downloads": true
+  },
+  "sound": {
+    "_help": "Not used by the tool yet; written down for later.",
+    "tool_support": "later",
+    "music": "modern documentary pulse, light suspense",
+    "sound_effects": "subtle whoosh or impact on major yellow fact overlays and quiet archival texture where appropriate; no page-turn scrapbook effects or cartoon pops",
+    "voice_loudness_lufs": -14,
+    "true_peak_dbfs_max": -1.0
+  },
+  "export": {
+    "_help": "Final file.",
+    "tool_support": "now",
+    "resolution": "1920x1080",
+    "fps": 30,
+    "also_export": [
+      "premiere project",
+      "capcut project"
+    ]
+  },
+  "reference_findings": {
+    "shot_length_seconds": {
+      "median": "4.5-7 (all 3)",
+      "shortest_quarter": "3-4",
+      "hook": "3-5"
+    },
+    "chapters": "no chapter-card graphic: the item name appears as big yellow uppercase text with a black outline over the item's own exterior or logo shot ('GOLDEN CORRAL', 'NUMBER 12 - SILO') (all 3)",
+    "captions": "few: short yellow bold phrases at the bottom with a black outline (all 3)",
+    "footage": "present-day cinematic stock (buffet trays, chefs, diners, store aisles, a CLOSED sign, laptops) for story lines, plus the brand's own storefronts, logos and old TV adverts (all 3)",
+    "graphics": "none seen in the sampled frames (no maps, price cards or timelines)",
+    "look": "clean modern colour, no film look, no grain"
+  }
+}
