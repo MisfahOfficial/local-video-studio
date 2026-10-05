@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-VARIANTS = ("flip", "tv")
+VARIANTS = ("flip",)  # the old-TV frame looked dated (Ishaq, 5 Oct): a reused shot only comes back mirrored
 # The screen of the television, as shares of the frame (left, top, right, bottom); knobs sit on the right.
 SCREEN = (0.075, 0.095, 0.755, 0.905)
 

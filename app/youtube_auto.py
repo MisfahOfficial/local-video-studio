@@ -1460,18 +1460,20 @@ class AutoYouTubeManager:
                 photo_subject = subject or (run.section_pools[0][1] or run.section_pools[0][0] if run.section_pools else run.theme)
                 # Ishaq's order: the item's other clip, stock video, a real photo (it moves on the timeline),
                 # a motion graphic, and an AI image only when nothing else exists.
+                # Ishaq's order (5 Oct): the item's other clips, real photos (Google first), stock video,
+                # a text graphic, and an AI still only within the limit.
                 if not is_hook and self._section_footage(run, scene, position, subject, recipe):
                     with run.lock:
                         run.completed += 1
                         run.section_reuse.append(position)
-                elif self._stock_video(run, scene, position, scene_text, subject, queries):
-                    with run.lock:
-                        run.completed += 1
-                        run.stock.append(position)
                 elif self._real_photo(run, scene, position, scene_text, photo_subject, queries):
                     with run.lock:
                         run.completed += 1
                         run.photos.append(position)
+                elif self._stock_video(run, scene, position, scene_text, subject, queries):
+                    with run.lock:
+                        run.completed += 1
+                        run.stock.append(position)
                 elif not is_hook and self._fallback_graphic(run, scene, position):
                     with run.lock:
                         run.completed += 1

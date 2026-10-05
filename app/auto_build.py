@@ -232,9 +232,12 @@ class AutoBuildManager:
                 options.append(((neighbour, count, room < duration, -abs(other_index - index)), other, asset, start, room, neighbour))
             if not options:
                 continue
+            options = [option for option in options if not option[5]]  # never right next to its original
+            if not options:
+                continue
             _rank, other, asset, start, room, neighbour = min(options, key=lambda item: item[0])
             count = reuses.get(str(asset["id"]), 0)
-            variant = "tv" if neighbour else VARIANTS[count]
+            variant = VARIANTS[min(count, len(VARIANTS) - 1)]
             copy = db.add_asset(
                 project_id=project_id, scene_id=str(scene["id"]),
                 candidate_index=db.next_asset_candidate_index(str(scene["id"])),

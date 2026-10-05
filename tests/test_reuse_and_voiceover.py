@@ -56,14 +56,14 @@ class ReusedShotTest(unittest.TestCase):
 
     def test_empty_scenes_reuse_a_shot_of_their_item_changed_never_looped(self):
         held = self._manager()._hold_empty(self.project["id"])
-        self.assertEqual(held, [1, 4, 5])  # the heading (a name-label channel's first shot of the item) too
+        self.assertEqual(held, [1, 4])  # the heading (a name-label channel's first shot of the item) too
         assets = {asset["id"]: asset for asset in self.db.list_assets(self.project["id"])}
         scenes = self.db.list_scenes(self.project["id"])
-        fourth, fifth = (assets[scenes[index]["selected_asset_id"]]["metadata"] for index in (3, 4))
+        fourth = assets[scenes[3]["selected_asset_id"]]["metadata"]
         # Scene 1 took blue (mirrored). Scene 4 is next to scene 3 (blue): it takes the farther red shot, mirrored.
         self.assertEqual((fourth["video_id"], fourth["variant"]), ("red", "flip"))
-        # Scene 5: blue is its neighbour and red was already reused once, so red comes back in the old TV.
-        self.assertEqual((fifth["video_id"], fifth["variant"]), ("red", "tv"))
+        # Scene 5: blue is its neighbour and red was already reused once: no copy (no old-TV frame any more).
+        self.assertIsNone(scenes[4]["selected_asset_id"])
         self.assertGreaterEqual(fourth["speed"], 0.5)
 
     def test_a_shot_the_checker_refused_is_never_reused(self):
@@ -80,8 +80,8 @@ class ReusedShotTest(unittest.TestCase):
     def test_reused_shots_are_not_checked_again(self):
         from app.reuse_look import variant_of
 
-        self.assertEqual(variant_of({"metadata": json.dumps({"variant": "tv", "speed": 0.3})}),
-                         {"variant": "tv", "speed": 0.5})
+        self.assertEqual(variant_of({"metadata": json.dumps({"variant": "flip", "speed": 0.3})}),
+                         {"variant": "flip", "speed": 0.5})
         self.assertEqual(variant_of({"metadata": {}}), {"variant": "", "speed": 1.0})
 
 
