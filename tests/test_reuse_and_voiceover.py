@@ -171,17 +171,22 @@ class V3StyleTest(unittest.TestCase):
 
 @unittest.skipUnless(FFMPEG, "ffmpeg is needed")
 class NeverEmptyTest(ReusedShotTest):
-    def test_no_scene_stays_empty_when_a_real_picture_exists(self):
-        photo = self.folder / "tin.jpg"
+    def test_empty_scenes_get_a_text_card_and_nothing_is_shown_twice(self):
         from PIL import Image
 
+        from app.auto_build import AutoBuildManager
+
+        photo = self.folder / "tin.jpg"
         Image.new("RGB", (64, 36), (200, 120, 40)).save(photo)
         asset = self.db.add_asset(project_id=self.project["id"], scene_id=self.scenes[0]["id"], candidate_index=0,
                                   media_kind="image", provider="photo", model="t", local_path=str(photo),
                                   remote_url=None, provider_asset_id="tin", cost=0.0, metadata={})
         self.db.select_asset(self.scenes[0]["id"], asset["id"])
-        covered = self._manager()._never_empty(self.project["id"])
-        # Scene 4 shows the photo again; scene 5 sits next to it, and a clip is never shown twice, so it waits.
-        self.assertEqual(covered, [4])
-        kinds = [asset["provider"] for asset in self.db.list_assets(self.project["id"]) if (asset["metadata"] or {}).get("reused_asset")]
-        self.assertEqual(kinds, ["photo"])
+        app = SimpleNamespace(db=self.db, settings=SimpleNamespace(load=lambda: SimpleNamespace(ffmpeg_path=FFMPEG)),
+                              paths=SimpleNamespace(project_dir=lambda project_id: self.folder / project_id))
+        covered = AutoBuildManager(app)._never_empty(self.project["id"])
+        self.assertEqual(covered, [4, 5])
+        assets = {asset["id"]: asset for asset in self.db.list_assets(self.project["id"])}
+        chosen = [assets[scene["selected_asset_id"]] for scene in self.db.list_scenes(self.project["id"])]
+        self.assertEqual([asset["model"] for asset in chosen[3:]], ["text_card", "text_card"])
+        self.assertFalse(any((asset["metadata"] or {}).get("reused_asset") for asset in assets.values()))

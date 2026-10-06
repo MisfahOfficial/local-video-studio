@@ -74,8 +74,8 @@ class AutoBuildManager:
             filled, failed = self._fill_missing(project_id)
             forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
             filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
-            # Nothing may stay black (106 empty scenes in the 6 Oct soup test): a real photo of the same item again,
-            # with its own slow move. Never a clip twice, never a picture of another item.
+            # Nothing may stay black (106 empty scenes in the 6 Oct soup test): the scene's own words as a text card
+            # over a blurred real picture of its item. Nothing is ever shown twice.
             covered = self._never_empty(project_id)
             failed = [item for item in failed if item["scene"] not in covered]
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
@@ -83,7 +83,7 @@ class AutoBuildManager:
                 report["checks"].append({"rule": "AI images beyond the limit (no footage exists for these scenes)",
                                          "value": f"{len(forced)} (scenes {forced[:12]})", "ok": False})
             if report is not None and covered:
-                report["checks"].append({"rule": "Scenes showing a photo of their item a second time (no footage found)",
+                report["checks"].append({"rule": "Scenes shown as a text card of their sentence (no footage found)",
                                          "value": f"{len(covered)} (scenes {covered[:12]})", "ok": True})
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked,
                          style_report=report)
@@ -260,55 +260,44 @@ class AutoBuildManager:
         return held
 
     def _never_empty(self, project_id: str) -> list[int]:
-        """Last pass: every scene still empty takes a real photo of its own item (never the same one as a neighbour),
-        else a real clip of its own item mirrored. Returns the positions."""
+        """Last pass: a scene still empty shows its own sentence as a text card over a dark, blurred real
+        picture of its item. Nothing is shown twice (Ishaq, 6 Oct: the same packet photo came back four
+        times). Returns the positions."""
+        from .text_card import render_text_card
+
         db = self.app.db
         scenes = db.list_scenes(project_id)
         subjects = scene_subjects(scenes, "")
         assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
-        clips = {str(clip["scene_id"]): clip for clip in db.list_timeline_clips(project_id)}
-
-        def chosen(index: int) -> dict[str, Any]:
-            return assets.get(str(scenes[index].get("selected_asset_id") or "")) or {}
-
         covered: list[int] = []
         for index, scene in enumerate(scenes):
             if scene.get("selected_asset_id"):
                 continue
-            near = {str(chosen(other).get("local_path") or "") for other in (index - 1, index + 1) if 0 <= other < len(scenes)}
-
-            def options(kind: str, same_item: bool) -> list[dict[str, Any]]:
-                found = []
-                for other in range(len(scenes)):
-                    asset = chosen(other)
-                    if (asset.get("provider") == kind and Path(str(asset.get("local_path"))).is_file()
-                            and str(asset.get("local_path")) not in near
-                            and (not same_item or subjects[other] == subjects[index])):
-                        found.append(asset)
-                return found
-
-            # Only the scene's own item (Ishaq, 6 Oct): never a picture or clip of another item.
-            picks = options("photo", True)  # photos only: a clip is never shown twice
-            if not picks:
+            backdrop = None
+            for other in range(len(scenes)):
+                asset = assets.get(str(scenes[other].get("selected_asset_id") or "")) or {}
+                if (subjects[other] == subjects[index] and asset.get("provider") == "photo"
+                        and Path(str(asset.get("local_path"))).is_file()):
+                    backdrop = Path(str(asset["local_path"]))
+                    break
+            position = int(scene.get("position") or 0)
+            destination = (self.app.paths.project_dir(project_id) / "assets" / "graphics"
+                           / f"scene-{position:04d}-text-{uuid.uuid4().hex[:6]}.jpg")
+            try:
+                render_text_card(str(scene.get("narration") or ""), destination, backdrop)
+            except Exception:
                 continue
-            donor = picks[(index * 7) % len(picks)]  # spread the repeats over the item's pictures
-            metadata = {**(donor.get("metadata") or {}), "reused_asset": str(donor["id"]), "needs_review": True}
-            if donor.get("media_kind") == "video":
-                metadata["variant"] = "flip"
-            copy = db.add_asset(
+            asset = db.add_asset(
                 project_id=project_id, scene_id=str(scene["id"]),
                 candidate_index=db.next_asset_candidate_index(str(scene["id"])),
-                media_kind=str(donor["media_kind"]), provider=str(donor["provider"]), model=str(donor.get("model") or ""),
-                local_path=str(donor["local_path"]), remote_url=donor.get("remote_url"),
-                provider_asset_id=donor.get("provider_asset_id"), cost=0.0, metadata=metadata,
+                media_kind="image", provider="graphic", model="text_card", local_path=str(destination),
+                remote_url=None, provider_asset_id=None, cost=0.0,
+                metadata={"graphic": "text_card", "needs_review": True},
             )
-            db.select_asset(str(scene["id"]), str(copy["id"]))
-            mine = clips.get(str(scene["id"]))
-            if mine and donor.get("media_kind") == "video":
-                db.set_timeline_clip_duration(str(mine["id"]), float(mine["end_seconds"]) - float(mine["start_seconds"]), 0.0)
-            assets[str(copy["id"])] = copy
-            scene["selected_asset_id"] = copy["id"]
-            covered.append(int(scene.get("position") or 0))
+            db.select_asset(str(scene["id"]), str(asset["id"]))
+            if str(scene.get("caption_text") or "").strip():
+                db.update_scene(str(scene["id"]), {"caption_text": ""})  # the card already says it
+            covered.append(position)
         return covered
 
     def _fill_missing(self, project_id: str, beyond_limit: bool = False) -> tuple[list[int], list[dict[str, Any]]]:
@@ -364,6 +353,9 @@ class AutoBuildManager:
             destination = (self.app.paths.project_dir(project_id) / "assets" / "stills"
                            / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg")
             try:
+                from .vintage_still import kind_of
+
+                subject = kind_of(subject, str(project.get("name") or "") + " " + str(project.get("script") or "")[:300])
                 metadata = generate_vintage_still(settings, str(scene.get("narration") or ""), subject, era, destination,
                                                   country=country, extra=extra)
             except Exception as error:

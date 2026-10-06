@@ -369,6 +369,9 @@ def ingredient_list(scene_text: str) -> list[str]:
             negated_until = index + 5
         if index <= negated_until:
             continue
+        # The item itself is not an ingredient ("Crunchy oat biscuits" is not oats + biscuits - V3, 6 Oct).
+        if word in ITEM_KINDS or word + "s" in ITEM_KINDS:
+            continue
         if word in (INGREDIENTS | BASIC_INGREDIENTS) - {"sweet", "sour", "cream", "cheese", "cottage", "soup"}:
             name = DISPLAY.get(word, word)
             if name not in found:

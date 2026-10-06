@@ -55,6 +55,15 @@ _PEOPLE_WORDS = re.compile(
     r"cooks?|bakers?|your|her|his|their)\b", re.IGNORECASE)
 
 
+def kind_of(subject: str, context: str) -> str:
+    """'gypsy creams' + a biscuits video -> 'gypsy creams biscuits': the image model does not know brand names
+    and drew a cake (V3, 6 Oct)."""
+    from .footage_match import item_kind, names_a_kind
+
+    kind = item_kind(context)
+    return f"{subject} {kind}" if subject and kind and not names_a_kind(subject) else subject
+
+
 def still_prompt(scene_text: str, subject: str, era: str, people: bool = True, country: str = "US",
                  shot: int | None = None) -> str:
     """Every channel (Ishaq, 3 Oct): AI stills show the FOOD, never people. "Your grandmother would mix..."

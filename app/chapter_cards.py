@@ -254,12 +254,17 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
         number = int(numbered.group(1)) if numbered else count
         title = _NUMBERING.sub("", raw).strip(" .:")
         background = None
-        # The section's own footage (the scenes right after the heading) sets the mood.
-        for offset in (1, 2, 3, 0):
+        # The item's own real picture: a photo of it (the packet) first, else its first real clip. Never an
+        # ingredient card, a map or an AI still (V3 tea-time biscuits showed tarts and a map of the UK).
+        options = []
+        for offset in (1, 2, 3, 4, 5, 6, 7, 8, 0):
             neighbour = by_position.get(int(scene["position"]) + offset)
+            if offset and neighbour is not None and heading_subject(str(neighbour.get("narration") or "")):
+                break  # the next item starts
             asset = assets.get(str((neighbour or {}).get("selected_asset_id") or ""))
-            if not asset or asset.get("provider") == "chapter" or not Path(str(asset.get("local_path"))).is_file():
-                continue
+            if asset and asset.get("provider") in ("photo", "youtube", "stock") and Path(str(asset.get("local_path"))).is_file():
+                options.append(({"photo": 0, "youtube": 1, "stock": 2}[str(asset["provider"])], offset, asset))
+        for _rank, _offset, asset in sorted(options, key=lambda item: (item[0], item[1])):
             local = Path(str(asset["local_path"]))
             if asset.get("media_kind") == "video":
                 background = video_frame(local, 1.0, ffmpeg_path)

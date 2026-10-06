@@ -1955,6 +1955,10 @@ class AutoYouTubeManager:
 
             effects = (self.db.get_project(project_id) or {}).get("effects") or {}
             country = str(kit_for(self.paths.root, get_style(effects.get("channel_style")).key).get("country") or "US")
+            from .vintage_still import kind_of
+
+            project = self.db.get_project(project_id) or {}
+            subject = kind_of(subject, str(project.get("name") or "") + " " + str(project.get("script") or "")[:300])
             metadata = generate_vintage_still(settings, scene_text, subject, era, destination, country=country, extra=extra)
         except ProviderError as error:
             raise ProviderError(
