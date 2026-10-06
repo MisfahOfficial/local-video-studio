@@ -181,5 +181,7 @@ class NeverEmptyTest(ReusedShotTest):
                                   remote_url=None, provider_asset_id="tin", cost=0.0, metadata={})
         self.db.select_asset(self.scenes[0]["id"], asset["id"])
         covered = self._manager()._never_empty(self.project["id"])
-        self.assertEqual(covered, [4, 5])
-        self.assertTrue(all(scene["selected_asset_id"] for scene in self.db.list_scenes(self.project["id"])))
+        # Scene 4 shows the photo again; scene 5 sits next to it, and a clip is never shown twice, so it waits.
+        self.assertEqual(covered, [4])
+        kinds = [asset["provider"] for asset in self.db.list_assets(self.project["id"]) if (asset["metadata"] or {}).get("reused_asset")]
+        self.assertEqual(kinds, ["photo"])

@@ -69,24 +69,22 @@ class AutoBuildManager:
                              "finished scenes are kept.", filled=[], fill_failed=[])
                 return
             checked = self._check(project_id)
-            # Empty scenes, in Ishaq's order: a shot of the same item (mirrored / old TV), AI stills within the
-            # style's limit, a real shot of another item of this video, and only then a few AI stills (a soup
-            # video with six items YouTube has no footage of made 270 AI stills before this).
-            held = self._hold_empty(project_id)
+            # Empty scenes: AI stills within the style's limit, then at most a few more. A clip is never used twice,
+            # not even mirrored (Ishaq, 6 Oct: "DO NOT ADD THE REPEATED CLIP").
             filled, failed = self._fill_missing(project_id)
             forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
             filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
             # Nothing may stay black (106 empty scenes in the 6 Oct soup test): a real photo of the same item again,
-            # else a real clip of the same item mirrored. Never a picture of another item.
+            # with its own slow move. Never a clip twice, never a picture of another item.
             covered = self._never_empty(project_id)
             failed = [item for item in failed if item["scene"] not in covered]
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
             if report is not None and forced:
                 report["checks"].append({"rule": "AI images beyond the limit (no footage exists for these scenes)",
                                          "value": f"{len(forced)} (scenes {forced[:12]})", "ok": False})
-            if report is not None and held:
-                report["checks"].append({"rule": "Scenes reusing a shot of their item, mirrored or in an old TV (no footage found)",
-                                         "value": f"{len(held)} (scenes {held[:12]})", "ok": True})
+            if report is not None and covered:
+                report["checks"].append({"rule": "Scenes showing a photo of their item a second time (no footage found)",
+                                         "value": f"{len(covered)} (scenes {covered[:12]})", "ok": True})
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked,
                          style_report=report)
             # After each video the AI designs one new chapter look and one new ingredients look for the
@@ -290,8 +288,7 @@ class AutoBuildManager:
                 return found
 
             # Only the scene's own item (Ishaq, 6 Oct): never a picture or clip of another item.
-            picks = (options("photo", True)
-                     or [asset for asset in options("youtube", True) if (asset.get("metadata") or {}).get("checker") != "refused"])
+            picks = options("photo", True)  # photos only: a clip is never shown twice
             if not picks:
                 continue
             donor = picks[(index * 7) % len(picks)]  # spread the repeats over the item's pictures
