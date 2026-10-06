@@ -49,6 +49,8 @@ class StudioSettings:
         for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key", "pexels_api_key",
                     "anthropic_api_key", "pollinations_token", "ai33_api_key", "google_search_api_key", "serper_api_key"):
             data[f"{key}_set"] = bool(data.pop(key))
+        # A Google key pasted into the Claude field is not a Claude key: say "not connected" (Ishaq, 6 Oct).
+        data["anthropic_api_key_set"] = data["anthropic_api_key_set"] and self.anthropic_api_key.strip().startswith("sk-ant-")
         return data
 
 
