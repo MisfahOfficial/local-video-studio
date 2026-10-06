@@ -114,7 +114,10 @@ def fact_moment(text: str) -> dict[str, Any] | None:
 def moment_for(text: str, era: str = "") -> dict[str, Any] | None:
     """The one extra graphic a sentence calls for, or None."""
     places = find_places(text)
-    if len(places) >= 2 or (places and re.search(r"\b(from|in|across|all over|throughout)\b", text, re.IGNORECASE)):
+    # A map only when the places matter: two or more of them, or one place with movement across it ("spread
+    # across Scotland"). "Scottish families bought..." alone made two Scotland maps in one item (6 Oct).
+    moving = re.search(r"\b(across|all over|throughout|spread|travel\w*|route|from \w+ to)\b", text, re.IGNORECASE)
+    if len({(place[2], place[3]) for place in places}) >= 2 or (places and moving):  # "Scottish" + "Scotland" is one place
         country = max({place[1] for place in places}, key=lambda code: sum(place[1] == code for place in places))
         return {"type": "map", "country": country,
                 "places": [{"name": DISPLAY.get(name, name.title()), "lon": lon, "lat": lat}
@@ -135,6 +138,9 @@ def moment_for(text: str, era: str = "") -> dict[str, Any] | None:
     return None
 
 
+MAX_MAPS = 3  # maps per video: a map only when it is needed
+
+
 def plan_moments(scenes: list[dict[str, Any]], era: str = "", skip: set[str] | None = None,
                  comment_gap_seconds: float = 240.0) -> dict[str, dict[str, Any]]:
     """Scene id -> extra graphic. At most one of each kind per section, and question cards spaced out,
@@ -145,6 +151,7 @@ def plan_moments(scenes: list[dict[str, Any]], era: str = "", skip: set[str] | N
     chosen: dict[str, dict[str, Any]] = {}
     section_used: set[str] = set()
     last_comment = -1e9
+    maps_shown: set[tuple[str, ...]] = set()
     # Whole sentences, not scenes: with short shots "throughout the 1950s / to the 1990s" sits in two scenes
     # and neither alone shows a span of years (the V2 test got one graphic in five minutes).
     sentences: list[list[dict[str, Any]]] = []
@@ -174,6 +181,11 @@ def plan_moments(scenes: list[dict[str, Any]], era: str = "", skip: set[str] | N
         moment = moment_for(text, era)
         if not moment or moment["type"] in section_used:
             continue
+        if moment["type"] == "map":
+            shown = tuple(sorted(place["name"] for place in moment.get("places") or []))
+            if shown in maps_shown or len(maps_shown) >= MAX_MAPS:
+                continue  # the same map again, or enough maps in this video
+            maps_shown.add(shown)
         # The graphic takes the sentence's longest shot (a short one would cut its animation off).
         scene = max(usable, key=lambda item: float(item.get("end_seconds") or 0) - float(item.get("start_seconds") or 0))
         start = float(scene.get("start_seconds") or 0)

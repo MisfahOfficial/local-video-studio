@@ -103,3 +103,26 @@ class ItemKindTest(unittest.TestCase):
         self.assertFalse(names_a_kind("Royal Scot"))
         self.assertTrue(names_a_kind("Heinz Kidney Soup"))
         self.assertTrue(names_a_kind("Yo-Yo Biscuits"))
+
+
+class BiscuitsReviewTest(unittest.TestCase):
+    def test_text_cards_never_end_on_a_dangling_word(self):
+        from app.text_card import card_phrase
+
+        self.assertEqual(card_phrase("The texture was so delicate the biscuits crumbled if"),
+                         "The texture was so delicate the biscuits crumbled")
+        self.assertEqual(card_phrase("Then McVities reduced the butter content and changed the"),
+                         "Then McVities reduced the butter content and changed")
+
+    def test_a_map_only_when_places_matter(self):
+        from app.graphic_moments import moment_for
+
+        self.assertIsNone((moment_for("Scottish families bought Royal Scot in Scotland every week.") or {}).get("type") == "map" or None)
+        found = moment_for("It spread from Scotland to Wales within a year.")
+        self.assertEqual((found or {}).get("type"), "map")
+
+    def test_ingredient_cards_only_for_how_it_is_made(self):
+        from app.youtube_auto import RECIPE_VERB
+
+        self.assertIsNone(RECIPE_VERB.search("crunchier oat biscuits with more butter and less sugar"))
+        self.assertIsNotNone(RECIPE_VERB.search("She would mix flour, butter and sugar"))

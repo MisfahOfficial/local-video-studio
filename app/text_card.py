@@ -14,16 +14,21 @@ FONTS = ("/System/Library/Fonts/Supplemental/Impact.ttf", "/System/Library/Fonts
          "/System/Library/Fonts/Helvetica.ttc")
 
 
-def card_phrase(sentence: str, limit: int = 9) -> str:
-    """The sentence's key phrase (the caption maker's choice), else its first words."""
-    try:
-        from .key_captions import key_phrase
+TRAILING = {"the", "a", "an", "and", "or", "but", "if", "of", "to", "in", "on", "for", "with", "by", "at", "as",
+            "that", "which", "when", "than", "their", "his", "her", "its", "was", "were", "is", "became", "because"}
 
-        phrase = key_phrase(sentence)
-    except Exception:
-        phrase = ""
-    words = (phrase or sentence).split()
-    return " ".join(words[:limit]).strip(" ,.;:-")
+
+def card_phrase(sentence: str, limit: int = 12) -> str:
+    """A whole thought, never one cut in the middle ("...THE BISCUITS CRUMBLED IF" - 6 Oct): the sentence when
+    it is short, else its first clause, else its first words without a dangling 'the/and/if' at the end."""
+    text = " ".join(sentence.split()).strip()
+    words = text.split()
+    if len(words) > limit:
+        clause = re.split(r"[,;:\u2014]| - ", text)[0].split()
+        words = clause if 4 <= len(clause) <= limit else words[:limit]
+    while len(words) > 3 and re.sub(r"[^\w']", "", words[-1]).lower() in TRAILING:
+        words = words[:-1]
+    return " ".join(words).strip(" ,.;:-\u2014")
 
 
 def _font(size: int) -> Any:

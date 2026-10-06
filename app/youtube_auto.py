@@ -313,7 +313,10 @@ class _Run:
     gemini_none: set[str] = field(default_factory=set)  # scenes where Gemini found no option acceptable
     pick_calls: int = 0
     pick_rows: int = 0
-    item_kind: str = ""  # what the video's items are ("biscuits"), added to names that could mean something else
+    item_kind: str = ""
+    # (item, video) -> clips of that video already in the item: at most ITEM_SOURCE_CAP (Ishaq, 6 Oct: the same
+    # sofa video of Toffypops filled ten scenes of its item).
+    item_uses: dict[tuple[str, str], int] = field(default_factory=dict)  # what the video's items are ("biscuits"), added to names that could mean something else
     pick_log: list[dict[str, Any]] = field(default_factory=list)
     pick_error: str = ""
     name_labels: bool = False  # headings get the item's own footage plus an orange name label (no chapter card)
@@ -334,6 +337,12 @@ def _seen_title(item: dict[str, Any], seen_titles: list[set[str]]) -> bool:
     )
 
 
+# An ingredients card only where the sentence says how the item is made ("mix flour, butter and sugar"), not
+# where it describes it ("crunchier oat biscuits with more butter and less sugar" - 6 Oct).
+RECIPE_VERB = re.compile(r"\b(mix\w*|stir\w*|whisk\w*|beat|beaten|fold\w*|melt\w*|combin\w*|add\w*|blend\w*|"
+                         r"knead\w*|rub\w*|cream(?:ed|ing)|bake[sd]?|baking|pour\w*|simmer\w*|boil\w*|roll(?:ed|ing)?)\b",
+                         re.IGNORECASE)
+ITEM_SOURCE_CAP = 2  # clips of one source video in one item
 DARK_LUMA = 38  # average brightness (0-255): the V2 test's near-black 7:49 shot was 35, the next darkest clip 41
 
 
@@ -574,7 +583,8 @@ class AutoYouTubeManager:
         cards_on = profile.recipe_cards and kit.get("ingredient_cards", True)
         carded: set[str] = set()
         for item in all_scenes if cards_on else []:
-            if ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"])):
+            if (ingredient_list(str(item["narration"])) and not heading_subject(str(item["narration"]))
+                    and RECIPE_VERB.search(str(item["narration"]))):
                 # One ingredients card per item: the item's other ingredient lines stay footage of the cooking.
                 section = run.subject_by_id.get(str(item["id"]), "")
                 if section in carded or str(item["id"]) in run.hook_ids:
@@ -944,7 +954,9 @@ class AutoYouTubeManager:
                 if moment is None:
                     continue
                 start, topic_score, score = moment
-                if len(sources) > 1 and picks.get(video_id, 0) >= share_cap:
+                if picks.get(video_id, 0) >= ITEM_SOURCE_CAP:
+                    score -= 1.0  # an item takes at most two clips of one video; others go to photos instead
+                elif len(sources) > 1 and picks.get(video_id, 0) >= share_cap:
                     score -= 0.25  # no source carries more than about half of an item when others exist
                 if previous and previous[0] == video_id:
                     if (run.style_rules or {}).get("no_neighbour_repeat"):
@@ -1238,6 +1250,9 @@ class AutoYouTubeManager:
                         run.check_rejected.append(scene_id)
                     if source:
                         run.scene_exclude.setdefault(scene_id, set()).add(source)
+                        key = (run.subject_by_id.get(scene_id, run.topic), source)
+                        if run.item_uses.get(key, 0) > 0:
+                            run.item_uses[key] -= 1
                     position = int(scene.get("position") or 0)
                     if run.by_position.get(position) == source:
                         run.by_position.pop(position, None)
@@ -1404,8 +1419,11 @@ class AutoYouTubeManager:
                     neighbours = {run.by_position.get(position - 1), run.by_position.get(position + 1)}
                     if video_id in neighbours and (not planned or (run.style_rules or {}).get("no_neighbour_repeat")):
                         continue  # the same source in neighbouring scenes may repeat a shot (and the style forbids it)
+                    if not is_hook and run.item_uses.get((subject, video_id), 0) >= ITEM_SOURCE_CAP:
+                        continue  # this video already has two clips in this item
                     run.used.setdefault(video_id, []).append(float(start_time or 0))
                     run.by_position[position] = video_id
+                    run.item_uses[(subject, video_id)] = run.item_uses.get((subject, video_id), 0) + 1
                 destination = (
                     self.paths.project_dir(run.project_id) / "assets" / "youtube"
                     / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4"
@@ -1438,6 +1456,8 @@ class AutoYouTubeManager:
                     with run.lock:
                         if run.by_position.get(position) == video_id:
                             run.by_position.pop(position, None)
+                        if not is_hook and run.item_uses.get((subject, video_id), 0) > 0:
+                            run.item_uses[(subject, video_id)] -= 1
             else:
                 if is_hook and not teasers_only and run.teasers.get(str(scene["id"])):
                     # The sentence's clips all cut too fast or failed a check: a teaser shot instead.
@@ -1555,6 +1575,8 @@ class AutoYouTubeManager:
         moment = moment_for(str(scene.get("narration") or ""), run.era)
         if not moment or moment["type"] not in allowed:
             return False
+        if moment["type"] == "map":
+            return False  # maps are planned once per place for the whole video, never as a filler
         return self._extra_graphic(run, scene, position, moment)
 
     def _section_footage(self, run: "_Run", scene: dict[str, Any], position: int, subject: str, recipe: str) -> bool:
@@ -1588,8 +1610,11 @@ class AutoYouTubeManager:
                         continue
                     if video_id in {run.by_position.get(position - 1), run.by_position.get(position + 1)}:
                         break
+                    if run.item_uses.get((subject, video_id), 0) >= ITEM_SOURCE_CAP:
+                        break  # two clips of this video in the item already
                     run.used.setdefault(video_id, []).append(float(start))
                     run.by_position[position] = video_id
+                    run.item_uses[(subject, video_id)] = run.item_uses.get((subject, video_id), 0) + 1
                 destination = (self.paths.project_dir(run.project_id) / "assets" / "youtube"
                                / f"scene-{position:04d}-{uuid.uuid4().hex[:10]}.mp4")
                 try:
@@ -1612,6 +1637,8 @@ class AutoYouTubeManager:
                     with run.lock:
                         if run.by_position.get(position) == video_id:
                             run.by_position.pop(position, None)
+                        if run.item_uses.get((subject, video_id), 0) > 0:
+                            run.item_uses[(subject, video_id)] -= 1
                     continue
                 if burned:
                     metadata["burned_captions"] = True

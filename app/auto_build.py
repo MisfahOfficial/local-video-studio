@@ -17,7 +17,8 @@ from .footage_match import detect_era, heading_subject, scene_subjects
 from .vintage_still import generate_vintage_still
 
 
-LAST_RESORT_STILLS = 10  # AI stills beyond the style's limit, at most, for scenes nothing real could fill
+LAST_RESORT_STILLS = 10
+TEXT_CARDS_PER_ITEM = 2  # full-screen text cards per item before anything else is tried  # AI stills beyond the style's limit, at most, for scenes nothing real could fill
 
 
 class AutoBuildManager:
@@ -72,18 +73,19 @@ class AutoBuildManager:
             # Empty scenes: AI stills within the style's limit, then at most a few more. A clip is never used twice,
             # not even mirrored (Ishaq, 6 Oct: "DO NOT ADD THE REPEATED CLIP").
             filled, failed = self._fill_missing(project_id)
-            forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
-            filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
-            # Nothing may stay black (106 empty scenes in the 6 Oct soup test): the scene's own words as a text card
-            # over a blurred real picture of its item. Nothing is ever shown twice.
+            # Nothing may stay black and nothing is shown twice: new real photos of the item, a few text cards per
+            # item, then a few AI stills, and a text card for anything still empty.
             covered = self._never_empty(project_id)
+            forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
+            covered += self._text_cards_for_rest(project_id)
+            filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
             failed = [item for item in failed if item["scene"] not in covered]
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
             if report is not None and forced:
                 report["checks"].append({"rule": "AI images beyond the limit (no footage exists for these scenes)",
                                          "value": f"{len(forced)} (scenes {forced[:12]})", "ok": False})
             if report is not None and covered:
-                report["checks"].append({"rule": "Scenes shown as a text card of their sentence (no footage found)",
+                report["checks"].append({"rule": "Scenes filled by a new Google photo or a text card (no footage found)",
                                          "value": f"{len(covered)} (scenes {covered[:12]})", "ok": True})
             self._update(project_id, running=False, stage="Done", filled=filled, fill_failed=failed, checker=checked,
                          style_report=report)
@@ -260,45 +262,116 @@ class AutoBuildManager:
         return held
 
     def _never_empty(self, project_id: str) -> list[int]:
-        """Last pass: a scene still empty shows its own sentence as a text card over a dark, blurred real
-        picture of its item. Nothing is shown twice (Ishaq, 6 Oct: the same packet photo came back four
-        times). Returns the positions."""
+        """Last pass for scenes still empty, without ever showing anything twice: a new real photo of the item
+        from Google Images first; else the sentence as a text card, at most TEXT_CARDS_PER_ITEM per item (a run of
+        eleven full-screen texts in the 6 Oct biscuits video); past that a food-only AI still, and a text card only
+        when nothing else can be made. Returns the positions."""
+        from .footage_match import mentions_topic, names_a_kind, item_kind
+        from .photo_source import configure_google, configure_serper, load_image, save_photo, search_photos
         from .text_card import render_text_card
 
         db = self.app.db
+        settings = self.app.settings.load()
+        configure_serper(getattr(settings, "serper_api_key", ""))
+        configure_google(getattr(settings, "google_search_api_key", ""), getattr(settings, "google_search_engine_id", ""))
+        project = db.get_project(project_id) or {}
+        kind = item_kind(str(project.get("name") or ""))
         scenes = db.list_scenes(project_id)
         subjects = scene_subjects(scenes, "")
         assets = {str(asset["id"]): asset for asset in db.list_assets(project_id)}
+        used_urls = {str((asset.get("metadata") or {}).get("source_url") or asset.get("remote_url") or "") for asset in assets.values()}
+        cards: dict[str, int] = {}
+        found: dict[str, list[dict[str, Any]]] = {}
         covered: list[int] = []
         for index, scene in enumerate(scenes):
             if scene.get("selected_asset_id"):
                 continue
-            backdrop = None
-            for other in range(len(scenes)):
-                asset = assets.get(str(scenes[other].get("selected_asset_id") or "")) or {}
-                if (subjects[other] == subjects[index] and asset.get("provider") == "photo"
-                        and Path(str(asset.get("local_path"))).is_file()):
-                    backdrop = Path(str(asset["local_path"]))
-                    break
+            subject = subjects[index]
             position = int(scene.get("position") or 0)
-            destination = (self.app.paths.project_dir(project_id) / "assets" / "graphics"
-                           / f"scene-{position:04d}-text-{uuid.uuid4().hex[:6]}.jpg")
-            try:
-                render_text_card(str(scene.get("narration") or ""), destination, backdrop)
-            except Exception:
+            folder = self.app.paths.project_dir(project_id) / "assets"
+            name = f"{subject} {kind}" if subject and kind and not names_a_kind(subject) else subject
+            if subject and subject not in found:
+                pool: list[dict[str, Any]] = []
+                for query in (name, f"{name} packet", f"{name} vintage", f"{name} advert"):
+                    try:
+                        pool += search_photos(query, count=40, period=False)
+                    except Exception:
+                        pass
+                core = [word for word in subject.split() if len(word) > 2]
+                found[subject] = [item for item in pool if all(mentions_topic(str(item.get("title") or ""), word) for word in core[:2])]
+            placed = False
+            for item in list(found.get(subject) or []):
+                url = str(item.get("foreign_landing_url") or item.get("url"))
+                found[subject].remove(item)
+                if url in used_urls or str(item.get("url")) in used_urls:
+                    continue
+                picture = load_image(str(item["url"]))
+                if picture is None:
+                    continue
+                destination = folder / "photos" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
+                metadata = save_photo(item, picture, destination)
+                used_urls.update({url, str(item.get("url"))})
+                asset = db.add_asset(project_id=project_id, scene_id=str(scene["id"]),
+                                     candidate_index=db.next_asset_candidate_index(str(scene["id"])),
+                                     media_kind="image", provider="photo", model="google-images", local_path=str(destination),
+                                     remote_url=metadata.get("source_url"), provider_asset_id=str(item.get("id") or url),
+                                     cost=0.0, metadata={**metadata, "needs_review": True})
+                db.select_asset(str(scene["id"]), str(asset["id"]))
+                assets[str(asset["id"])] = asset
+                scene["selected_asset_id"] = asset["id"]
+                placed = True
+                break
+            if placed:
+                covered.append(position)
                 continue
-            asset = db.add_asset(
-                project_id=project_id, scene_id=str(scene["id"]),
-                candidate_index=db.next_asset_candidate_index(str(scene["id"])),
-                media_kind="image", provider="graphic", model="text_card", local_path=str(destination),
-                remote_url=None, provider_asset_id=None, cost=0.0,
-                metadata={"graphic": "text_card", "needs_review": True},
-            )
-            db.select_asset(str(scene["id"]), str(asset["id"]))
-            if str(scene.get("caption_text") or "").strip():
-                db.update_scene(str(scene["id"]), {"caption_text": ""})  # the card already says it
-            covered.append(position)
+            if cards.get(subject, 0) >= TEXT_CARDS_PER_ITEM:
+                continue  # left for an AI still; a text card only if that fails too (see the caller)
+            if self._text_card(project_id, scene, subject, scenes, subjects, assets):
+                cards[subject] = cards.get(subject, 0) + 1
+                covered.append(position)
         return covered
+
+    def _text_card(self, project_id: str, scene: dict[str, Any], subject: str, scenes: list[dict[str, Any]],
+                   subjects: list[str], assets: dict[str, Any]) -> bool:
+        from .text_card import render_text_card
+
+        db = self.app.db
+        backdrop = None
+        for other, other_subject in zip(scenes, subjects):
+            asset = assets.get(str(other.get("selected_asset_id") or "")) or {}
+            if other_subject == subject and asset.get("provider") == "photo" and Path(str(asset.get("local_path"))).is_file():
+                backdrop = Path(str(asset["local_path"]))
+                break
+        position = int(scene.get("position") or 0)
+        destination = (self.app.paths.project_dir(project_id) / "assets" / "graphics"
+                       / f"scene-{position:04d}-text-{uuid.uuid4().hex[:6]}.jpg")
+        try:
+            render_text_card(str(scene.get("narration") or ""), destination, backdrop)
+        except Exception:
+            return False
+        asset = db.add_asset(
+            project_id=project_id, scene_id=str(scene["id"]),
+            candidate_index=db.next_asset_candidate_index(str(scene["id"])),
+            media_kind="image", provider="graphic", model="text_card", local_path=str(destination),
+            remote_url=None, provider_asset_id=None, cost=0.0, metadata={"graphic": "text_card", "needs_review": True},
+        )
+        db.select_asset(str(scene["id"]), str(asset["id"]))
+        if str(scene.get("caption_text") or "").strip():
+            db.update_scene(str(scene["id"]), {"caption_text": ""})  # the card already says it
+        assets[str(asset["id"])] = asset
+        scene["selected_asset_id"] = asset["id"]
+        return True
+
+    def _text_cards_for_rest(self, project_id: str) -> list[int]:
+        """Anything still empty after the AI stills: a text card, so nothing is ever black."""
+        scenes = self.app.db.list_scenes(project_id)
+        subjects = scene_subjects(scenes, "")
+        assets = {str(asset["id"]): asset for asset in self.app.db.list_assets(project_id)}
+        done = []
+        for scene, subject in zip(scenes, subjects):
+            if not scene.get("selected_asset_id") and self._text_card(project_id, scene, subject, scenes, subjects, assets):
+                done.append(int(scene.get("position") or 0))
+        return done
 
     def _fill_missing(self, project_id: str, beyond_limit: bool = False) -> tuple[list[int], list[dict[str, Any]]]:
         """A realistic period still for every scene that still has nothing (and is not a heading)."""
