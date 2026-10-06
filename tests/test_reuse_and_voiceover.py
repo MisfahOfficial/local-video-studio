@@ -167,3 +167,19 @@ class V3StyleTest(unittest.TestCase):
         self.assertTrue(kit["hook_collage"])
         frame = gallery_stack([Image.new("RGB", (64, 36), (200, 50, 50))] * 3, get_style("v3"), title="These were not just sweets")
         self.assertEqual(frame(1.0, 3.0).size, (1920, 1080))
+
+
+@unittest.skipUnless(FFMPEG, "ffmpeg is needed")
+class NeverEmptyTest(ReusedShotTest):
+    def test_no_scene_stays_empty_when_a_real_picture_exists(self):
+        photo = self.folder / "tin.jpg"
+        from PIL import Image
+
+        Image.new("RGB", (64, 36), (200, 120, 40)).save(photo)
+        asset = self.db.add_asset(project_id=self.project["id"], scene_id=self.scenes[0]["id"], candidate_index=0,
+                                  media_kind="image", provider="photo", model="t", local_path=str(photo),
+                                  remote_url=None, provider_asset_id="tin", cost=0.0, metadata={})
+        self.db.select_asset(self.scenes[0]["id"], asset["id"])
+        covered = self._manager()._never_empty(self.project["id"])
+        self.assertEqual(covered, [4, 5])
+        self.assertTrue(all(scene["selected_asset_id"] for scene in self.db.list_scenes(self.project["id"])))

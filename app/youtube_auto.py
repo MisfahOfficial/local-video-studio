@@ -1624,8 +1624,12 @@ class AutoYouTubeManager:
         """Place a genuine, commercially reusable archival photo; False when none passes."""
         if run.verifier is None:
             return False
+        name = " ".join(re.sub(r"[()\[\]]", " ", subject).split()) if subject else ""
+        # Many angles of the same item (Ishaq, 6 Oct: an item of 20 scenes ran out of photos after two searches):
+        # its name, its packet/tin, its advert, its era - each search brings different real pictures.
         photo_queries = list(dict.fromkeys(
-            ([f"{run.era} {core_subject(subject)}".strip()] if subject else [])
+            ([name, f"{name} vintage", f"{name} advert", f"{name} tin", f"{name} packet",
+              f"{run.era} {core_subject(subject)}".strip()] if subject else [])
             + [query.replace(" footage", "") for query in queries[:2]]
         ))
         if str(scene["id"]) in run.hook_ids and subject:
@@ -1633,17 +1637,19 @@ class AutoYouTubeManager:
             plain = " ".join(word for word in subject.split() if word not in _GENERIC_THEME) or subject
             photo_queries = list(dict.fromkeys([f"{run.era} {plain}".strip(), f"vintage {plain}", plain, *photo_queries]))
         items: dict[str, dict[str, Any]] = {}
-        for query in [item for item in photo_queries if item.strip()][:4]:
+        for query in [item for item in photo_queries if item.strip()][:8]:
             with run.lock:
                 cached = run.searches.get(f"photo:{query}")
             if cached is None:
                 # Scenes of one section repeat the same archive searches.
-                cached = search_photos(query, period=run.profile.period)
+                cached = search_photos(query, count=40, period=run.profile.period)
                 with run.lock:
                     run.searches[f"photo:{query}"] = cached
             for item in cached:
                 items.setdefault(str(item.get("id") or item["url"]), item)
-            if len(items) >= 12:
+            with run.lock:
+                unused = sum(1 for key in items if key not in run.used_photos)
+            if unused >= 12:  # enough pictures this scene has not used yet (earlier scenes took the first ones)
                 break
         with run.lock:
             fresh = [item for key, item in items.items()

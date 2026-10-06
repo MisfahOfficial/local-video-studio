@@ -49,7 +49,7 @@ def _serper_images(query: str, count: int) -> list[dict[str, Any]]:
     import json
     import urllib.request
 
-    request = urllib.request.Request(SERPER, data=json.dumps({"q": query, "num": min(20, max(10, count))}).encode(),
+    request = urllib.request.Request(SERPER, data=json.dumps({"q": query, "num": 40}).encode(),
                                      headers={"X-API-KEY": _google["serper"], "Content-Type": "application/json"},
                                      method="POST")
     with urllib.request.urlopen(request, timeout=30) as response:
