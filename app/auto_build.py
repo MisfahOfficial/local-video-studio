@@ -74,11 +74,10 @@ class AutoBuildManager:
             # video with six items YouTube has no footage of made 270 AI stills before this).
             held = self._hold_empty(project_id)
             filled, failed = self._fill_missing(project_id)
-            held += self._hold_empty(project_id, any_item=True)
             forced, forced_failed = self._fill_missing(project_id, beyond_limit=True)
             filled, failed = filled + forced, [item for item in failed if item["scene"] not in forced] + forced_failed
-            # Nothing may stay black (106 empty scenes in the 6 Oct soup test): a real photo of the item again, else
-            # any real photo of the video, else a real clip of the item mirrored, never an empty frame.
+            # Nothing may stay black (106 empty scenes in the 6 Oct soup test): a real photo of the same item again,
+            # else a real clip of the same item mirrored. Never a picture of another item.
             covered = self._never_empty(project_id)
             failed = [item for item in failed if item["scene"] not in covered]
             report = self.app.style_report(project_id)  # the editing style's rules, met or not (None without a style)
@@ -263,8 +262,8 @@ class AutoBuildManager:
         return held
 
     def _never_empty(self, project_id: str) -> list[int]:
-        """Last pass: every scene still empty takes a real picture already in the video (a photo of its own item
-        first, never the same one as a neighbour), else a real clip of its item mirrored. Returns the positions."""
+        """Last pass: every scene still empty takes a real photo of its own item (never the same one as a neighbour),
+        else a real clip of its own item mirrored. Returns the positions."""
         db = self.app.db
         scenes = db.list_scenes(project_id)
         subjects = scene_subjects(scenes, "")
@@ -290,7 +289,8 @@ class AutoBuildManager:
                         found.append(asset)
                 return found
 
-            picks = (options("photo", True) or options("photo", False)
+            # Only the scene's own item (Ishaq, 6 Oct): never a picture or clip of another item.
+            picks = (options("photo", True)
                      or [asset for asset in options("youtube", True) if (asset.get("metadata") or {}).get("checker") != "refused"])
             if not picks:
                 continue
