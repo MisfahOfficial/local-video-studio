@@ -1702,7 +1702,7 @@ class AutoYouTubeManager:
         self, run: "_Run", need: str, choices: list[tuple[dict[str, Any], float | None, float | None]], duration: float,
     ) -> list[tuple[dict[str, Any], float | None, float | None]] | None:
         """Claude's order of the best few video choices (unusable ones dropped); None without a judge."""
-        if run.judge is None or run.verifier is None or not choices or run.pick_inline:
+        if run.judge is None or run.verifier is None or not choices or getattr(run, "pick_inline", False):
             return None  # with clip picking on, every planned sentence was already chosen among its options
 
         top = choices[:4]
