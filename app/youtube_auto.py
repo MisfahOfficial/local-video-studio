@@ -491,6 +491,10 @@ class AutoYouTubeManager:
         check_inline: bool = False,
     ) -> None:
         settings = self.settings_store.load()
+        from . import youtube_memory
+
+        youtube_memory.configure(self.paths.root)
+        youtube_memory.clean()
         from .photo_source import configure_google
 
         configure_google(getattr(settings, "google_search_api_key", ""), getattr(settings, "google_search_engine_id", ""))
@@ -1046,18 +1050,19 @@ class AutoYouTubeManager:
         if len(top) < 2 or run.pick_error:
             return ordered
 
+        from .youtube_memory import cached_info
+
         def describe(entry: dict[str, Any]) -> dict[str, Any] | None:
+            # No new YouTube page read just to judge a video (those reads caused the blocks): its search details
+            # (title, channel, length, description) are enough; the transcript is added when its details are
+            # already known from this run or an earlier one.
             video_id = str(entry.get("video_id") or "")
-            try:
-                info = run.infos.get(video_id) or run.service.inspect(video_id)
-            except Exception:
-                return None
-            with run.lock:
-                run.infos[video_id] = info
+            info = run.infos.get(video_id) or cached_info(video_id) or {}
+            words = transcript_text(YouTubeSourceService._caption_events(info)) if info else ""
+            minutes = float(info.get("duration") or entry.get("duration_seconds") or entry.get("duration") or 0) / 60
             return {"id": video_id, "title": str(entry.get("title") or info.get("title") or ""),
-                    "channel": str(info.get("channel") or entry.get("channel") or ""),
-                    "minutes": float(info.get("duration") or 0) / 60,
-                    "transcript": transcript_text(YouTubeSourceService._caption_events(info))}
+                    "channel": str(info.get("channel") or entry.get("channel") or ""), "minutes": minutes,
+                    "transcript": words or ("description: " + str(entry.get("description") or "")[:600])}
 
         with Pool(max_workers=3) as pool:
             videos = [video for video in pool.map(describe, top) if video]

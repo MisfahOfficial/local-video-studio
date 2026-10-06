@@ -133,6 +133,16 @@ class YouTubeSourceService:
         clean_query = " ".join(query.split())[:240]
         if not clean_query:
             raise ProviderError("Enter a YouTube search description")
+        from .youtube_memory import cached_search, remember_search
+
+        remembered = cached_search(f"{self.license_mode}|{clean_query}", maximum)
+        if remembered is not None:
+            return remembered  # asked before (this week): YouTube is not asked again
+        results = self._search_live(clean_query, maximum)
+        remember_search(f"{self.license_mode}|{clean_query}", maximum, results)
+        return results
+
+    def _search_live(self, clean_query: str, maximum: int) -> list[dict[str, Any]]:
         if not self.fair_use:
             if not self.api_key:
                 raise ProviderError("Add a YouTube Data API key in Settings first")
@@ -217,7 +227,17 @@ class YouTubeSourceService:
         return "Creative Commons"
 
     def inspect(self, video_id: str) -> dict[str, Any]:
-        """Full yt-dlp metadata for one video (formats, storyboards, captions)."""
+        """Full yt-dlp metadata for one video (formats, storyboards, captions), remembered for 4 hours."""
+        from .youtube_memory import cached_info, remember_info
+
+        remembered = cached_info(video_id)
+        if remembered is not None:
+            return remembered
+        info = self._inspect_live(video_id)
+        remember_info(video_id, info)
+        return info
+
+    def _inspect_live(self, video_id: str) -> dict[str, Any]:
         try:
             import yt_dlp
         except ImportError as error:
