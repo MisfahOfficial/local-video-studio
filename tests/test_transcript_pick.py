@@ -78,3 +78,17 @@ class SerperTest(unittest.TestCase):
         photo_source.configure_google("k", '<script async src="https://cse.google.com/cse.js?cx=abc123:xyz"></script>')
         self.assertEqual(photo_source._google["cx"], "abc123:xyz")
         photo_source.configure_google("", "")
+
+
+class ClaudeProviderTest(unittest.TestCase):
+    def test_gemini_schema_becomes_json_schema_and_wrong_keys_are_ignored(self):
+        from types import SimpleNamespace
+        from app.llm import _claude_key, _json_schema
+
+        converted = _json_schema({"type": "OBJECT", "properties": {"a": {"type": "ARRAY", "items": {"type": "STRING"}}},
+                                  "required": ["a"]})
+        self.assertEqual(converted["type"], "object")
+        self.assertFalse(converted["additionalProperties"])
+        self.assertEqual(converted["properties"]["a"]["items"]["type"], "string")
+        self.assertEqual(_claude_key(SimpleNamespace(anthropic_api_key="AIzaSyWrongField")), "")
+        self.assertEqual(_claude_key(SimpleNamespace(anthropic_api_key=" sk-ant-abc ")), "sk-ant-abc")

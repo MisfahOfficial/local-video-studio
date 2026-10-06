@@ -24,6 +24,8 @@ class StudioSettings:
     # Claude looks at the best few candidates per scene and picks the one that truly fits.
     anthropic_api_key: str = ""
     judge_model: str = "claude-sonnet-5"
+    # Claude model for clip picking, the clip checker and transcript reading when its key is set.
+    vision_model: str = "claude-haiku-4-5"
     # Free Pollinations account token: its images carry no logo (anonymous ones do, so they are not used).
     pollinations_token: str = ""
     youtube_license_mode: str = "creative_commons"

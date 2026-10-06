@@ -121,7 +121,8 @@ class ClaudeJudge:
         if not key:
             return None
         try:
-            return cls(key, str(getattr(settings, "judge_model", "") or "claude-sonnet-5"))
+            # The same cheap vision model that picks the clips also judges photos (Ishaq, 6 Oct).
+            return cls(key, str(getattr(settings, "vision_model", "") or getattr(settings, "judge_model", "") or "claude-haiku-4-5"))
         except ImportError:
             return None
 

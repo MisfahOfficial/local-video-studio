@@ -590,7 +590,8 @@ class AutoYouTubeManager:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
         run.check_inline = check_inline and verifier is not None
-        run.pick_inline = run.check_inline and bool(str(getattr(settings, "gemini_api_key", "") or "").strip())
+        run.pick_inline = run.check_inline and bool(str(getattr(settings, "gemini_api_key", "") or "").strip()
+                                                    or str(getattr(settings, "anthropic_api_key", "") or "").strip().startswith("sk-ant-"))
         run.prefer_read = len(scenes) < len(all_scenes)  # the AI checker's replacements took 2.5 min of new downloads
         try:
             from .scene_checker import banned_sources
@@ -1701,8 +1702,9 @@ class AutoYouTubeManager:
         self, run: "_Run", need: str, choices: list[tuple[dict[str, Any], float | None, float | None]], duration: float,
     ) -> list[tuple[dict[str, Any], float | None, float | None]] | None:
         """Claude's order of the best few video choices (unusable ones dropped); None without a judge."""
-        if run.judge is None or run.verifier is None or not choices:
-            return None
+        if run.judge is None or run.verifier is None or not choices or run.pick_inline:
+            return None  # with clip picking on, every planned sentence was already chosen among its options
+
         top = choices[:4]
         rows = [run.verifier.moment_frames(str(item["video_id"]), float(start or 0), duration) for item, start, _ in top]
         keep = [index for index, frames in enumerate(rows) if frames]
