@@ -49,3 +49,32 @@ class GoogleImagesTest(unittest.TestCase):
         finally:
             photo_source.configure_google("", "")
         self.assertEqual(photo_source.image_sources()[0][0], "openverse")  # without a key nothing changes
+
+
+class SerperTest(unittest.TestCase):
+    def test_serper_results_are_real_photos_first(self):
+        import io
+        import json
+        from app import photo_source
+
+        answer = {"images": [{"title": "Heinz soup tin 1975", "imageUrl": "https://x/tin.jpg", "imageWidth": 800,
+                              "imageHeight": 600, "domain": "worthpoint.com", "link": "https://worthpoint.com/x"},
+                             {"title": "tiny", "imageUrl": "https://x/t.jpg", "imageWidth": 100}]}
+        photo_source.configure_serper("key")
+        try:
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(answer).encode()
+            with mock.patch("urllib.request.urlopen", return_value=response), \
+                 mock.patch.object(photo_source, "_openverse", return_value=[]), \
+                 mock.patch.object(photo_source, "_archive_images", return_value=[]):
+                found = photo_source.search_photos("heinz soup", count=5)
+            self.assertEqual([item["url"] for item in found], ["https://x/tin.jpg"])
+        finally:
+            photo_source.configure_serper("")
+
+    def test_pasted_embed_code_gives_the_engine_id(self):
+        from app import photo_source
+
+        photo_source.configure_google("k", '<script async src="https://cse.google.com/cse.js?cx=abc123:xyz"></script>')
+        self.assertEqual(photo_source._google["cx"], "abc123:xyz")
+        photo_source.configure_google("", "")

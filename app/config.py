@@ -19,6 +19,7 @@ class StudioSettings:
     # Google image search for real photos before any AI still (Programmable Search Engine id + API key).
     google_search_api_key: str = ""
     google_search_engine_id: str = ""
+    serper_api_key: str = ""  # serper.dev: Google Images results when Google's own API is closed to the project
     ai33_voice_id: str = "elevenlabs_qAZH0aMXY8tw1QufPN0D"
     # Claude looks at the best few candidates per scene and picks the one that truly fits.
     anthropic_api_key: str = ""
@@ -44,7 +45,7 @@ class StudioSettings:
     def public_dict(self) -> dict[str, Any]:
         data = asdict(self)
         for key in ("runware_api_key", "together_api_key", "gemini_api_key", "youtube_api_key", "pexels_api_key",
-                    "anthropic_api_key", "pollinations_token", "ai33_api_key", "google_search_api_key"):
+                    "anthropic_api_key", "pollinations_token", "ai33_api_key", "google_search_api_key", "serper_api_key"):
             data[f"{key}_set"] = bool(data.pop(key))
         return data
 

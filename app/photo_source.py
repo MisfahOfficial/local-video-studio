@@ -7,6 +7,7 @@ videos are monetised and photos are cropped and zoomed.
 from __future__ import annotations
 
 import io
+import re
 import time
 import urllib.parse
 from pathlib import Path
@@ -33,11 +34,45 @@ _resting: dict[str, float] = {}
 # became AI stills (Ishaq, 5 Oct: "AI generated ke bajaye Google se images"). Used like the YouTube clips
 # (fair-use mode), not as licensed photos.
 GOOGLE = "https://www.googleapis.com/customsearch/v1"
-_google: dict[str, str] = {"key": "", "cx": ""}
+_google: dict[str, str] = {"key": "", "cx": "", "serper": ""}
+SERPER = "https://google.serper.dev/images"
+
+
+def configure_serper(api_key: str) -> None:
+    """Serper.dev returns Google Images results (2,500 free searches); Google's own API refuses new projects."""
+    _google["serper"] = str(api_key or "").strip()
+
+
+def _serper_images(query: str, count: int) -> list[dict[str, Any]]:
+    if not _google["serper"]:
+        return []
+    import json
+    import urllib.request
+
+    request = urllib.request.Request(SERPER, data=json.dumps({"q": query, "num": min(20, max(10, count))}).encode(),
+                                     headers={"X-API-KEY": _google["serper"], "Content-Type": "application/json"},
+                                     method="POST")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        found = json.loads(response.read().decode("utf-8") or "{}")
+    results = []
+    for item in found.get("images") or []:
+        url = str(item.get("imageUrl") or "")
+        if not url or int(item.get("imageWidth") or 0) < 500:
+            continue
+        results.append({"id": f"g-{url}", "url": url, "thumbnail": item.get("thumbnailUrl") or url,
+                        "title": str(item.get("title") or ""), "creator": str(item.get("domain") or item.get("source") or ""),
+                        "license": "fair-use", "source": "Google Images",
+                        "foreign_landing_url": item.get("link") or url,
+                        "width": item.get("imageWidth"), "height": item.get("imageHeight")})
+    return results
 
 
 def configure_google(api_key: str, engine_id: str) -> None:
-    _google["key"], _google["cx"] = str(api_key or "").strip(), str(engine_id or "").strip()
+    engine = str(engine_id or "").strip()
+    # The control panel also shows an embed snippet (<script ... cse.js?cx=ID>); pasted whole, it is a
+    # 400 "invalid argument", so the id is taken out of it.
+    found = re.search(r"cx=([A-Za-z0-9:_-]+)", engine)
+    _google["key"], _google["cx"] = str(api_key or "").strip(), found.group(1) if found else engine
 
 
 def _google_images(query: str, count: int) -> list[dict[str, Any]]:
@@ -113,7 +148,8 @@ def image_sources(period: bool = True) -> list[tuple[str, Any]]:
     general = ("openverse", lambda q, n: _openverse(q, n))
     stock = ("openverse-stock", lambda q, n: _openverse(q, n, STOCK_SOURCES))
     archive = ("internet-archive", _archive_images)
-    google = [("google", _google_images)] if _google["key"] and _google["cx"] else []
+    google = ([("serper", _serper_images)] if _google["serper"] else []) + (
+        [("google", _google_images)] if _google["key"] and _google["cx"] else [])
     return google + ([general, history, archive, stock] if period else [general, stock, history, archive])
 
 
