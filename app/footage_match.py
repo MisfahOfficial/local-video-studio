@@ -323,6 +323,29 @@ PLURAL_FOODS = {
 }
 
 
+# What a video's items are ("tea time biscuits" -> biscuits), added to a name that could mean something else
+# ("Royal Scot" found a locomotive, "Café Noir" a coffee - Ishaq, 6 Oct).
+ITEM_KINDS = PLURAL_FOODS | {
+    "biscuits", "bars", "chocolates", "crisps", "drinks", "sodas", "cereals", "sauces", "stews", "sandwiches",
+    "buns", "tarts", "scones", "pastries", "drinks", "lollies", "toffees", "jellies", "spreads", "chains",
+    "restaurants", "stores", "brands", "toys", "cars",
+}
+
+
+def item_kind(text: str) -> str:
+    """The first kind-of-thing noun in a title ("20 Forgotten Tea Time Biscuits" -> "biscuits"), or ""."""
+    for token in re.findall(r"[a-z']+", text.lower()):
+        if token in ITEM_KINDS and token not in {"foods", "recipes", "dishes", "meals", "treats", "snacks"}:
+            return token
+    return ""
+
+
+def names_a_kind(name: str) -> bool:
+    """True when a name already says what it is ("Heinz Kidney Soup", "Yo-Yo Biscuits")."""
+    words = set(re.findall(r"[a-z']+", name.lower()))
+    return bool(words & (ITEM_KINDS | {kind.rstrip("s") for kind in ITEM_KINDS} | {"pie", "cake", "soup", "biscuit"}))
+
+
 MEASURES = {
     "cup", "cups", "tablespoon", "tablespoons", "teaspoon", "teaspoons", "can", "cans", "pound", "pounds", "ounce",
     "ounces", "stick", "sticks", "pinch", "dash", "quart", "quarts", "pint", "pints", "handful", "spoonful", "packet",

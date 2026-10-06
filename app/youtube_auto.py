@@ -313,6 +313,7 @@ class _Run:
     gemini_none: set[str] = field(default_factory=set)  # scenes where Gemini found no option acceptable
     pick_calls: int = 0
     pick_rows: int = 0
+    item_kind: str = ""  # what the video's items are ("biscuits"), added to names that could mean something else
     pick_log: list[dict[str, Any]] = field(default_factory=list)
     pick_error: str = ""
     name_labels: bool = False  # headings get the item's own footage plus an orange name label (no chapter card)
@@ -593,6 +594,9 @@ class AutoYouTubeManager:
         if run.gallery_id in redo:
             run.gallery_done = False
         run.judge = ClaudeJudge.from_settings(settings)
+        from .footage_match import item_kind
+
+        run.item_kind = item_kind(str(project.get("name") or "")) or item_kind(script[:300])
         run.check_inline = check_inline and verifier is not None
         run.pick_inline = run.check_inline and bool(str(getattr(settings, "gemini_api_key", "") or "").strip()
                                                     or str(getattr(settings, "anthropic_api_key", "") or "").strip().startswith("sk-ant-"))
@@ -828,9 +832,15 @@ class AutoYouTubeManager:
             # The item is searched by its name and nothing more (Ishaq, 4 Oct): "heinz golden vegetable soup".
             # Its short name and its bracket alias are searched only when that finds too little.
             name = " ".join(re.sub(r"[()\[\]]", " ", subject).split())
+            from .footage_match import names_a_kind
+
+            if name and run.item_kind and not names_a_kind(name):
+                name = f"{name} {run.item_kind}"  # "royal scot biscuits", not the Royal Scot locomotive
             queries = [name] if name else [dish]
-            spare = [query for query in dict.fromkeys([core_subject(subject), bracket_alias(subject) or ""])
-                     if query and query not in queries]
+            kind = f" {run.item_kind}" if run.item_kind and not names_a_kind(subject) else ""
+            spare = [query for query in dict.fromkeys([f"{core_subject(subject)}{kind}",
+                                                       f"{bracket_alias(subject)}{kind}" if bracket_alias(subject) else ""])
+                     if query.strip() and query not in queries]
         core = subject if is_hook else core_subject(subject)
         found: dict[str, dict[str, Any]] = {}
         for query in dict.fromkeys(queries):
@@ -1630,6 +1640,10 @@ class AutoYouTubeManager:
         if run.verifier is None:
             return False
         name = " ".join(re.sub(r"[()\[\]]", " ", subject).split()) if subject else ""
+        from .footage_match import names_a_kind
+
+        if name and run.item_kind and not names_a_kind(name):
+            name = f"{name} {run.item_kind}"
         # Many angles of the same item (Ishaq, 6 Oct: an item of 20 scenes ran out of photos after two searches):
         # its name, its packet/tin, its advert, its era - each search brings different real pictures.
         photo_queries = list(dict.fromkeys(

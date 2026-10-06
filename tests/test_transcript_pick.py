@@ -92,3 +92,14 @@ class ClaudeProviderTest(unittest.TestCase):
         self.assertEqual(converted["properties"]["a"]["items"]["type"], "string")
         self.assertEqual(_claude_key(SimpleNamespace(anthropic_api_key="AIzaSyWrongField")), "")
         self.assertEqual(_claude_key(SimpleNamespace(anthropic_api_key=" sk-ant-abc ")), "sk-ant-abc")
+
+
+class ItemKindTest(unittest.TestCase):
+    def test_ambiguous_names_get_the_videos_kind(self):
+        from app.footage_match import item_kind, names_a_kind
+
+        self.assertEqual(item_kind("V3-tea time biscuits"), "biscuits")
+        self.assertEqual(item_kind("25 CHEAP British Vintage 10-Minute Soups"), "soups")
+        self.assertFalse(names_a_kind("Royal Scot"))
+        self.assertTrue(names_a_kind("Heinz Kidney Soup"))
+        self.assertTrue(names_a_kind("Yo-Yo Biscuits"))
