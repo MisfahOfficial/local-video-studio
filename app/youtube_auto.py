@@ -836,6 +836,17 @@ class AutoYouTubeManager:
                 found.setdefault(str(item.get("video_id")), {**item, "_query": query})
             usable = [item for item in found.values() if usable_source(run, item, is_hook, core, signature)]
         if not is_hook and len(usable) < 4:
+            # Few videos of the item itself: its old TV commercials come next, before any photo (Ishaq, 5 Oct).
+            ad_words = core.split()
+            for query in dict.fromkeys([f"{name or core} commercial", f"{name or core} advert",
+                                        f"{ad_words[0]} {ad_words[-1]} advert" if len(ad_words) >= 2 else ""]):
+                if not query or len(usable) >= 4:
+                    continue
+                for item in self._search(run, query, archive=False):
+                    found.setdefault(str(item.get("video_id")), {**item, "_query": query})
+                usable += [item for item in found.values() if item not in usable
+                           and usable_source(run, item, is_hook, core, set())]
+        if not is_hook and len(usable) < 4:
             # Nothing on YouTube carries the full name ("Arbroath Smokie Pies" left 21 scenes empty): try the
             # name without its last or first word ("arbroath smokie") and let the transcript check judge them.
             words = core.split()
