@@ -1087,14 +1087,20 @@ class AutoYouTubeManager:
             return ordered
         good = [video_id for video_id, about, _score in ranked if about]
         bad = {video_id for video_id, about, _score in ranked if not about}
+        if not good and bad:
+            # Every judged video is about something else ("Royal Scot": biscuit compilations and shortbread
+            # recipes): none of them is used; the item gets real photos and text cards instead of wrong footage.
+            with run.lock:
+                run.pick_log.append({"item": item, "kept": [], "dropped": sorted(bad)})
+            return [entry for entry in ordered if str(entry.get("video_id")) not in bad]
         if not good:
-            return ordered  # nothing judged about the item: keep the search order rather than nothing
+            return ordered  # nothing could be judged: keep the search order
         with run.lock:
             run.pick_log.append({"item": item, "kept": good, "dropped": sorted(bad)})
         by_id = {str(entry.get("video_id")): entry for entry in ordered}
         first = [by_id[video_id] for video_id in good if video_id in by_id]
         rest = [entry for entry in ordered if str(entry.get("video_id")) not in set(good) | bad]
-        return first + rest + [by_id[video_id] for video_id in bad if video_id in by_id]
+        return first + rest  # videos judged to be about something else are not used at all
 
     def _pick_section(self, run: "_Run", members: list[dict[str, Any]]) -> None:
         """Gemini picks each sentence's clip among its planned options, four sentences per request, while other
