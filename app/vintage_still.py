@@ -131,14 +131,66 @@ def film_finish(content: bytes, seed: int, size: tuple[int, int] = (1920, 1080))
     return Image.fromarray(np.clip(pixels, 0, 255).astype("uint8"))
 
 
+REFERENCE_STRENGTH = 0.55  # how far a still may move away from the item's reference picture (0 = copy, 1 = ignore)
+
+
+def _data_uri(path: Path, width: int, height: int) -> str:
+    import base64
+    import io
+
+    from PIL import Image, ImageOps
+
+    picture = ImageOps.fit(Image.open(path).convert("RGB"), (width, height))
+    buffer = io.BytesIO()
+    picture.save(buffer, format="JPEG", quality=90)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def describe_reference(settings: StudioSettings, path: Path, subject: str) -> str:
+    """Claude's short description of the item in its reference picture (shape, packaging, colours, printed name),
+    added to the prompt so the image model keeps them. '' without Claude or when the picture is unclear."""
+    try:
+        from .llm import claude_ask, _claude_key
+
+        if not _claude_key(settings):
+            return ""
+        answer = claude_ask(settings, (
+            f"This is a reference photo of '{subject}'. In at most 35 words describe only the item itself for an "
+            "image generator: its shape, size, packaging or wrapper, colours and any printed name. If the item is "
+            "not clearly visible, answer exactly UNCLEAR."), [path.read_bytes()], max_tokens=120).strip()
+        return "" if answer.upper().startswith("UNCLEAR") else answer
+    except Exception:
+        return ""
+
+
+def matches_reference(settings: StudioSettings, reference: Path, made: Path, subject: str) -> bool | None:
+    """Claude compares the item in the reference and in the made image: True/False, None when it cannot ask."""
+    try:
+        from .llm import claude_ask, _claude_key
+
+        if not _claude_key(settings):
+            return None
+        answer = claude_ask(settings, (
+            f"Image 1 is the real '{subject}'. Image 2 was generated. Is the item in image 2 the same item - same "
+            "shape, proportions, packaging, colours and branding (background and angle may differ)? Answer YES or NO."),
+            [reference.read_bytes(), made.read_bytes()], max_tokens=10).strip().upper()
+        return answer.startswith("YES")
+    except Exception:
+        return None
+
+
 def generate_vintage_still(
     settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path, people: bool = True,
-    country: str = "US", extra: str = "",
+    country: str = "US", extra: str = "", reference: Path | None = None,
 ) -> dict[str, Any]:
     """Generate, age and save a still; returns asset metadata.
 
-    Runware first (paid, fast, reliable); when it has no key, no balance or fails, the free
-    Pollinations service (FLUX, no key) makes the image instead."""
+    With a reference picture of the item (imported with the script) the image starts from that picture
+    (image-to-image) with Claude's description of the item in the prompt, keeps its colours, and is compared
+    with it afterwards: one that does not show the same item is not used (ProviderError, so the scene takes a
+    real picture or a text card instead). Without a reference: Runware first, Pollinations as the free fallback."""
+    if reference is not None and Path(reference).is_file() and settings.runware_api_key:
+        return _from_reference(settings, scene_text, subject, era, destination, country, extra, Path(reference))
     seed = random.randint(1, 2**31 - 1)
     prompt = still_prompt(scene_text, subject, era, people, country) + extra  # + the channel style's "never" list
     negative = NEGATIVE if people else f"{NEGATIVE}, person, people, woman, man, face, hands, crowd"
@@ -164,6 +216,39 @@ def generate_vintage_still(
         raise ProviderError(f"No image could be made (Runware: {runware_error}; Pollinations: {str(error)[:160]})") from error
     film_finish(content, seed).save(destination, quality=92)
     return {"prompt": prompt, "cost": 0.0, "model": "pollinations-flux", "generated_still": True}
+
+
+def _from_reference(settings: StudioSettings, scene_text: str, subject: str, era: str, destination: Path,
+                    country: str, extra: str, reference: Path) -> dict[str, Any]:
+    description = describe_reference(settings, reference, subject)
+    period = era or "mid-century"
+    prompt = (f"{subject}: {description or subject}. Keep this exact item - same shape, proportions, packaging, "
+              f"colours and printed name. New setting: a {period} {home_word(country)} table or kitchen counter, natural "
+              f"window light, candid photograph, no people. {_PEOPLE_WORDS.sub('', scene_text)[:120]}{extra}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    last = "no attempt"
+    for attempt in range(2):
+        seed = random.randint(1, 2**31 - 1)
+        request = GenerationRequest(prompt=prompt, negative_prompt=NEGATIVE, model=settings.runware_default_model,
+                                    width=settings.width, height=settings.height, seed=seed, steps=8,
+                                    metadata={"seed_image": _data_uri(reference, settings.width, settings.height),
+                                              "strength": REFERENCE_STRENGTH})
+        result = _runware_one_at_a_time(lambda: RunwareImageProvider(settings.runware_api_key).generate(request))
+        import io
+
+        from PIL import Image, ImageOps
+
+        # A light finish only: the packet's real colours must stay.
+        picture = ImageOps.fit(Image.open(io.BytesIO(result.content)).convert("RGB"), (1920, 1080))
+        picture.save(destination, quality=92)
+        verdict = matches_reference(settings, reference, destination, subject)
+        if verdict is not False:
+            return {"prompt": prompt, "cost": result.cost, "model": result.model, "generated_still": True,
+                    "reference": str(reference), "reference_description": description,
+                    "reference_check": "match" if verdict else "not checked"}
+        last = "the generated image did not show the same item as its reference"
+        destination.unlink(missing_ok=True)
+    raise ProviderError(f"AI image not used: {last} ({reference.name})")
 
 
 def pollinations_image(prompt: str, width: int, height: int, seed: int, people: bool = True, token: str = "") -> Any:

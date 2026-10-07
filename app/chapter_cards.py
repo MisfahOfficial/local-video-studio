@@ -264,6 +264,11 @@ def build_chapter_cards(db: Database, paths: AppPaths, project_id: str, ffmpeg_p
             asset = assets.get(str((neighbour or {}).get("selected_asset_id") or ""))
             if asset and asset.get("provider") in ("photo", "youtube", "stock") and Path(str(asset.get("local_path"))).is_file():
                 options.append(({"photo": 0, "youtube": 1, "stock": 2}[str(asset["provider"])], offset, asset))
+        from .script_import import references_for
+
+        team = references_for(paths.project_dir(project_id), heading_subject(raw) or title)
+        if team:  # the item's own reference picture from the script's Tab 2 comes first
+            options.insert(0, (-1, -1, {"local_path": team[0], "media_kind": "image"}))
         for _rank, _offset, asset in sorted(options, key=lambda item: (item[0], item[1])):
             local = Path(str(asset["local_path"]))
             if asset.get("media_kind") == "video":

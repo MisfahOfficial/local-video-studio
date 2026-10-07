@@ -272,6 +272,29 @@ async function uploadVoiceover(file) {
   } finally { setTimeout(() => { progress.hidden = true; progress.value = 0; }, 700); }
 }
 
+// Script + reference images from a Google Doc (Tab 1 script, Tab 2 "Item | image links") or a .txt/.pdf file.
+async function importScript(source) {
+  if (!state.current) { toast("Create the project first", true); return; }
+  $("#importStatus").textContent = "Importing…";
+  try {
+    const options = source instanceof File
+      ? { method: "POST", body: source, headers: { "X-Filename": source.name } }
+      : { method: "POST", body: JSON.stringify({ link: source }) };
+    const report = await api(`/api/projects/${state.current.id}/import-script`, options);
+    if (report.script) $("#scriptInput").value = report.script;
+    const found = report.references.map(item => `${item.item}: ${item.images}`).join(" · ") || "none";
+    const lines = [`Script imported (${report.tabs} tab${report.tabs === 1 ? "" : "s"}).`, `Reference images — ${found}`];
+    if (report.items_without_reference.length) lines.push(`No reference: ${report.items_without_reference.join(", ")}`);
+    if (report.names_not_in_script.length) lines.push(`Not found in the script: ${report.names_not_in_script.join(", ")}`);
+    if (report.failed_links.length) lines.push(`Links that did not open: ${report.failed_links.map(item => `${item.item} (${item.problem})`).join(", ")}`);
+    $("#importStatus").textContent = lines.join("  |  ");
+    window.alert(lines.join("\n"));
+  } catch (error) {
+    $("#importStatus").textContent = "Import failed";
+    toast(error.message, true);
+  }
+}
+
 // The voice-over read from the script by ai33 (Settings holds the key and the voice).
 async function makeVoiceover() {
   if (!state.current) { toast("Create the project first", true); return; }
@@ -2164,6 +2187,8 @@ $("#workflowExportButton").addEventListener("click", openExportDialog);
 $("#editorExportButton").addEventListener("click", openExportDialog);
 $("#voiceoverInput").addEventListener("change", event => uploadVoiceover(event.target.files[0]));
 $("#makeVoiceoverButton").addEventListener("click", makeVoiceover);
+$("#importLinkButton").addEventListener("click", () => { const link = $("#importLinkInput").value.trim(); if (link) importScript(link); });
+$("#importFileInput").addEventListener("change", event => { if (event.target.files[0]) importScript(event.target.files[0]); });
 $("#createPlanButton").addEventListener("click", createVideo);
 // A new channel: its whole look (colours, fonts, captions, graphic designs) is read from its example videos and locked.
 $("#newChannelButton").addEventListener("click", async () => {

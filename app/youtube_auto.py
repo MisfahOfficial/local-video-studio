@@ -1666,10 +1666,42 @@ class AutoYouTubeManager:
                 return True
         return False
 
+    def _team_reference(self, run: "_Run", scene: dict[str, Any], position: int, subject: str) -> bool:
+        """An unused reference picture of the item from the script's Tab 2, shown as a real photo (each once)."""
+        from .photo_source import save_photo
+        from .script_import import references_for
+        from PIL import Image
+
+        for path in references_for(self.paths.project_dir(run.project_id), subject):
+            key = f"ref:{path}"
+            with run.lock:
+                if key in run.used_photos:
+                    continue
+                run.used_photos.add(key)
+            try:
+                picture = Image.open(path).convert("RGB")
+            except OSError:
+                continue
+            destination = self.paths.project_dir(run.project_id) / "assets" / "photos" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg"
+            metadata = save_photo({"title": f"{subject} (team reference)", "creator": "team", "license": "own",
+                                   "source": "Team reference", "url": path}, picture, destination)
+            metadata.update({"search_topic": subject, "team_reference": True})
+            asset = self.db.add_asset(
+                project_id=run.project_id, scene_id=str(scene["id"]),
+                candidate_index=self.db.next_asset_candidate_index(str(scene["id"])),
+                media_kind="image", provider="photo", model="team-reference", local_path=str(destination),
+                remote_url=None, provider_asset_id=key, cost=0.0, metadata=metadata,
+            )
+            self.db.select_asset(str(scene["id"]), str(asset["id"]))
+            return True
+        return False
+
     def _real_photo(
         self, run: "_Run", scene: dict[str, Any], position: int, scene_text: str, subject: str, queries: list[str],
     ) -> bool:
         """Place a genuine, commercially reusable archival photo; False when none passes."""
+        if self._team_reference(run, scene, position, subject):
+            return True  # the item's own reference picture, imported with the script, comes before any search
         if run.verifier is None:
             return False
         name = " ".join(re.sub(r"[()\[\]]", " ", subject).split()) if subject else ""
@@ -1990,9 +2022,14 @@ class AutoYouTubeManager:
             country = str(kit_for(self.paths.root, get_style(effects.get("channel_style")).key).get("country") or "US")
             from .vintage_still import kind_of
 
+            from .script_import import references_for
+
             project = self.db.get_project(project_id) or {}
+            pictures = references_for(self.paths.project_dir(project_id), subject)  # imported with the script
+            reference = Path(pictures[position % len(pictures)]) if pictures else None
             subject = kind_of(subject, str(project.get("name") or "") + " " + str(project.get("script") or "")[:300])
-            metadata = generate_vintage_still(settings, scene_text, subject, era, destination, country=country, extra=extra)
+            metadata = generate_vintage_still(settings, scene_text, subject, era, destination, country=country, extra=extra,
+                                              reference=reference)
         except ProviderError as error:
             raise ProviderError(
                 f'No real footage of "{subject or scene_text[:40]}" passed the checks and a fallback image '

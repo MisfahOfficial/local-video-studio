@@ -77,6 +77,12 @@
             <div id="referenceList"></div>
             <button class="button" id="addReferenceButton" type="button">+ Add another example (optional)</button>
           </fieldset>
+          <div class="upload-line">
+            <input id="importLinkInput" type="url" placeholder="Google Doc link (Tab 1 script, Tab 2 reference images)" style="flex:1">
+            <button class="button" id="importLinkButton" type="button">Import</button>
+            <label class="button">.txt / .pdf<input id="importFileInput" type="file" accept=".txt,.pdf,text/plain,application/pdf" hidden></label>
+          </div>
+          <div class="upload-line"><span id="importStatus"></span></div>
           <label class="script-field">Complete script<textarea id="scriptInput" rows="18" placeholder="Paste the complete narration script here…"></textarea></label>
           <div class="action-row">
             <button class="button primary" id="createPlanButton" type="button">Create video</button>

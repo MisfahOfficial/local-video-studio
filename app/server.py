@@ -887,6 +887,29 @@ def build_handler(application: StudioApplication):
                 self._json({"project": project, "filename": filename, "duration_seconds": project.get("duration_seconds")})
                 return
 
+            match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/import-script", path)
+            if match:
+                # Script + reference images from a Google Doc link (JSON {"link"}) or a .txt/.pdf file (raw bytes).
+                from .script_import import import_source
+
+                project_id = match.group(1)
+                if not application.db.get_project(project_id):
+                    raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
+                project_dir = application.paths.project_dir(project_id)
+                try:
+                    if "json" in str(self.headers.get("Content-Type") or ""):
+                        report = import_source(project_dir, link=str(self._read_json().get("link") or "").strip())
+                    else:
+                        length = self._content_length(maximum=50 * 1024 * 1024)
+                        report = import_source(project_dir, filename=Path(self.headers.get("X-Filename", "script.txt")).name,
+                                               data=self.rfile.read(length))
+                except ValueError as error:
+                    raise ApiError(str(error)) from error
+                if report["script"]:
+                    application.db.update_project(project_id, script=report["script"])
+                self._json(report)
+                return
+
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/voiceover/make", path)
             if match:
                 if not application.db.get_project(match.group(1)):

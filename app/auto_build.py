@@ -426,11 +426,14 @@ class AutoBuildManager:
             destination = (self.app.paths.project_dir(project_id) / "assets" / "stills"
                            / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.jpg")
             try:
+                from .script_import import references_for
                 from .vintage_still import kind_of
 
+                pictures = references_for(self.app.paths.project_dir(project_id), subject)  # imported with the script
+                reference = Path(pictures[position % len(pictures)]) if pictures else None
                 subject = kind_of(subject, str(project.get("name") or "") + " " + str(project.get("script") or "")[:300])
                 metadata = generate_vintage_still(settings, str(scene.get("narration") or ""), subject, era, destination,
-                                                  country=country, extra=extra)
+                                                  country=country, extra=extra, reference=reference)
             except Exception as error:
                 with lock:
                     failed.append({"scene": position, "error": str(error)[:200]})

@@ -36,6 +36,10 @@ class RunwareImageProvider(MediaProvider):
             task["seed"] = request.seed
         if request.steps:
             task["steps"] = request.steps
+        # Image-to-image from a reference picture of the item (its packet keeps its shape and colours).
+        if request.metadata.get("seed_image"):
+            task["seedImage"] = request.metadata["seed_image"]
+            task["strength"] = float(request.metadata.get("strength") or 0.55)
 
         response = post_json(
             self.endpoint,
