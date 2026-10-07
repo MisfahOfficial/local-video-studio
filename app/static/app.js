@@ -283,7 +283,8 @@ async function importScript(source) {
     const report = await api(`/api/projects/${state.current.id}/import-script`, options);
     if (report.script) $("#scriptInput").value = report.script;
     const found = report.references.map(item => `${item.item}: ${item.images}`).join(" · ") || "none";
-    const lines = [`Script imported (${report.tabs} tab${report.tabs === 1 ? "" : "s"}).`, `Reference images — ${found}`];
+    const words = (report.script || "").split(/\s+/).filter(Boolean).length;
+    const lines = [`Script imported: ${words} words (${report.tabs} tab${report.tabs === 1 ? "" : "s"}).`, `Reference images — ${found}`];
     if (report.items_without_reference.length) lines.push(`No reference: ${report.items_without_reference.join(", ")}`);
     if (report.names_not_in_script.length) lines.push(`Not found in the script: ${report.names_not_in_script.join(", ")}`);
     if (report.failed_links.length) lines.push(`Links that did not open: ${report.failed_links.map(item => `${item.item} (${item.problem})`).join(", ")}`);
@@ -299,7 +300,7 @@ async function importScript(source) {
 async function makeVoiceover() {
   if (!state.current) { toast("Create the project first", true); return; }
   const script = $("#scriptInput").value.trim();
-  if (!script) { toast("Paste the script first", true); return; }
+  if (!script) { toast("Import the script first (Google Doc link or .txt/.pdf)", true); return; }
   try {
     await api(`/api/projects/${state.current.id}/voiceover/make`, { method: "POST", body: JSON.stringify({ script }) });
     $("#voiceoverStatus").textContent = "Making the voice-over…";

@@ -137,18 +137,29 @@ def shows_item(settings: Any, data: bytes, item: str, about: str = "") -> bool |
 
     if settings is None or not _claude_key(settings):
         return None
-    schema = {"type": "OBJECT", "properties": {"picture_shows": {"type": "STRING"}, "same_item": {"type": "BOOLEAN"}},
-              "required": ["picture_shows", "same_item"]}
-    prompt = (f'Item: "{item}".' + (f" The script describes it: {about[:400]}" if about else "") +
-              "\nFirst say in a few words what the picture shows. same_item is true only if it is this exact item as "
-              "described (its product, packet, wrapper, box or advert). It is false for a different product, a similar "
-              "name from another country or with a different filling or shape, a modern remake, a different item from "
-              "the same brand, or a picture covered by a shop's logo or watermark.")
+    schema = {"type": "OBJECT", "properties": {
+        "picture_shows": {"type": "STRING"}, "main_filling_in_script": {"type": "STRING"},
+        "main_filling_on_pack": {"type": "STRING"}, "different_product": {"type": "BOOLEAN"},
+        "modern_packaging": {"type": "BOOLEAN"}, "watermark": {"type": "BOOLEAN"}},
+        "required": ["picture_shows", "main_filling_in_script", "main_filling_on_pack", "different_product", "modern_packaging", "watermark"]}
+    # The script only tells products apart (the UK's peanut "Marathon"); real wrappers list other flavours or colours
+    # than a script does (Seven Up, 7 Oct), and that must not refuse them.
+    prompt = (f'A vintage history video needs a picture of "{item}".' + (f" The script says: {about[:400]}" if about else "") +
+              "\nFirst say in a few words what the picture shows (name on the pack, country, era). Then the main "
+              "filling or kind the script gives (e.g. caramel) and the one the pack states (e.g. peanut), or 'not shown'."
+              "\ndifferent_product: true if it is not this product - another product, a related item of another shape "
+              "or kind (e.g. wax bottles for wax lips), or the same name from another country made differently (e.g. "
+              "a peanut bar when the script describes caramel) - so different main fillings mean true. Small differences in listed flavours, colours or "
+              "wording are NOT a different product."
+              "\nmodern_packaging: true if the pack is clearly today's design or a modern store bulk shot, not the "
+              "old one the script talks about."
+              "\nwatermark: true only if a website's name or a shop's logo was added on top of the photo (like 'CandyStore.com' "
+              "or 'SNACKHISTORY.COM'). The brand's own logo or name printed on the pack is NOT a watermark.")
     try:
-        answer = json.loads(claude_ask(settings, prompt, images=[data], schema=schema, max_tokens=200))
+        answer = json.loads(claude_ask(settings, prompt, images=[data], schema=schema, max_tokens=250))
     except (ValueError, TypeError):
         return False
-    return bool(answer.get("same_item"))
+    return not (answer.get("different_product") or answer.get("modern_packaging") or answer.get("watermark"))
 
 
 def section_texts(script: str) -> dict[str, str]:
@@ -299,7 +310,7 @@ def fetch_references(matched: dict[str, list[str]], folder: Path, settings: Any 
                     problem = "" if found else "image search needs the Serper key in Settings" if not getattr(
                         settings, "serper_api_key", "") else "the search found no pictures"
                 kept = unclear = 0
-                for result in found[:10]:
+                for result in found[:20]:  # some sites refuse downloads (collectingcandy, Facebook)
                     if kept >= SEARCH_PICTURES:
                         break
                     try:
@@ -322,8 +333,9 @@ def fetch_references(matched: dict[str, list[str]], folder: Path, settings: Any 
             try:
                 keep(item, _picture(_get(image_url(link))))
             except Exception as error:
-                problem = "not an image (only image links are read)" if "cannot identify image" in str(error) else str(error)[:120]
-                failed.append({"item": item, "link": link, "problem": problem})
+                if "cannot identify image" in str(error):
+                    continue  # a web page, not a picture (an article link): skipped without a false alarm
+                failed.append({"item": item, "link": link, "problem": str(error)[:120]})
     return saved, failed
 
 
