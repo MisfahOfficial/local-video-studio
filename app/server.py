@@ -898,11 +898,12 @@ def build_handler(application: StudioApplication):
                 project_dir = application.paths.project_dir(project_id)
                 try:
                     if "json" in str(self.headers.get("Content-Type") or ""):
-                        report = import_source(project_dir, link=str(self._read_json().get("link") or "").strip())
+                        report = import_source(project_dir, link=str(self._read_json().get("link") or "").strip(),
+                                               settings=application.settings.load())
                     else:
                         length = self._content_length(maximum=50 * 1024 * 1024)
                         report = import_source(project_dir, filename=Path(self.headers.get("X-Filename", "script.txt")).name,
-                                               data=self.rfile.read(length))
+                                               data=self.rfile.read(length), settings=application.settings.load())
                 except ValueError as error:
                     raise ApiError(str(error)) from error
                 if report["script"]:

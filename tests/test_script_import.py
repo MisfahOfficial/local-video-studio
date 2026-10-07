@@ -48,6 +48,22 @@ class ScriptImportTest(unittest.TestCase):
         self.assertEqual(doc_id("https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/edit?tab=t.0"),
                          "1AbCdEfGhIjKlMnOpQrStUvWxYz")
 
+    def test_doc_tables_give_names_and_hidden_links(self):
+        from app.script_import import html_lines, image_search, match_items, parse_references
+
+        row = ('<table><tr><td><p><span>1</span></p></td><td><p><span>Space Dust / Cosmic Candy</span></p>'
+               '<p><span>1978</span></p></td><td><p><a href="https://www.google.com/url?q=https://site.com/post/space'
+               '&amp;sa=D">Article</a></p></td><td><p><a href="https://www.google.com/url?q=https://www.google.com/'
+               'search?tbm%3Disch%26q%3Dspace%2Bdust%2Bcandy&amp;sa=D">pictures</a></p></td></tr></table>')
+        lines = html_lines(row)
+        self.assertTrue(lines.startswith("Space Dust / Cosmic Candy | https://site.com/post/space"))
+        entries = parse_references(lines)
+        self.assertEqual(image_search(entries[0][1][-1]), "space dust candy")
+        matched, _missing, unmatched = match_items("SPACE DUST\nIt fizzed.\nSUPER SKRUNCH (WONKA)\nCrispy.\nOUTRO\nBye.",
+                                                   entries + [("Super Skrunch Bar", ["https://x/s.jpg"])])
+        self.assertEqual(set(matched), {"space dust", "super skrunch (wonka)"})
+        self.assertEqual(unmatched, [])
+
 
 if __name__ == "__main__":
     unittest.main()
