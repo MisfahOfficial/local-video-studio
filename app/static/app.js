@@ -373,6 +373,7 @@ async function createVideo() {
       method: "POST",
       body: JSON.stringify({
         script: $("#scriptInput").value,
+        link: $("#importLinkInput").value.trim(),  // a Doc not imported yet is read by the server, pictures alongside
         theme_id: $("#themeSelect").value,
         planner: $("#plannerSelect").value,
         channel_style: $("#channelStyleSelect").value,
@@ -401,6 +402,13 @@ async function createVideo() {
     finishPlanningProgress("Video created");
     const filled = (status.filled || []).length;
     toast(`Video ready · ${status.scenes || 0} scenes${filled ? ` · ${filled} filled with realistic images` : ""}. Review it on the Timeline.`);
+    const imported = status.import_report;
+    if (imported && ((imported.failed_links || []).length || (imported.names_not_in_script || []).length)) {
+      const lines = [`Reference images — ${(imported.references || []).map(item => `${item.item}: ${item.images}`).join(" · ") || "none"}`];
+      if ((imported.names_not_in_script || []).length) lines.push(`Not found in the script: ${imported.names_not_in_script.join(", ")}`);
+      if ((imported.failed_links || []).length) lines.push(`Links that did not open: ${imported.failed_links.map(item => `${item.item} (${item.problem})`).join(", ")}`);
+      window.alert(lines.join("\n"));
+    }
     const report = status.style_report;
     if (report && report.checks) {
       // The channel editing style's rules for this video, met (✅) or not (❌).

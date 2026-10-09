@@ -785,7 +785,13 @@ def build_handler(application: StudioApplication):
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/auto-build-status", path)
             if match:
-                self._json(application.auto_build.status(match.group(1)))
+                from .script_import import import_report
+
+                status = application.auto_build.status(match.group(1))
+                report = import_report(application.paths.project_dir(match.group(1)))
+                if report:
+                    status["import_report"] = report
+                self._json(status)
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/voiceover/make-status", path)
             if match:
@@ -1022,6 +1028,21 @@ def build_handler(application: StudioApplication):
                 if not project:
                     raise ApiError("Project not found", HTTPStatus.NOT_FOUND)
                 body = self._read_json()
+                link = str(body.get("link") or "").strip()
+                if link and "docs.google.com" in link:
+                    # A Doc link pasted but not imported: read its script now; its reference pictures are fetched
+                    # alongside the video, and each item waits for its own (Ishaq, 9 Oct).
+                    from .script_import import imported_link, quick_import
+
+                    project_dir = application.paths.project_dir(project_id)
+                    if link != imported_link(project_dir):
+                        try:
+                            report = quick_import(project_dir, link, application.settings.load())
+                        except ValueError as error:
+                            raise ApiError(str(error)) from error
+                        if report["script"]:
+                            project = application.db.update_project(project_id, script=report["script"])
+                            body["script"] = report["script"]
                 if not str(body.get("script") or project.get("script") or "").strip():
                     raise ApiError("Paste a script before creating the video")
                 if not project.get("voiceover_path"):

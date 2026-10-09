@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -279,63 +280,76 @@ def _picture(data: bytes) -> Any:
     return picture
 
 
+def _fetch_item(item: str, links: list[str], folder: Path, settings: Any = None, about: str = "",
+                ) -> tuple[list[str], list[dict[str, str]]]:
+    """One item's pictures: a direct image link is used as it is; a Google Images search link is searched again
+    (Serper) and its first pictures that Claude confirms show the item are kept; article pages are skipped."""
+    from .photo_source import _serper_images
+
+    saved: list[str] = []
+    failed: list[dict[str, str]] = []
+    name = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40] or "item"
+
+    def keep(picture: Any) -> None:
+        destination = folder / f"{name}-{len(saved) + 1}.jpg"
+        picture.convert("RGB").save(destination, quality=92)
+        saved.append(str(destination))
+
+    for link in links:
+        query = image_search(link)
+        if query:
+            try:
+                found = _serper_images(query, 40)
+            except Exception as error:
+                found, problem = [], f"search failed: {str(error)[:80]}"
+            else:
+                problem = "" if found else "image search needs the Serper key in Settings" if not getattr(
+                    settings, "serper_api_key", "") else "the search found no pictures"
+            kept = unclear = 0
+            for result in found[:20]:  # some sites refuse downloads (collectingcandy, Facebook)
+                if kept >= SEARCH_PICTURES:
+                    break
+                try:
+                    data = _get(result["url"], timeout=20)
+                    picture = _picture(data)
+                    verdict = shows_item(settings, data, item, about)
+                except Exception:
+                    continue
+                if verdict is False:
+                    unclear += 1
+                    continue
+                keep(picture)
+                kept += 1
+            if not kept:
+                failed.append({"item": item, "link": link, "problem": problem or
+                               f"none of the search's pictures clearly showed the item ({unclear} refused)"})
+            continue
+        if _looks_like_page(link):
+            continue  # a source article, not a picture
+        try:
+            keep(_picture(_get(image_url(link))))
+        except Exception as error:
+            if "cannot identify image" in str(error):
+                continue  # a web page, not a picture (an article link): skipped without a false alarm
+            failed.append({"item": item, "link": link, "problem": str(error)[:120]})
+    return saved, failed
+
+
 def fetch_references(matched: dict[str, list[str]], folder: Path, settings: Any = None,
                      about: dict[str, str] | None = None) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
-    """Download every picture of every item. A direct image link is used as it is; a Google Images search link is
-    searched again (Serper) and its first pictures that Claude confirms show the item are kept; article pages are
-    skipped. ({item: [saved files]}, [{item, link, problem}])."""
-    from .photo_source import _serper_images, configure_serper
+    """Download every picture of every item, one item after another. ({item: [saved files]}, [{item, link, problem}])."""
+    from .photo_source import configure_serper
 
     if settings is not None:
         configure_serper(str(getattr(settings, "serper_api_key", "") or ""))
     saved: dict[str, list[str]] = {}
     failed: list[dict[str, str]] = []
     folder.mkdir(parents=True, exist_ok=True)
-
-    def keep(item: str, picture: Any) -> None:
-        name = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")[:40] or "item"
-        destination = folder / f"{name}-{len(saved.get(item, [])) + 1}.jpg"
-        picture.convert("RGB").save(destination, quality=92)
-        saved.setdefault(item, []).append(str(destination))
-
     for item, links in matched.items():
-        for link in links:
-            query = image_search(link)
-            if query:
-                try:
-                    found = _serper_images(query, 40)
-                except Exception as error:
-                    found, problem = [], f"search failed: {str(error)[:80]}"
-                else:
-                    problem = "" if found else "image search needs the Serper key in Settings" if not getattr(
-                        settings, "serper_api_key", "") else "the search found no pictures"
-                kept = unclear = 0
-                for result in found[:20]:  # some sites refuse downloads (collectingcandy, Facebook)
-                    if kept >= SEARCH_PICTURES:
-                        break
-                    try:
-                        data = _get(result["url"], timeout=20)
-                        picture = _picture(data)
-                        verdict = shows_item(settings, data, item, (about or {}).get(item, ""))
-                    except Exception:
-                        continue
-                    if verdict is False:
-                        unclear += 1
-                        continue
-                    keep(item, picture)
-                    kept += 1
-                if not kept:
-                    failed.append({"item": item, "link": link, "problem": problem or
-                                   f"none of the search's pictures clearly showed the item ({unclear} refused)"})
-                continue
-            if _looks_like_page(link):
-                continue  # a source article, not a picture
-            try:
-                keep(item, _picture(_get(image_url(link))))
-            except Exception as error:
-                if "cannot identify image" in str(error):
-                    continue  # a web page, not a picture (an article link): skipped without a false alarm
-                failed.append({"item": item, "link": link, "problem": str(error)[:120]})
+        paths, problems = _fetch_item(item, links, folder, settings, (about or {}).get(item, ""))
+        if paths:
+            saved[item] = paths
+        failed.extend(problems)
     return saved, failed
 
 
@@ -352,10 +366,102 @@ def load_references(project_dir: Path) -> dict[str, list[str]]:
         return {}
 
 
-def references_for(project_dir: Path, subject: str) -> list[str]:
-    """The imported pictures of one item (matched like headings are)."""
+# ------------------------------------------------------------------ Create video with a Doc link (9 Oct)
+WAIT_SECONDS = 300.0
+PARALLEL_ITEMS = 4
+IMPORT_LINK_FILE = "import_link.txt"
+IMPORT_REPORT_FILE = "import_report.json"
+_jobs: dict[str, dict[str, Any]] = {}
+_jobs_lock = threading.Lock()
+
+
+def references_for(project_dir: Path, subject: str, wait: float = WAIT_SECONDS) -> list[str]:
+    """The imported pictures of one item (matched like headings are). While they are still being fetched in the
+    background (Create video with a Doc link), this waits for that item for up to `wait` seconds."""
     key = _key(subject)
+    with _jobs_lock:
+        job = _jobs.get(str(Path(project_dir)))
+    if job is not None:
+        event = next((done for item, done in job["items"].items() if _key(item) == key), None)
+        if event is not None:
+            event.wait(wait)
     return next((paths for item, paths in load_references(project_dir).items() if _key(item) == key), [])
+
+
+def imported_link(project_dir: Path) -> str:
+    try:
+        return (Path(project_dir) / IMPORT_LINK_FILE).read_text().strip()
+    except OSError:
+        return ""
+
+
+def import_report(project_dir: Path) -> dict[str, Any]:
+    try:
+        return json.loads((Path(project_dir) / IMPORT_REPORT_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def quick_import(project_dir: Path, link: str, settings: Any = None) -> dict[str, Any]:
+    """Read the script now (seconds); fetch the reference pictures in the background while the video is made.
+    Returns the report so far (the failed links are added when the pictures are done)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .photo_source import configure_serper
+
+    project_dir = Path(project_dir)
+    texts = google_doc_tabs(link)
+    script, reference_text = split_script(texts)
+    matched, missing, unmatched = match_items(script, parse_references(reference_text))
+    about = section_texts(script)
+    folder = project_dir / "assets" / "references"
+    folder.mkdir(parents=True, exist_ok=True)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    save_references(project_dir, {})
+    report: dict[str, Any] = {
+        "script": script, "tabs": len(texts), "words": len(script.split()), "references": [],
+        "items_without_reference": missing, "names_not_in_script": unmatched, "failed_links": [], "finished": not matched,
+    }
+    (project_dir / IMPORT_REPORT_FILE).write_text(json.dumps({**report, "script": ""}, indent=1))
+    (project_dir / IMPORT_LINK_FILE).write_text(link)
+    if settings is not None:
+        configure_serper(str(getattr(settings, "serper_api_key", "") or ""))
+    job = {"items": {item: threading.Event() for item in matched}}
+    key = str(project_dir)
+    with _jobs_lock:
+        _jobs[key] = job
+    write_lock = threading.Lock()
+
+    def one(item: str) -> None:
+        try:
+            paths, failed = _fetch_item(item, matched[item], folder, settings, about.get(item, ""))
+        except Exception as error:  # a broken item never stops the video: it simply has no reference
+            paths, failed = [], [{"item": item, "link": "", "problem": str(error)[:120]}]
+        with write_lock:
+            saved = load_references(project_dir)
+            if paths:
+                saved[item] = paths
+            save_references(project_dir, saved)
+            current = import_report(project_dir)
+            current["failed_links"] = list(current.get("failed_links") or []) + failed
+            current["references"] = [{"item": name, "images": len(files)} for name, files in saved.items()]
+            (project_dir / IMPORT_REPORT_FILE).write_text(json.dumps(current, indent=1))
+        job["items"][item].set()
+
+    def run() -> None:
+        with ThreadPoolExecutor(PARALLEL_ITEMS) as pool:
+            list(pool.map(one, list(matched)))
+        with write_lock:
+            current = import_report(project_dir)
+            current["finished"] = True
+            (project_dir / IMPORT_REPORT_FILE).write_text(json.dumps(current, indent=1))
+        with _jobs_lock:
+            if _jobs.get(key) is job:
+                _jobs.pop(key, None)
+
+    if matched:
+        threading.Thread(target=run, daemon=True, name=f"references-{project_dir.name}").start()
+    return report
 
 
 def import_source(project_dir: Path, *, link: str = "", filename: str = "", data: bytes = b"",
@@ -373,6 +479,8 @@ def import_source(project_dir: Path, *, link: str = "", filename: str = "", data
     saved, failed = fetch_references(matched, project_dir / "assets" / "references", settings,
                                      section_texts(script))
     save_references(project_dir, saved)
+    if link:  # Create video then knows this Doc is already in (no second import)
+        (Path(project_dir) / IMPORT_LINK_FILE).write_text(link)
     return {
         "script": script,
         "tabs": len(texts),
