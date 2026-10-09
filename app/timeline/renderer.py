@@ -509,7 +509,9 @@ class FFmpegRenderer:
                      scene: dict[str, Any], width: int, height: int, fps: int, encoder: str,
                      source_in_seconds: float = 0, crop: dict[str, Any] | None = None,
                      film_look: bool = False, variant: dict[str, Any] | None = None) -> None:
-        motion = self.motion_registry.build(_motion_name(scene), width, height, fps, duration)
+        # Still pictures stay still: FFmpeg's zoom on a photo shakes ("every image wiggles", Ishaq 9 Oct).
+        name = "static" if media_kind == "image" else _motion_name(scene)
+        motion = self.motion_registry.build(name, width, height, fps, duration)
         variant = variant or {}
         if crop:
             motion = f"{crop_filter(crop)},{motion}"  # zoom past a burned-in logo first
