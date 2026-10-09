@@ -216,6 +216,12 @@ def _has_video(path: Path, ffmpeg_path: str = "ffmpeg") -> bool:
     return bool(result.stdout.strip()) and path.stat().st_size > 1000
 
 
+
+def _dish_label(path: Path) -> str:
+    """A gallery photo's dish name from its file ("figgy-duff.jpg"); "" for a pooled "1970s-desserts-2.jpg"."""
+    stem = Path(path).stem
+    return "" if re.search(r"-\d+$", stem) else stem.replace("-", " ")
+
 class _NoFootage(Exception):
     """No real YouTube footage passed the checks for a scene."""
 
@@ -1832,7 +1838,8 @@ class AutoYouTubeManager:
             return False
         duration = max(0.25, float(scene["end_seconds"]) - float(scene["start_seconds"]))
         destination = self.paths.project_dir(run.project_id) / "assets" / "graphics" / f"scene-{position:04d}-{uuid.uuid4().hex[:8]}.mp4"
-        encode(gallery_stack([Image.open(path) for path in paths], run.style, title=str(scene.get("narration") or "")),
+        encode(gallery_stack([Image.open(path) for path in paths], run.style, title=str(scene.get("narration") or ""),
+                             labels=[_dish_label(path) for path in paths]),
                duration, destination,
                ffmpeg_path=run.service.ffmpeg_path)
         asset = self.db.add_asset(
@@ -1887,7 +1894,8 @@ class AutoYouTubeManager:
                                 run.era, allow_generated, judge=run.judge)
             if len(paths) < 3:
                 return False
-            frame = gallery_stack([Image.open(path) for path in paths], run.style, title=str(scene.get("narration") or ""))
+            frame = gallery_stack([Image.open(path) for path in paths], run.style, title=str(scene.get("narration") or ""),
+                                  labels=[_dish_label(path) for path in paths])
             metadata = {"graphic": "gallery", "items": [{"label": path.stem, "image": str(path)} for path in paths]}
             with run.lock:
                 run.gallery_done = True

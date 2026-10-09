@@ -101,6 +101,7 @@ STYLES: dict[str, ChannelStyle] = {
         chapter_tint=(150, 60, 44), chapter_accent=(232, 170, 120), chapter_title_fonts=TYPEWRITER,
         chapter_label_fonts=TYPEWRITER, chapter_label="CHAPTER", print_border=(250, 244, 232), sepia=0.45,
         subscribe=(176, 30, 36),
+        gallery="grid_reveal",  # its references' hook: photo cards rising on a navy grid (9 Oct)
     ),
 }
 DEFAULT_STYLE = "v3"

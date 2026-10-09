@@ -83,7 +83,19 @@ DEFAULT_KITS: dict[str, dict[str, Any]] = {
                              "shadow_y": 4, "background_enabled": False, "position": "bottom", "case": "title",
                              "size": 84, "words_per_line": 6, "max_lines": 2, "highlight_color": "#FFE234"}},
     "v4": {"name": "V4 · Canada We Lived In", "style": "v4", "country": "CA",
-           "chapter_designs": ["typewriter_card", "film_slate"], "ingredient_designs": ["scrapbook", "chalkboard"]},
+           # Three references (9 Oct): each item opens on its picture in a white frame with a teal name pill; the
+           # hook shows photo cards rising on a navy grid (G88jP_1KgCg at 0:11, Ishaq's pick for graphics and fonts);
+           # captions only in cream title case, as in all three.
+           "chapter_designs": ["v4_label"], "ingredient_designs": ["scrapbook", "chalkboard"],
+           "hook_collage": True, "extras": ["map", "price", "years", "comment"],
+           "film_look": False, "photo_graphics": False,
+           "references": ["https://www.youtube.com/watch?v=yzYeMy248t8", "https://www.youtube.com/watch?v=jJ4sytVJ20I",
+                          "https://www.youtube.com/watch?v=G88jP_1KgCg"],
+           "caption_style": {"animation": "pop", "font": "Arial Rounded MT Bold", "bold": False, "text_color": "#FFF0A5",
+                             "stroke_enabled": True, "stroke_color": "#1A1208", "stroke_width": 4,
+                             "shadow_enabled": True, "shadow_color": "#000000", "shadow_blur": 6, "shadow_x": 0,
+                             "shadow_y": 3, "background_enabled": False, "position": "bottom", "case": "title",
+                             "size": 66, "words_per_line": 8, "max_lines": 1, "highlight_color": "#FFF0A5"}},
 }
 HOUSE = "house"  # the channel_kits.json entry that changes every channel
 

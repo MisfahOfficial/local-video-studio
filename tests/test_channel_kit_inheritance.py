@@ -14,7 +14,7 @@ class HouseStyleInheritance(unittest.TestCase):
             self.assertEqual(kits["v3"]["captions"], {"animation": "highlight", "position": "bottom"})
             # V3 took its reference's paint-stroke card on Ishaq's request (3 Oct).
             self.assertEqual(kits["v3"]["chapter_designs"], ["v3_paint"])
-            self.assertEqual(kits["v4"]["chapter_designs"], ["typewriter_card", "film_slate"])
+            self.assertEqual(kits["v4"]["chapter_designs"], ["v4_label"])  # from its references (9 Oct)
             self.assertEqual(kits["v1"]["extras"], ["map", "price", "years", "comment"])
             for key in ("v1", "v3", "v4"):
                 self.assertIs(kit_style(kits[key]), STYLES[key])

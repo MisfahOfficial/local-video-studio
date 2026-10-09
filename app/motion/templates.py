@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 import re
 from typing import Any
 
@@ -458,9 +459,110 @@ def collage_card(photos: list[Image.Image], title: str = "", style: ChannelStyle
     return frame
 
 
-def gallery_stack(photos: list[Image.Image], style: ChannelStyle | None = None, title: str = "") -> Frame:
+HEAVY = (("/System/Library/Fonts/Avenir Next.ttc", 8),)  # Avenir Next Heavy: the round geometric capitals of V4
+
+
+def _heavy(size: int) -> Any:
+    for path, index in HEAVY:
+        if Path(path).is_file():
+            return font((path,), size, index)
+    return font(IMPACT + SANS_FONTS, size)
+
+
+def grid_reveal(photos: list[Image.Image], labels: list[str] | None = None, style: ChannelStyle | None = None) -> Frame:
+    """V4's hook gallery (reference G88jP_1KgCg at 0:11): a dark-navy blueprint grid with drifting specks; tall
+    photo cards rise one after another, odd ones named above and even ones below in heavy white-to-ice-blue capitals
+    that come up letter by letter; a warm light leak flashes over the end."""
+    rng = random.Random(len(photos) * 11)
+    count = max(1, min(4, len(photos)))
+    names = [re.sub(r"[-_]+", " ", str(text or "")).strip().upper() for text in (labels or [])][:count]
+    names += [""] * (count - len(names))
+    back = Image.new("RGB", SIZE, (8, 30, 53))
+    shade = Image.linear_gradient("L").resize(SIZE)  # darker at the top, as in the reference
+    back = Image.composite(back, Image.new("RGB", SIZE, (2, 8, 16)), shade.point(lambda v: min(255, 90 + v)))
+    lines = ImageDraw.Draw(back)
+    for x in range(-40, W, 107):
+        lines.line([(x, 0), (x, H)], fill=(46, 76, 104), width=2)
+    for y in range(30, H, 107):
+        lines.line([(0, y), (W, y)], fill=(46, 76, 104), width=2)
+    specks = [(rng.uniform(0, W), rng.uniform(0, H), rng.uniform(1.5, 3.5), rng.uniform(8, 30)) for _ in range(40)]
+    gap = 34
+    card_w = int((W - gap * (count + 1)) / count) if count >= 3 else 520
+    card_w = min(card_w, 560)
+    card_h = int(min(H * 0.81, card_w * 1.62))
+    left = (W - (count * card_w + (count - 1) * gap)) // 2
+    size = 64 if count >= 3 else 76
+    big = _heavy(size)
+    cards = []
+    for index, photo in enumerate(photos[:count]):
+        x = left + index * (card_w + gap)
+        # 1st, 3rd: lower, named above; 2nd, 4th: up at the top edge, named below (as in the reference)
+        y = int(H * 0.2) if index % 2 == 0 else 0
+        while names[index] and big.getlength(names[index]) > card_w + 20 and size > 30:
+            size -= 4
+            big = _heavy(size)
+        cards.append((ImageOps.fit(photo.convert("RGB"), (card_w, card_h)), x, y, names[index], 0.15 + index * 0.75))
+    fill = Image.linear_gradient("L").resize((10, size + 20))  # white at the top, ice blue at the bottom
+
+    def letters(canvas: Image.Image, text: str, cx: float, top: float, local: float, heavy: Any) -> None:
+        if not text or local <= 0:
+            return
+        width = heavy.getlength(text)
+        x = cx - width / 2
+        for index, char in enumerate(text):
+            share = min(1.0, max(0.0, (local - index * 0.035) / 0.22))
+            step = heavy.getlength(char)
+            if share > 0 and char != " ":
+                tile = Image.new("RGBA", (int(step) + 24, heavy.size + 40), (0, 0, 0, 0))
+                ImageDraw.Draw(tile).text((12, 10), char, font=heavy, fill=(255, 255, 255, 255))
+                mask = tile.getchannel("A")
+                glow = Image.new("RGBA", tile.size, (70, 150, 255, 0))
+                glow.putalpha(mask.filter(ImageFilter.GaussianBlur(7)).point(lambda v: int(v * 0.7 * share)))
+                ice = Image.new("RGBA", tile.size, (176, 214, 255, 255))
+                white = Image.new("RGBA", tile.size, (255, 255, 255, 255))
+                body = Image.composite(ice, white, fill.resize(tile.size))
+                body.putalpha(mask.point(lambda v: int(v * share)))
+                lift = int((1 - ease_out_back(share, 1.8)) * 26)
+                canvas.alpha_composite(glow, (int(x) - 12, int(top) - 10 + lift))
+                canvas.alpha_composite(body, (int(x) - 12, int(top) - 10 + lift))
+            x += step
+
+    def frame(t: float, duration: float) -> Image.Image:
+        canvas = back.copy().convert("RGBA")
+        dots = ImageDraw.Draw(canvas)
+        for sx, sy, radius, speed in specks:
+            y = (sy - speed * t) % H
+            dots.ellipse((sx - radius, y - radius, sx + radius, y + radius), fill=(220, 236, 255, 150))
+        for image, x, y, text, delay in cards:
+            local = t - delay
+            if local <= 0:
+                continue
+            rise = ease_out_cubic(min(1.0, local / 0.45))
+            shift = int((1 - rise) * (H - y + 40))
+            canvas.alpha_composite(_shadow((card_w, card_h), 0, 18, 150), (x - 54, y - 54 + shift))
+            canvas.paste(image, (x, y + shift))
+            above = y > 0
+            text_top = y - size - 26 if above else y + card_h + 18
+            letters(canvas, text, x + card_w / 2, text_top, local - 0.3, big)
+        flash_start = max(0.0, duration - 0.45)
+        if duration > 1.2 and t > flash_start:  # warm light leak into the next shot
+            share = (t - flash_start) / 0.45
+            leak = Image.new("RGBA", SIZE, (255, 168, 40, 0))
+            glow = Image.radial_gradient("L").resize(SIZE).point(lambda v: int((255 - v) * min(1.0, share * 1.4)))
+            leak.putalpha(glow)
+            canvas.alpha_composite(leak)
+            canvas = Image.blend(canvas, Image.new("RGBA", SIZE, (255, 236, 190, 255)), max(0.0, share - 0.55) * 1.2)
+        return canvas.convert("RGB")
+
+    return frame
+
+
+def gallery_stack(photos: list[Image.Image], style: ChannelStyle | None = None, title: str = "",
+                  labels: list[str] | None = None) -> Frame:
     """Several different photos drop onto the channel's backdrop as tilted prints (plural mentions)."""
     style = style or get_style(None)
+    if style.gallery == "grid_reveal":
+        return grid_reveal(photos, labels, style)
     if style.gallery == "collage":
         return collage_card(photos, title, style)
     rng = random.Random(len(photos))

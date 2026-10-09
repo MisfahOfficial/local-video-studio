@@ -49,6 +49,8 @@ DESIGNS: dict[str, Design] = {item.key: item for item in (
            "TV era, 1950s-1980s, adverts, pop culture, playful"),
     Design("v3_paint", "chapter", "hyperframes", "Dark grid with gold specks, the item's picture in a rounded frame, "
            "a purple paint stroke with the name (Britain We Lived In reference)", "British, school dinners, puddings, warm"),
+    Design("v4_label", "chapter", "hyperframes", "Rust-brown arc pattern, the item's picture in a white rounded frame, "
+           "the name in white capitals on a teal pill (Canada We Lived In references)", "Canadian, candy, cookies, warm"),
     Design("chalkboard", "ingredients", "hyperframes", "Bakery chalkboard menu with pinned photos and chalk writing",
            "bakery, cafe, school, British tea rooms, homely"),
     Design("scrapbook", "ingredients", "hyperframes", "Kraft-paper scrapbook with taped photos and handwritten labels",
@@ -406,6 +408,10 @@ def chapter_payload(design: str, title: str, number: int, style: ChannelStyle, s
         # Only the item's name, on the paint stroke under the picture (no "Chapter 3" in the reference).
         texts = [{"text": title.upper(), "x": 960, "y": 817, "size": 74 if len(title) < 18 else 56 if len(title) < 26 else 44,
                   "color": "#ffffff", "font": "'Arial Rounded MT Bold', 'Arial Black', sans-serif", "spacing": 1}]
+    elif design == "v4_label":
+        # Only the item's name, on the teal pill under the picture (no "Chapter 3" in the references).
+        texts = [{"text": title.upper(), "x": 960, "y": 957, "size": 84 if len(title) < 18 else 66 if len(title) < 28 else 52,
+                  "color": "#ffffff", "font": "'Avenir Next', 'Arial Rounded MT Bold', sans-serif", "spacing": 2}]
     elif design == "newspaper":
         texts = [
             {"text": "THE DAILY KITCHEN", "x": 960, "y": 245, "size": 70, "color": "#2b241b", "font": "Georgia", "spacing": 4},

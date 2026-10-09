@@ -1,0 +1,518 @@
+{
+ "_help": "V4 style from three reference videos (checked by Claude on 9 Oct 2026: frames, shot cuts, label timing and colour samples). Ishaq chose reference 3 at 0:11 for the motion graphics, text and fonts. Rules marked 'all 3' were seen in every reference.",
+ "schema_version": 1,
+ "style_id": "canada_we_lived_in_corner_store_documentary",
+ "status": "ready_for_import",
+ "channel": "v4",
+ "name": "Canada We Lived In",
+ "version": 1,
+ "scope": "all_channel_videos",
+ "content_type": "nostalgic_canadian_food_candy_cookies_brands_history",
+ "country": "CA",
+ "era": "script_defined",
+ "default_era_range": "1950s-1980s",
+ "audience": "Primarily Canadian viewers aged 45+ who remember corner stores (depanneurs), school lunches, family baking and vanished Canadian brands; secondarily younger viewers curious about everyday Canadian history.",
+ "mood": "warm, nostalgic, playful, curious",
+ "example_videos": [
+  "https://www.youtube.com/watch?v=yzYeMy248t8",
+  "https://www.youtube.com/watch?v=jJ4sytVJ20I",
+  "https://www.youtube.com/watch?v=G88jP_1KgCg"
+ ],
+ "reference_assets": [
+  {
+   "url": "https://www.youtube.com/watch?v=yzYeMy248t8",
+   "role": "channel_style_reference",
+   "do_not_copy": [
+    "specific copyrighted footage",
+    "exact narration",
+    "exact shot sequence",
+    "third-party watermarks or burned-in captions"
+   ]
+  },
+  {
+   "url": "https://www.youtube.com/watch?v=jJ4sytVJ20I",
+   "role": "channel_style_reference",
+   "do_not_copy": [
+    "specific copyrighted footage",
+    "exact narration",
+    "exact shot sequence",
+    "third-party watermarks or burned-in captions"
+   ]
+  },
+  {
+   "url": "https://www.youtube.com/watch?v=G88jP_1KgCg",
+   "role": "channel_style_reference; motion graphics, text and fonts (0:11)",
+   "do_not_copy": [
+    "specific copyrighted footage",
+    "exact narration",
+    "exact shot sequence",
+    "third-party watermarks or burned-in captions"
+   ]
+  }
+ ],
+ "topic_inheritance": {
+  "locked_across_channel": [
+   "pacing",
+   "typography",
+   "label style",
+   "source hierarchy",
+   "transition language",
+   "quality gates"
+  ],
+  "changes_per_video": [
+   "era",
+   "products or dishes",
+   "locations",
+   "facts",
+   "archival sources",
+   "music cue"
+  ],
+  "rule": "Keep the channel's editing language consistent while selecting visuals, facts and archival material specifically for each script."
+ },
+ "pacing": {
+  "_help": "How long one visual stays on screen (seconds).",
+  "tool_support": "now",
+  "shot_seconds_min": 3.0,
+  "shot_seconds_max": 7.0,
+  "hook_shot_seconds_max": 4.0,
+  "chapter_card_seconds": "about 5 (all 3: median 5 s); never shorter than the spoken name",
+  "ingredients_card_seconds_max": 4.0,
+  "slow_down_on": [
+   "memories",
+   "emotional lines",
+   "the last line of an item"
+  ],
+  "speed_up_on": [
+   "lists of things",
+   "the hook"
+  ],
+  "_rule": "General rule (all channels): a sentence up to 7 s = one clip; longer = split into parts of 3-7 s, each from a DIFFERENT video; no clip under 3 s after the hook; cuts only at sentence/phrase boundaries so clips stay in sync with the voice."
+ },
+ "structure": {
+  "_help": "What each part of the video must do.",
+  "tool_support": "fix",
+  "hook": {
+   "show_every_item_once_as_teaser": false,
+   "show_representative_items_as_teaser": true,
+   "first_shot": "Black-and-white archive of a Canadian corner store, kitchen or family, with a cream Title Case caption; start on action, never a logo.",
+   "teaser_item_limit": 8,
+   "allowed_media": [
+    "item_clip",
+    "real_photo",
+    "archival_ad",
+    "product_cutout",
+    "short_fact_text"
+   ],
+   "never": [
+    "ai_image",
+    "long_text_card",
+    "slow_decorative_intro"
+   ],
+   "_if_no_hook": "General rule: if the script has no hook, the video starts directly at Item 1.",
+   "collage_card": "Once in the hook: navy blueprint grid; 3-4 tall photo cards of the video's items rise one by one, named above/below in heavy white-to-ice-blue capitals, ending in a warm light-leak flash (reference 3 at 0:11)."
+  },
+  "chapter_card": {
+   "when": "only where the script has an item heading",
+   "title_source": "heading without numbering (remove 'Item #16:', 'Number 12 -')",
+   "keep_text_in_brackets": true,
+   "show_item_number": false,
+   "style": "v3_paint (all 3 references): dark-brown grid, gold specks, rounded picture of the item, purple paint stroke with a yellow edge, white uppercase name. Picture: the product packet or the finished dish."
+  },
+  "each_item": {
+   "first_shot": "The chapter card's strong finished-item image, followed by a clean close-up or serving shot of the exact item; for non-food topics use the exact product, place or object named in the heading.",
+   "ingredients_card": "one ingredients card per item when the script lists ingredients",
+   "story_lines": "shots of the same dish (being made or served)",
+   "history_lines": "period photos or period footage of the dish if they exist, else the dish",
+   "last_shot": "finished dish or people enjoying it"
+  },
+  "subscribe_reminder": {
+   "tool_support": "now",
+   "when": "once after the hook and once in the outro only",
+   "style": "white pill with like, SUBSCRIBE and bell, bottom centre; never on the food"
+  },
+  "outro": {
+   "allowed_media": [
+    "item_clip",
+    "real_photo"
+   ],
+   "show": "End on the strongest finished-item or authentic period memory shot, add one brief viewer-memory question in the V3 comment-card style, then a small subscribe reminder and a short warm fade to black; do not use a long logo animation."
+  }
+ },
+ "scene_rules": {
+  "_help": "What to show for each KIND of sentence. The tool picks the first rule that matches.",
+  "tool_support": "fix (simple words) / llm (meaning)",
+  "rules": [
+   {
+    "when_sentence_has": "a list of ingredients",
+    "show": "ingredients card"
+   },
+   {
+    "when_sentence_has": "a price (e.g. '25 cents')",
+    "show": "price graphic"
+   },
+   {
+    "when_sentence_has": "a route, movement between places, or a location essential to understanding the story",
+    "show": "map graphic"
+   },
+   {
+    "when_sentence_has": "a place or region mentioned only as background context",
+    "show": "relevant footage or archival photo; do not automatically show a map"
+   },
+   {
+    "when_sentence_has": "a span of years (e.g. '1950s to the 1980s')",
+    "show": "years timeline"
+   },
+   {
+    "when_sentence_has": "a question to viewers",
+    "show": "comment card"
+   },
+   {
+    "when_sentence_has": "a cooking step",
+    "show": "clip of exactly that step if found, else the dish being made"
+   },
+   {
+    "when_sentence_has": "taste or texture words",
+    "show": "close-up of the finished dish"
+   },
+   {
+    "when_sentence_has": "family, holidays, memories",
+    "show": "period photo or home-movie style footage"
+   },
+   {
+    "when_sentence_has": "the dish disappearing / being forgotten",
+    "show": "a fading family recipe card, closed cookbook, empty serving plate, or period photo; avoid unrelated empty shelves"
+   },
+   {
+    "when_sentence_has": "a brand or branded recipe",
+    "show": "verified archival packaging or a neutral dish shot; never generate a logo"
+   },
+   {
+    "when_sentence_has": "a number, ranking, temperature, duration, or quantity",
+    "show": "a short readable fact graphic only when the number is important"
+   }
+  ]
+ },
+ "footage": {
+  "_help": "Where visuals come from, in the order the tool tries them.",
+  "tool_support": "now",
+  "order": [
+   "item_clip",
+   "item_other_clip",
+   "stock_video",
+   "real_photo",
+   "motion_graphic",
+   "ai_image"
+  ],
+  "sources_per_item": 2,
+  "max_source_minutes": 20,
+  "prefer_titles_with": [
+   "Canadian",
+   "Canada",
+   "depanneur",
+   "corner store",
+   "vintage",
+   "1970s",
+   "1960s",
+   "classic",
+   "homemade",
+   "commercial",
+   "advert",
+   "retro candy"
+  ],
+  "avoid_titles_with": [
+   "asmr",
+   "reaction",
+   "shorts",
+   "mukbang",
+   "compilation",
+   "vertical",
+   "AI generated",
+   "podcast",
+   "talking head",
+   "TikTok",
+   "British version"
+  ],
+  "max_ai_image_share": 0.05,
+  "minimum_real_video_share_per_item": 0.65,
+  "minimum_usable_video_sources_per_item": 2,
+  "on_insufficient_real_footage": "mark item as needs_footage and block automatic final export; do not silently fill the item with AI images",
+  "source_priority": [
+   "licensed_stock",
+   "public_archive",
+   "owned_library",
+   "approved_youtube",
+   "real_photo",
+   "motion_graphic",
+   "ai_image"
+  ],
+  "_note": "For British dishes, brands and daily life, prefer licensed or usage-approved material from British Pathé, the BFI National Archive, Huntley Film Archives, Imperial War Museums and BBC Archive, plus verified UK museum or council archives. Do not assume that public viewing equals permission for automated reuse."
+ },
+ "visual_mix": {
+  "_help": "Target mix for a normal completed item. The validator may allow small changes when authentic material is scarce.",
+  "tool_support": "fix / llm",
+  "real_video_target": [
+   0.65,
+   0.8
+  ],
+  "archival_photo_target": [
+   0.15,
+   0.25
+  ],
+  "motion_graphic_target": [
+   0.05,
+   0.1
+  ],
+  "ai_image_max": 0.05,
+  "same_layout_consecutive_max": 2
+ },
+ "repetition": {
+  "_help": "Stops the video from feeling repetitive.",
+  "tool_support": "now (sources) / fix (graphics)",
+  "same_source_in_neighbouring_scenes": false,
+  "same_moment_of_a_source_twice": false,
+  "same_graphic_design_not_within_scenes": 5,
+  "max_maps_in_a_row": 1,
+  "max_photos_in_a_row": 2,
+  "_rule": "General rule (all channels): the same moment of a source never twice in the whole video; never loop a clip."
+ },
+ "photos": {
+  "_help": "Real still photos (archives, free libraries).",
+  "tool_support": "now",
+  "motion": "slow push-in or pan; never static",
+  "frame": "full-screen; product photos may use a clean cutout on a deep red, magenta, cream, or dark neutral background; no scrapbook or polaroid frame",
+  "max_share": 0.2
+ },
+ "never_show": {
+  "_help": "Anything here is refused by the clip checker.",
+  "tool_support": "fix",
+  "people": [
+   "present-day host talking to camera",
+   "smartwatch or phone",
+   "modern clothes in close-up",
+   "recognisable AI face repeated with inconsistent identity"
+  ],
+  "on_screen": [
+   "another creator's captions or titles",
+   "watermarks",
+   "subscribe buttons from other channels"
+  ],
+  "places": [
+   "modern kitchen when the shot claims to be historical",
+   "a British or American setting presented as Canadian when the line is specifically Canadian",
+   "modern supermarket aisle when the line describes a vanished corner store"
+  ],
+  "other": [
+   "a different dish than the item",
+   "fake or malformed food",
+   "generated brand logo",
+   "unverified trademark on generated clothing",
+   "unnecessary generic map",
+   "American version of a British dish (e.g. US biscuits for British biscuits)"
+  ]
+ },
+ "motion_graphics": {
+  "_help": "Graphics seen in the references, and those Ishaq keeps on.",
+  "tool_support": "now",
+  "allowed": [
+   "chapter_card",
+   "hook_collage",
+   "ingredients_card",
+   "map",
+   "price",
+   "years",
+   "comment_card"
+  ],
+  "chapter_designs": [
+   "v4_label"
+  ],
+  "hook_designs": [
+   "grid_reveal"
+  ],
+  "ingredient_designs": [
+   "scrapbook",
+   "chalkboard"
+  ],
+  "max_per_item": 4,
+  "not_used": [
+   "fact"
+  ],
+  "wanted_but_missing": [
+   "torn-paper wipe between shots (all 3)",
+   "warm light-leak flash between shots (reference 3)",
+   "like-and-subscribe pop-up (all 3)",
+   "split screen of two photos (reference 1)"
+  ],
+  "_note": "Maps, prices, years and comment cards stay on as before; the references do not show them."
+ },
+ "look": {
+  "_help": "Colour and texture of the whole video.",
+  "tool_support": "now",
+  "film_look": false,
+  "grain": "None added: archive black-and-white keeps its own grain; product and food photos stay clean and bright (all 3).",
+  "colour": "Hook in neutral black-and-white archive, body in bright, saturated modern product and food photography.",
+  "palette": {
+   "main": "#1AB9CC",
+   "accent": "#FFF0A5",
+   "text": "#FFFFFF",
+   "background": "#081E35",
+   "card_backdrop": "#4A1602"
+  },
+  "vignette": "Soft edge darkening on the navy grid and the rust card backdrop only.",
+  "letterbox_bars": false
+ },
+ "transitions": {
+  "_help": "How one shot changes to the next.",
+  "tool_support": "now (cut, dissolve) / later (torn paper, light leak)",
+  "default": "Hard cut; the references often use a torn-paper wipe and, after the hook gallery, a warm light-leak flash.",
+  "into_chapter_card": "hard cut",
+  "allowed": [
+   "hard cut",
+   "very short dissolve",
+   "light leak at the end of the hook gallery"
+  ],
+  "never": [
+   "spins",
+   "zoom blur",
+   "glitch",
+   "black gap",
+   "empty transition frame"
+  ]
+ },
+ "text": {
+  "_help": "On-screen words (captions, cards, labels).",
+  "tool_support": "now",
+  "captions": {
+   "show": true,
+   "position": "bottom, one line (all 3)",
+   "animation": "quick pop",
+   "max_words_per_line": 8,
+   "font": "bold rounded sans (Arial Rounded MT Bold in the tool)",
+   "colour": "cream #FFF0A5 with a thin dark outline and soft shadow; no highlighted words",
+   "case": "Title Case",
+   "mode": "the references caption only the hook; in the body they show none. The tool's caption setting decides (key points or off).",
+   "safe_margin_percent": 6,
+   "minimum_size_1080p": 48
+  },
+  "item_label": {
+   "look": "white heavy capitals (Avenir Next Heavy) on a teal pill #1AB9CC, over the bottom edge of the item's framed picture",
+   "animation": "pill rises, then each letter comes up on its own (reference 3, 0:11)"
+  },
+  "hook_names": {
+   "look": "white-to-ice-blue heavy capitals with a soft blue glow above or below each photo card",
+   "animation": "letter by letter"
+  },
+  "long_text": "shrink then wrap to two lines, never cut"
+ },
+ "ai_images": {
+  "_help": "Only when nothing real exists. Prompts follow these rules.",
+  "tool_support": "fix",
+  "look": "match the script's era as a real period photograph of the FOOD; Canadian home, not American or British",
+  "vary_between": [
+   "dish close-up",
+   "hands at work (no faces)",
+   "table spread",
+   "single ingredient",
+   "kitchen detail without people"
+  ],
+  "people": "General rule (all channels): NO people. Never women/families standing in a kitchen, never a full-kitchen wide shot. At most hands at work.",
+  "never": [
+   "people or faces",
+   "full kitchen wide shot",
+   "text or logos",
+   "modern objects"
+  ]
+ },
+ "checker": {
+  "_help": "Extra rules the AI checker applies to every clip, besides 'never_show'.",
+  "tool_support": "now (dish) / fix (era)",
+  "reject_if": [
+   "shows a different dish",
+   "modern people or gadgets",
+   "text burned into the picture",
+   "a person doing something unrelated (opening drawers, walking)",
+   "a very dark / nearly black shot"
+  ],
+  "accept_if": [
+   "the exact cooking action matches the narration",
+   "a clean appetising shot of the correct dish supports a non-procedural line",
+   "a verified period image supports a historical claim"
+  ],
+  "warn_if": [
+   "the same source dominates more than 20 seconds",
+   "the same composition appears three times in ten scenes",
+   "a historical claim is illustrated only by generated imagery"
+  ]
+ },
+ "quality_gates": {
+  "_help": "Final automatic checks before the video may be exported.",
+  "tool_support": "fix",
+  "block_export_if": [
+   "an item has no real video and no approved exception",
+   "real video share for an item is below 0.65",
+   "a selected clip shows the wrong dish",
+   "a historical scene contains an obvious modern device",
+   "generated imagery contains a brand logo",
+   "a caption is clipped, outside safe margins, or below minimum size",
+   "a transition contains a blank frame",
+   "the same few seconds of a clip loop/repeat"
+  ],
+  "approved_exception_requires": "a saved reason plus manual approval for genuinely unavailable archival subjects"
+ },
+ "parallel_processing": {
+  "_help": "Bounded concurrency for speed without increasing provider blocks.",
+  "tool_support": "fix",
+  "plan_sections_in_parallel": 4,
+  "stock_searches_in_parallel": 6,
+  "clip_checks_in_parallel": 4,
+  "ai_images_in_parallel": 2,
+  "youtube_downloads_in_parallel": 1,
+  "download_each_source_once_then_cut_locally": true,
+  "reuse_cached_searches_and_downloads": true,
+  "deduplicate_source_downloads": true
+ },
+ "sound": {
+  "_help": "Not used by the tool yet; written down for later.",
+  "tool_support": "later",
+  "music": "Warm, light nostalgic documentary music (soft piano, acoustic guitar, gentle strings), well below the voice-over; no vocals, no comedy music.",
+  "sound_effects": "subtle whoosh or impact on major yellow fact overlays and quiet archival texture where appropriate; no page-turn scrapbook effects or cartoon pops",
+  "voice_loudness_lufs": -14,
+  "true_peak_dbfs_max": -1.0
+ },
+ "export": {
+  "_help": "Final file.",
+  "tool_support": "now",
+  "resolution": "1920x1080",
+  "fps": 30,
+  "also_export": [
+   "premiere project",
+   "capcut project"
+  ]
+ },
+ "reference_findings": {
+  "_help": "What the three references actually show (measured, not guessed).",
+  "length_minutes": [
+   27.4,
+   34.9,
+   23.4
+  ],
+  "shot_length_seconds": {
+   "median": "4.6-8.3 (ref 1: 8.3, ref 2: 4.9, ref 3: 4.6)",
+   "hook": "about 4.6 in the first minute"
+  },
+  "chapter_cards": {
+   "count_per_video": "18-25 (all 3)",
+   "every_seconds": "42-64",
+   "length_seconds": "about 5",
+   "look": "rust-brown backdrop with small concentric arcs (#4A1602), the item's picture in a white rounded frame, its name in white heavy capitals on a teal pill #1AB9CC; no number (all 3)"
+  },
+  "hook": "black-and-white archive (corner stores, kitchens, families) with cream captions, then a navy blueprint grid (#081E35, lines #3A5570) where photos of the items appear (all 3; as tall named cards in reference 3 at 0:11)",
+  "captions": "hook only; bottom, one line, Title Case, cream #FFF0A5 with dark outline (all 3)",
+  "body": "real product footage (hands holding candy, baking steps) and bright product or food photos with slow zooms; reference 1 also uses many AI images with people, which this channel does NOT copy (AI stays at most 5%, no people)",
+  "extras_seen": [
+   "torn-paper wipes",
+   "like-and-subscribe pop-up",
+   "split screen of two photos",
+   "light-leak flash"
+  ]
+ }
+}

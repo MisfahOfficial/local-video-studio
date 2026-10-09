@@ -1,0 +1,57 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="gsap.min.js"></script>
+<style>
+  /* V4 (Canada We Lived In) item card, after its three references (yzYeMy248t8, jJ4sytVJ20I, G88jP_1KgCg):
+     a rust-brown backdrop printed with small concentric arcs, the item's picture in a white rounded frame, and
+     the item's name in white heavy capitals on a teal pill over the frame's bottom edge. */
+  html,body{margin:0}
+  #stage{position:relative;width:1920px;height:1080px;overflow:hidden;background:#3a0f06}
+  #back{position:absolute;inset:0;
+    background:
+      radial-gradient(ellipse at 50% 45%, rgba(110,38,10,.0) 0%, rgba(20,4,0,.55) 85%),
+      radial-gradient(circle at 0 100%, transparent 14px, rgba(168,64,20,.55) 15px, rgba(168,64,20,.55) 18px, transparent 19px,
+                      transparent 28px, rgba(168,64,20,.45) 29px, rgba(168,64,20,.45) 32px, transparent 33px,
+                      transparent 42px, rgba(168,64,20,.35) 43px, rgba(168,64,20,.35) 46px, transparent 47px) 0 0/60px 60px,
+      #4a1602}
+  #frame{position:absolute;left:190px;top:105px;width:1540px;height:840px;border-radius:44px;background:#fffdff;
+         box-shadow:0 26px 60px rgba(0,0,0,.55)}
+  #window{position:absolute;left:20px;top:20px;right:20px;bottom:20px;border-radius:30px;overflow:hidden;background:#2a1a10}
+  #photo{position:absolute;inset:0;background-size:cover;background-position:center}
+  #pill{position:absolute;left:50%;top:888px;height:138px;transform:translateX(-50%);border-radius:24px;background:#1ab9cc;
+        box-shadow:0 10px 26px rgba(0,0,0,.35);white-space:nowrap}
+  #name{display:block;padding:0 44px;line-height:138px;color:#fff;font-family:'Avenir Next','Arial Rounded MT Bold','Arial Black',sans-serif;
+        font-weight:900;letter-spacing:2px}
+  #name span{display:inline-block}
+</style></head>
+<body>
+<div id="stage" data-composition-id="v4_label" data-start="0" data-width="1920" data-height="1080" data-duration="4"
+     data-composition-variables='{"payload":{"type":"string","default":"{}"}}'>
+  <div id="back" class="clip" data-start="0" data-duration="600" data-track-index="0"></div>
+  <div id="frame" class="clip" data-start="0" data-duration="600" data-track-index="1"><div id="window"><div id="photo"></div></div></div>
+  <div id="pill" class="clip" data-start="0" data-duration="600" data-track-index="2"><span id="name"></span></div>
+</div>
+<script>
+  const vars = (window.__hyperframes && window.__hyperframes.getVariables) ? window.__hyperframes.getVariables() : {};
+  const p = JSON.parse(vars.payload || "{}");
+  const seconds = p.seconds || 4;
+  document.getElementById("stage").setAttribute("data-duration", String(seconds));
+  if (p.background) document.getElementById("photo").style.backgroundImage = `url(${p.background})`;
+  const t = (p.texts || [])[0];
+  const name = document.getElementById("name");
+  if (p.show_text && t) {
+    name.style.fontSize = `${t.size}px`;
+    // Each letter comes up on its own, as the names do in the 0:11 hook of the third reference.
+    for (const ch of t.text) { const s = document.createElement("span"); s.textContent = ch === " " ? " " : ch; name.appendChild(s); }
+  } else {
+    document.getElementById("pill").style.display = "none";
+  }
+  const k = Math.min(1, seconds / 2.5);  // short headings still show every move
+  const tl = gsap.timeline({paused: true});
+  tl.fromTo("#frame", {scale: 0.84, opacity: 0}, {scale: 1, opacity: 1, duration: 0.45 * k, ease: "back.out(1.5)"}, 0);
+  tl.fromTo("#photo", {scale: 1.0}, {scale: 1.07, duration: seconds, ease: "none"}, 0);
+  tl.fromTo("#pill", {y: 60, opacity: 0}, {y: 0, opacity: 1, duration: 0.35 * k, ease: "back.out(1.8)"}, 0.3 * k);
+  tl.fromTo("#name span", {y: 34, opacity: 0}, {y: 0, opacity: 1, duration: 0.25 * k, ease: "back.out(2.4)", stagger: 0.035 * k}, 0.45 * k);
+  window.__timelines = window.__timelines || {}; window.__timelines.v4_label = tl;
+</script>
+</body></html>

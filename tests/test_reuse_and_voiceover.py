@@ -190,3 +190,25 @@ class NeverEmptyTest(ReusedShotTest):
         chosen = [assets[scene["selected_asset_id"]] for scene in self.db.list_scenes(self.project["id"])]
         self.assertEqual([asset["model"] for asset in chosen[3:]], ["text_card", "text_card"])
         self.assertFalse(any((asset["metadata"] or {}).get("reused_asset") for asset in assets.values()))
+
+
+class V4StyleTest(unittest.TestCase):
+    def test_v4_follows_its_three_references(self):
+        from PIL import Image
+
+        from app.channel_kits import kit_for
+        from app.channel_styles import get_style
+        from app.motion.templates import gallery_stack
+        from app.motion_designs import chapter_payload
+
+        kit = kit_for(Path(tempfile.mkdtemp()), "v4")
+        self.assertEqual(kit["chapter_designs"], ["v4_label"])
+        self.assertEqual(len(kit["references"]), 3)
+        self.assertTrue(kit["hook_collage"])
+        style = get_style("v4")
+        frame = gallery_stack([Image.new("RGB", (64, 96), (200, 50, 50))] * 3, style, labels=["figgy duff", "", "apple pie"])
+        self.assertEqual(frame(1.5, 3.0).size, (1920, 1080))
+        payload = chapter_payload("v4_label", "Cherry Blossom", 2, style, 4.0)
+        self.assertEqual(payload["texts"][0]["text"], "CHERRY BLOSSOM")
+        # Other channels keep their own hook gallery.
+        self.assertNotEqual(get_style("v3").gallery, "grid_reveal")
