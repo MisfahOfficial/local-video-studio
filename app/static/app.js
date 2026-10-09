@@ -115,6 +115,7 @@ async function boot() {
     const styleOptions = styleData.styles.map(item => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.name)}</option>`).join("");
     $("#channelStyleSelect").innerHTML = styleOptions;
     $("#effectChannelStyle").innerHTML = styleOptions;
+    state.channelExamples = Object.fromEntries(styleData.styles.map(item => [item.key, Boolean(item.has_examples)]));
     state.themes = themeData.themes;
     state.motions = themeData.motions;
     state.settings = settings;
@@ -211,6 +212,7 @@ async function openProject(projectId, keepTab = false) {
   $("#channelStyleSelect").value = state.current.effects?.channel_style || "v3";
   $("#contentKindSelect").value = state.current.content_profile?.kind || "vintage_recipe";
   renderReferences(state.current.content_profile?.references || []);
+  showExampleVideos();
   $("#effectChannelStyle").value = state.current.effects?.channel_style || "v3";
   if (!keepTab) activateTab(state.scenes.length ? "timeline" : "script");
   await refreshGenerationStatus();
@@ -323,6 +325,12 @@ async function makeVoiceover() {
     toast(error.message, true);
   }
 }
+
+// The example-video box only shows for a channel without its own saved examples (V1, V4): the others use theirs.
+function showExampleVideos() {
+  $("#referenceVideos").hidden = Boolean((state.channelExamples || {})[$("#channelStyleSelect").value]);
+}
+$("#channelStyleSelect").addEventListener("change", showExampleVideos);
 
 // Example videos: the first is required, up to five in all.
 function renderReferences(links) {
@@ -2206,6 +2214,8 @@ $("#newChannelButton").addEventListener("click", async () => {
     $("#channelStyleSelect").innerHTML = options;
     $("#effectChannelStyle").innerHTML = options;
     $("#channelStyleSelect").value = result.key;
+    state.channelExamples = Object.fromEntries(styles.styles.map(item => [item.key, Boolean(item.has_examples)]));
+    showExampleVideos();
     toast(`Channel "${name}" created from its examples and locked. Its look is used for every new video.`);
   } catch (error) { toast(error.message, true); }
   finally { button.disabled = false; button.textContent = "+ New channel"; }

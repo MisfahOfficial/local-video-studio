@@ -778,7 +778,9 @@ def build_handler(application: StudioApplication):
                 from .channel_kits import load_kits
 
                 # Every channel kit: V1-V4 and channels created from their example videos.
-                self._json({"styles": [{"key": key, "name": str(kit.get("name") or key)}
+                # has_examples: the channel keeps its own example videos, so a project needs none pasted.
+                self._json({"styles": [{"key": key, "name": str(kit.get("name") or key),
+                                        "has_examples": bool(kit.get("references"))}
                                        for key, kit in load_kits(application.paths.root).items()]})
                 return
             match = re.fullmatch(r"/api/projects/([a-zA-Z0-9_-]+)/auto-build-status", path)
